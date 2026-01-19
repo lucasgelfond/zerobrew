@@ -1,0 +1,157 @@
+use crate::{Error, Formula};
+use std::collections::{BTreeMap, BTreeSet};
+
+type InDegreeMap = BTreeMap<String, usize>;
+type AdjacencyMap = BTreeMap<String, BTreeSet<String>>;
+
+pub fn resolve_closure(
+    root: &str,
+    formulas: &BTreeMap<String, Formula>,
+) -> Result<Vec<String>, Error> {
+    let closure = compute_closure(root, formulas)?;
+    let (mut indegree, adjacency) = build_graph(&closure, formulas)?;
+
+    let mut ready: BTreeSet<String> = indegree
+        .iter()
+        .filter_map(|(name, count)| {
+            if *count == 0 {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut ordered = Vec::with_capacity(closure.len());
+    while let Some(name) = ready.iter().next().cloned() {
+        ready.take(&name);
+        ordered.push(name.clone());
+        if let Some(children) = adjacency.get(&name) {
+            for child in children {
+                if let Some(count) = indegree.get_mut(child) {
+                    *count -= 1;
+                    if *count == 0 {
+                        ready.insert(child.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if ordered.len() != closure.len() {
+        let cycle: Vec<String> = indegree
+            .into_iter()
+            .filter_map(|(name, count)| if count > 0 { Some(name) } else { None })
+            .collect();
+        return Err(Error::DependencyCycle { cycle });
+    }
+
+    Ok(ordered)
+}
+
+fn compute_closure(
+    root: &str,
+    formulas: &BTreeMap<String, Formula>,
+) -> Result<BTreeSet<String>, Error> {
+    let mut closure = BTreeSet::new();
+    let mut stack = vec![root.to_string()];
+
+    while let Some(name) = stack.pop() {
+        if !closure.insert(name.clone()) {
+            continue;
+        }
+
+        let formula = formulas
+            .get(&name)
+            .ok_or_else(|| Error::MissingFormula { name: name.clone() })?;
+
+        let mut deps = formula.dependencies.clone();
+        deps.sort();
+        for dep in deps {
+            if !closure.contains(&dep) {
+                stack.push(dep);
+            }
+        }
+    }
+
+    Ok(closure)
+}
+
+fn build_graph(
+    closure: &BTreeSet<String>,
+    formulas: &BTreeMap<String, Formula>,
+) -> Result<(InDegreeMap, AdjacencyMap), Error> {
+    let mut indegree: InDegreeMap = closure.iter().map(|name| (name.clone(), 0)).collect();
+    let mut adjacency: AdjacencyMap = BTreeMap::new();
+
+    for name in closure {
+        let formula = formulas
+            .get(name)
+            .ok_or_else(|| Error::MissingFormula { name: name.clone() })?;
+        let mut deps = formula.dependencies.clone();
+        deps.sort();
+        for dep in deps {
+            if !closure.contains(&dep) {
+                continue;
+            }
+            if let Some(count) = indegree.get_mut(name) {
+                *count += 1;
+            }
+            adjacency.entry(dep).or_default().insert(name.clone());
+        }
+    }
+
+    Ok((indegree, adjacency))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::formula::{Bottle, BottleFile, BottleStable, Versions};
+    use std::collections::BTreeMap;
+
+    fn formula(name: &str, deps: &[&str]) -> Formula {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "arm64_sonoma".to_string(),
+            BottleFile {
+                url: format!("https://example.com/{name}.tar.gz"),
+                sha256: "deadbeef".repeat(8),
+            },
+        );
+
+        Formula {
+            name: name.to_string(),
+            versions: Versions {
+                stable: "1.0.0".to_string(),
+            },
+            dependencies: deps.iter().map(|dep| dep.to_string()).collect(),
+            bottle: Bottle {
+                stable: BottleStable { files },
+            },
+        }
+    }
+
+    #[test]
+    fn resolves_transitive_closure_in_stable_order() {
+        let mut formulas = BTreeMap::new();
+        formulas.insert("foo".to_string(), formula("foo", &["baz", "bar"]));
+        formulas.insert("bar".to_string(), formula("bar", &["qux"]));
+        formulas.insert("baz".to_string(), formula("baz", &["qux"]));
+        formulas.insert("qux".to_string(), formula("qux", &[]));
+
+        let order = resolve_closure("foo", &formulas).unwrap();
+        assert_eq!(order, vec!["qux", "bar", "baz", "foo"]);
+    }
+
+    #[test]
+    fn detects_cycles() {
+        let mut formulas = BTreeMap::new();
+        formulas.insert("alpha".to_string(), formula("alpha", &["beta"]));
+        formulas.insert("beta".to_string(), formula("beta", &["gamma"]));
+        formulas.insert("gamma".to_string(), formula("gamma", &["alpha"]));
+
+        let err = resolve_closure("alpha", &formulas).unwrap_err();
+        assert!(matches!(err, Error::DependencyCycle { .. }));
+    }
+}
