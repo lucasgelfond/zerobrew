@@ -1,0 +1,16 @@
+prefix_rule(pattern = ["git", "status"], decision = "allow")
+prefix_rule(pattern = ["git", "add"], decision = "allow")
+prefix_rule(pattern = ["git", "diff"], decision = "allow")
+prefix_rule(pattern = ["git", "commit"], decision = "allow")
+prefix_rule(pattern = ["git", "restore"], decision = "allow")
+prefix_rule(pattern = ["git", "checkout"], decision = "allow")
+
+prefix_rule(pattern = ["jj"], decision = "allow")
+
+prefix_rule(pattern = ["cargo", "add"], decision = "allow")
+prefix_rule(pattern = ["cargo", "fmt"], decision = "allow")
+prefix_rule(pattern = ["cargo", "test"], decision = "allow")
+prefix_rule(pattern = ["cargo", "check"], decision = "allow")
+prefix_rule(pattern = ["cargo", "clippy"], decision = "allow")
+prefix_rule(pattern = ["cargo", "build"], decision = "allow")
+prefix_rule(pattern = ["cargo", "run"], decision = "allow")

@@ -1,0 +1,45 @@
+use std::fmt;
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Error {
+    UnsupportedBottle { name: String },
+    ChecksumMismatch { expected: String, actual: String },
+    LinkConflict { path: PathBuf },
+    StoreCorruption { message: String },
+    NetworkFailure { message: String },
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::UnsupportedBottle { name } => {
+                write!(f, "unsupported bottle for formula '{name}'")
+            }
+            Error::ChecksumMismatch { expected, actual } => {
+                write!(f, "checksum mismatch (expected {expected}, got {actual})")
+            }
+            Error::LinkConflict { path } => {
+                write!(f, "link conflict at '{}'", path.to_string_lossy())
+            }
+            Error::StoreCorruption { message } => write!(f, "store corruption: {message}"),
+            Error::NetworkFailure { message } => write!(f, "network failure: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_bottle_display_includes_name() {
+        let err = Error::UnsupportedBottle {
+            name: "libheif".to_string(),
+        };
+
+        assert!(err.to_string().contains("libheif"));
+    }
+}
