@@ -1,0 +1,17 @@
+{
+  "name": "bar",
+  "versions": {
+    "stable": "0.9.0"
+  },
+  "dependencies": [],
+  "bottle": {
+    "stable": {
+      "files": {
+        "arm64_sonoma": {
+          "url": "https://example.com/bar-0.9.0.arm64_sonoma.bottle.tar.gz",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    }
+  }
+}
