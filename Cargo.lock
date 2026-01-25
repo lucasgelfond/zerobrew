@@ -1918,6 +1918,7 @@ dependencies = [
  "flate2",
  "fs4",
  "futures-util",
+ "libc",
  "reqwest",
  "rusqlite",
  "serde_json",

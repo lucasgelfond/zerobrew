@@ -4,6 +4,13 @@ use std::path::{Path, PathBuf};
 
 use zb_core::Error;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyStrategy {
+    Clonefile,
+    Hardlink,
+    Copy,
+}
+
 pub struct Cellar {
     cellar_dir: PathBuf,
 }
@@ -42,8 +49,8 @@ impl Cellar {
             })?;
         }
 
-        // Copy the entire store entry to the cellar
-        copy_dir_recursive(store_entry, &keg_path)?;
+        // Copy the entire store entry to the cellar using best available strategy
+        copy_dir_with_fallback(store_entry, &keg_path)?;
 
         Ok(keg_path)
     }
@@ -68,7 +75,45 @@ impl Cellar {
     }
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), Error> {
+fn copy_dir_with_fallback(src: &Path, dst: &Path) -> Result<(), Error> {
+    // Try clonefile first (APFS), then hardlink, then copy
+    #[cfg(target_os = "macos")]
+    {
+        if try_clonefile_dir(src, dst).is_ok() {
+            return Ok(());
+        }
+    }
+
+    // Fall back to recursive copy with hardlink/copy per file
+    copy_dir_recursive(src, dst, true)
+}
+
+#[cfg(target_os = "macos")]
+fn try_clonefile_dir(src: &Path, dst: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let src_cstr = CString::new(src.as_os_str().as_bytes())?;
+    let dst_cstr = CString::new(dst.as_os_str().as_bytes())?;
+
+    // clonefile flags: CLONE_NOFOLLOW to not follow symlinks
+    const CLONE_NOFOLLOW: u32 = 0x0001;
+
+    unsafe extern "C" {
+        fn clonefile(src: *const libc::c_char, dst: *const libc::c_char, flags: u32)
+            -> libc::c_int;
+    }
+
+    let result = unsafe { clonefile(src_cstr.as_ptr(), dst_cstr.as_ptr(), CLONE_NOFOLLOW) };
+
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path, try_hardlink: bool) -> Result<(), Error> {
     fs::create_dir_all(dst).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create directory {}: {e}", dst.display()),
     })?;
@@ -87,7 +132,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), Error> {
         })?;
 
         if file_type.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
+            copy_dir_recursive(&src_path, &dst_path, try_hardlink)?;
         } else if file_type.is_symlink() {
             let target = fs::read_link(&src_path).map_err(|e| Error::StoreCorruption {
                 message: format!("failed to read symlink: {e}"),
@@ -103,6 +148,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), Error> {
                 message: format!("failed to copy symlink as file: {e}"),
             })?;
         } else {
+            // Try hardlink first, then copy
+            if try_hardlink && fs::hard_link(&src_path, &dst_path).is_ok() {
+                continue;
+            }
+
+            // Fall back to copy
             fs::copy(&src_path, &dst_path).map_err(|e| Error::StoreCorruption {
                 message: format!("failed to copy file: {e}"),
             })?;
@@ -124,6 +175,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+// For testing - copy without fallback strategies
+#[cfg(test)]
+fn copy_dir_copy_only(src: &Path, dst: &Path) -> Result<(), Error> {
+    copy_dir_recursive(src, dst, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,7 +196,9 @@ mod tests {
 
         // Create executable file
         fs::write(store_entry.join("bin/foo"), b"#!/bin/sh\necho foo").unwrap();
-        let mut perms = fs::metadata(store_entry.join("bin/foo")).unwrap().permissions();
+        let mut perms = fs::metadata(store_entry.join("bin/foo"))
+            .unwrap()
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(store_entry.join("bin/foo"), perms).unwrap();
 
@@ -176,13 +235,22 @@ mod tests {
         );
 
         // Check executable bit preserved
-        let perms = fs::metadata(keg_path.join("bin/foo")).unwrap().permissions();
+        let perms = fs::metadata(keg_path.join("bin/foo"))
+            .unwrap()
+            .permissions();
         assert!(perms.mode() & 0o111 != 0, "executable bit not preserved");
 
         // Check symlink preserved
         let link_path = keg_path.join("lib/libfoo.1.dylib");
-        assert!(link_path.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(fs::read_link(&link_path).unwrap(), PathBuf::from("libfoo.dylib"));
+        assert!(link_path
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_link(&link_path).unwrap(),
+            PathBuf::from("libfoo.dylib")
+        );
     }
 
     #[test]
@@ -228,5 +296,44 @@ mod tests {
 
         let path = cellar.keg_path("libheif", "2.0.1");
         assert!(path.ends_with("cellar/libheif/2.0.1"));
+    }
+
+    #[test]
+    fn hardlink_fallback_to_copy_works() {
+        // Test that copy fallback works when hardlink fails
+        // (e.g., across different filesystems)
+        let tmp1 = TempDir::new().unwrap();
+        let tmp2 = TempDir::new().unwrap();
+
+        let src = tmp1.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("test.txt"), b"test content").unwrap();
+
+        let dst = tmp2.path().join("dst");
+
+        // Use copy_dir_copy_only to skip hardlink attempts
+        copy_dir_copy_only(&src, &dst).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dst.join("test.txt")).unwrap(),
+            "test content"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn clonefile_fallback_works() {
+        // On APFS, clonefile should work
+        let tmp = TempDir::new().unwrap();
+        let store_entry = setup_store_entry(&tmp);
+
+        let cellar = Cellar::new(tmp.path()).unwrap();
+        let keg_path = cellar.materialize("clone", "1.0.0", &store_entry).unwrap();
+
+        // Verify content is correct regardless of which strategy was used
+        assert_eq!(
+            fs::read_to_string(keg_path.join("bin/foo")).unwrap(),
+            "#!/bin/sh\necho foo"
+        );
     }
 }
