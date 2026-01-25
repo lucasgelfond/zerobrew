@@ -1,0 +1,188 @@
+name: Claude Auto-Merge
+
+on:
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+
+jobs:
+  auto-merge:
+    if: |
+      (github.event.review.state == 'approved') ||
+      (github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@claude') &&
+       (contains(toLower(github.event.comment.body), 'merge') ||
+        contains(toLower(github.event.comment.body), 'lgtm') ||
+        contains(toLower(github.event.comment.body), 'ship it') ||
+        contains(toLower(github.event.comment.body), 'approve')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Get PR number
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let prNumber;
+            if (context.payload.pull_request) {
+              prNumber = context.payload.pull_request.number;
+            } else if (context.payload.issue) {
+              prNumber = context.payload.issue.number;
+            } else if (context.payload.review) {
+              prNumber = context.payload.review.pull_request.number;
+            }
+            core.setOutput('number', prNumber);
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('mergeable', pr.mergeable);
+
+      - name: Approve PR (if from comment)
+        if: github.event.comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ steps.pr.outputs.number }},
+              event: 'APPROVE',
+              body: '✅ Approved via `@claude merge` command'
+            });
+
+      - name: Enable auto-merge
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ steps.pr.outputs.number }}
+            });
+
+            const mutation = `
+              mutation($pullRequestId: ID!) {
+                enablePullRequestAutoMerge(input: {
+                  pullRequestId: $pullRequestId,
+                  mergeMethod: SQUASH
+                }) {
+                  pullRequest {
+                    autoMergeRequest {
+                      enabledAt
+                    }
+                  }
+                }
+              }
+            `;
+
+            try {
+              await github.graphql(mutation, { pullRequestId: pr.node_id });
+              console.log('Auto-merge enabled');
+            } catch (e) {
+              console.log('Could not enable auto-merge:', e.message);
+            }
+
+      - name: Comment status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.pr.outputs.number }},
+              body: '🚀 Auto-merge enabled! This PR will merge once all checks pass.'
+            });
+
+  batch-merge:
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@claude') &&
+      contains(toLower(github.event.comment.body), 'merge all')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Get all open PRs in chain
+        id: prs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              sort: 'created',
+              direction: 'asc'
+            });
+
+            const stepPrs = prs
+              .filter(pr => pr.head.ref.startsWith('pr/step-'))
+              .sort((a, b) => {
+                const aNum = parseFloat(a.head.ref.match(/step-(\d+[-.]?\d*)/)?.[1] || 0);
+                const bNum = parseFloat(b.head.ref.match(/step-(\d+[-.]?\d*)/)?.[1] || 0);
+                return aNum - bNum;
+              });
+
+            core.setOutput('prs', JSON.stringify(stepPrs.map(p => p.number)));
+
+      - name: Enable auto-merge on all PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumbers = JSON.parse('${{ steps.prs.outputs.prs }}');
+
+            for (const prNumber of prNumbers) {
+              try {
+                await github.rest.pulls.createReview({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  event: 'APPROVE',
+                  body: '✅ Batch approved via `@claude merge all`'
+                });
+
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber
+                });
+
+                const mutation = `
+                  mutation($pullRequestId: ID!) {
+                    enablePullRequestAutoMerge(input: {
+                      pullRequestId: $pullRequestId,
+                      mergeMethod: SQUASH
+                    }) {
+                      pullRequest { autoMergeRequest { enabledAt } }
+                    }
+                  }
+                `;
+
+                await github.graphql(mutation, { pullRequestId: pr.node_id });
+                console.log(`Auto-merge enabled for PR #${prNumber}`);
+              } catch (e) {
+                console.log(`Error on PR #${prNumber}:`, e.message);
+              }
+            }
+
+      - name: Comment summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumbers = JSON.parse('${{ steps.prs.outputs.prs }}');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `🚀 Auto-merge enabled for ${prNumbers.length} PRs: ${prNumbers.map(n => '#' + n).join(', ')}\n\nThey will merge in order once checks pass.`
+            });
