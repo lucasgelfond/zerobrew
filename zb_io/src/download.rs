@@ -4,11 +4,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
+use reqwest::header::{HeaderValue, AUTHORIZATION, WWW_AUTHENTICATE};
+use reqwest::StatusCode;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::blob::BlobCache;
 use zb_core::Error;
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    token: String,
+}
 
 pub struct Downloader {
     client: reqwest::Client,
@@ -37,12 +45,78 @@ impl Downloader {
                 message: e.to_string(),
             })?;
 
+        let response = if response.status() == StatusCode::UNAUTHORIZED {
+            self.handle_auth_challenge(url, response).await?
+        } else {
+            response
+        };
+
         if !response.status().is_success() {
             return Err(Error::NetworkFailure {
                 message: format!("HTTP {}", response.status()),
             });
         }
 
+        self.download_response(response, expected_sha256).await
+    }
+
+    async fn handle_auth_challenge(
+        &self,
+        url: &str,
+        response: reqwest::Response,
+    ) -> Result<reqwest::Response, Error> {
+        let www_auth = response
+            .headers()
+            .get(WWW_AUTHENTICATE)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| Error::NetworkFailure {
+                message: "HTTP 401 Unauthorized".to_string(),
+            })?;
+
+        let token = self.fetch_bearer_token(www_auth).await?;
+
+        self.client
+            .get(url)
+            .header(AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {token}")).unwrap())
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })
+    }
+
+    async fn fetch_bearer_token(&self, www_authenticate: &str) -> Result<String, Error> {
+        let (realm, service, scope) = parse_www_authenticate(www_authenticate)?;
+
+        let token_url = format!("{realm}?service={service}&scope={scope}");
+
+        let response = self
+            .client
+            .get(&token_url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: format!("token request failed: {e}"),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("token request returned HTTP {}", response.status()),
+            });
+        }
+
+        let token_response: TokenResponse = response.json().await.map_err(|e| Error::NetworkFailure {
+            message: format!("failed to parse token response: {e}"),
+        })?;
+
+        Ok(token_response.token)
+    }
+
+    async fn download_response(
+        &self,
+        response: reqwest::Response,
+        expected_sha256: &str,
+    ) -> Result<PathBuf, Error> {
         let mut writer = self
             .blob_cache
             .start_write(expected_sha256)
@@ -75,6 +149,41 @@ impl Downloader {
 
         writer.commit()
     }
+}
+
+fn parse_www_authenticate(header: &str) -> Result<(String, String, String), Error> {
+    let header = header.strip_prefix("Bearer ").ok_or_else(|| Error::NetworkFailure {
+        message: "unsupported auth scheme".to_string(),
+    })?;
+
+    let mut realm = None;
+    let mut service = None;
+    let mut scope = None;
+
+    for part in header.split(',') {
+        let part = part.trim();
+        if let Some((key, value)) = part.split_once('=') {
+            let value = value.trim_matches('"');
+            match key {
+                "realm" => realm = Some(value.to_string()),
+                "service" => service = Some(value.to_string()),
+                "scope" => scope = Some(value.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    let realm = realm.ok_or_else(|| Error::NetworkFailure {
+        message: "missing realm in WWW-Authenticate".to_string(),
+    })?;
+    let service = service.ok_or_else(|| Error::NetworkFailure {
+        message: "missing service in WWW-Authenticate".to_string(),
+    })?;
+    let scope = scope.ok_or_else(|| Error::NetworkFailure {
+        message: "missing scope in WWW-Authenticate".to_string(),
+    })?;
+
+    Ok((realm, service, scope))
 }
 
 pub struct DownloadRequest {

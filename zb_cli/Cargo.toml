@@ -3,4 +3,13 @@ name = "zb_cli"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "zb"
+path = "src/main.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+
+zb_core = { path = "../zb_core" }
+zb_io = { path = "../zb_io" }

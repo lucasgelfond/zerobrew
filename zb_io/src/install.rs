@@ -202,6 +202,16 @@ impl Installer {
     pub fn is_installed(&self, name: &str) -> bool {
         self.db.get_installed(name).is_some()
     }
+
+    /// Get info about an installed formula
+    pub fn get_installed(&self, name: &str) -> Option<crate::db::InstalledKeg> {
+        self.db.get_installed(name)
+    }
+
+    /// List all installed formulas
+    pub fn list_installed(&self) -> Result<Vec<crate::db::InstalledKeg>, Error> {
+        self.db.list_installed()
+    }
 }
 
 /// Create an Installer with standard paths
@@ -210,6 +220,13 @@ pub fn create_installer(
     prefix: &Path,
     download_concurrency: usize,
 ) -> Result<Installer, Error> {
+    use std::fs;
+
+    // Ensure all directories exist
+    fs::create_dir_all(root.join("db")).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create db directory: {e}"),
+    })?;
+
     let api_client = ApiClient::new();
     let blob_cache = BlobCache::new(&root.join("cache")).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create blob cache: {e}"),
