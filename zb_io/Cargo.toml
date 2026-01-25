@@ -5,8 +5,10 @@ edition = "2024"
 
 [dependencies]
 flate2 = "1.0"
+futures = "0.3"
 libc = "0.2"
 futures-util = "0.3"
+rayon = "1.10"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }

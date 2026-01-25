@@ -161,14 +161,6 @@ impl Downloader {
         Ok(token_response.token)
     }
 
-    async fn download_response(
-        &self,
-        response: reqwest::Response,
-        expected_sha256: &str,
-    ) -> Result<PathBuf, Error> {
-        self.download_response_with_progress(response, expected_sha256, None, None).await
-    }
-
     async fn download_response_with_progress(
         &self,
         response: reqwest::Response,

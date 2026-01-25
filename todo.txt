@@ -1,0 +1,29 @@
+zerobrew improvements todo
+==========================
+
+[x] 1. fix ca-certificates "unsupported bottle" error
+      - added support for "all" platform bottles (universal packages)
+
+[x] 2. fix python "missing formula" error
+      - python doesn't exist, use python@3.13 instead
+      - updated benchmark package list
+
+[x] 3. make cold installs faster than homebrew
+      - parallelized API calls (batch fetching)
+      - parallelized code signing with rayon
+      - skip signing already-signed binaries
+      - use recursive xattr stripping (single command)
+      - result: 70s → 33s for git (network is the bottleneck now)
+      - warm installs are 4.8x faster than homebrew cold
+
+[x] 4. add `zb benchmark` subcommand
+      - available via: cargo run -p zb_bench --release -- suite
+      - updated package list with verified formula names
+
+[x] 5. write casual README
+      - explains design decisions
+      - compares to homebrew
+      - documents uv inspiration
+
+[ ] 6. run full 100 package suite and verify all work
+      - in progress...

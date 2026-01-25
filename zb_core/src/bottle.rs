@@ -21,6 +21,15 @@ pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
         }
     }
 
+    // Check for universal "all" bottle (platform-independent packages like ca-certificates)
+    if let Some(file) = formula.bottle.stable.files.get("all") {
+        return Ok(SelectedBottle {
+            tag: "all".to_string(),
+            url: file.url.clone(),
+            sha256: file.sha256.clone(),
+        });
+    }
+
     // Fallback: any arm64 macOS bottle (but not linux)
     for (tag, file) in &formula.bottle.stable.files {
         if tag.starts_with("arm64_") && !tag.contains("linux") {
@@ -58,6 +67,33 @@ mod tests {
             selected.sha256,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
+    }
+
+    #[test]
+    fn selects_all_bottle_for_universal_packages() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "all".to_string(),
+            BottleFile {
+                url: "https://ghcr.io/v2/homebrew/core/ca-certificates/blobs/sha256:abc123".to_string(),
+                sha256: "abc123".to_string(),
+            },
+        );
+
+        let formula = Formula {
+            name: "ca-certificates".to_string(),
+            versions: Versions {
+                stable: "2024-01-01".to_string(),
+            },
+            dependencies: Vec::new(),
+            bottle: Bottle {
+                stable: BottleStable { files },
+            },
+        };
+
+        let selected = select_bottle(&formula).unwrap();
+        assert_eq!(selected.tag, "all");
+        assert!(selected.url.contains("ca-certificates"));
     }
 
     #[test]

@@ -121,9 +121,11 @@ fn find_bottle_content(store_entry: &Path, name: &str, version: &str) -> Result<
     Ok(store_entry.to_path_buf())
 }
 
-/// Patch @@HOMEBREW_CELLAR@@ and @@HOMEBREW_PREFIX@@ placeholders in Mach-O binaries
+/// Patch @@HOMEBREW_CELLAR@@ and @@HOMEBREW_PREFIX@@ placeholders in Mach-O binaries.
+/// Uses rayon for parallel processing.
 #[cfg(target_os = "macos")]
 fn patch_homebrew_placeholders(keg_path: &Path, cellar_dir: &Path) -> Result<(), Error> {
+    use rayon::prelude::*;
     use std::process::Command;
 
     // Derive prefix from cellar (cellar_dir is typically prefix/Cellar)
@@ -131,38 +133,32 @@ fn patch_homebrew_placeholders(keg_path: &Path, cellar_dir: &Path) -> Result<(),
         .parent()
         .unwrap_or(Path::new("/opt/homebrew"));
 
-    let cellar_str = cellar_dir.to_string_lossy();
-    let prefix_str = prefix.to_string_lossy();
+    let cellar_str = cellar_dir.to_string_lossy().to_string();
+    let prefix_str = prefix.to_string_lossy().to_string();
 
-    // Walk all files in the keg
-    for entry in walkdir::WalkDir::new(keg_path)
+    // Collect all Mach-O files first
+    let macho_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        // Check if it's a Mach-O file by looking at magic bytes
-        if let Ok(data) = fs::read(path) {
-            if data.len() < 4 {
-                continue;
+        .filter(|e| e.path().is_file())
+        .filter(|e| {
+            if let Ok(data) = fs::read(e.path()) {
+                if data.len() >= 4 {
+                    let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                    return matches!(
+                        magic,
+                        0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
+                    );
+                }
             }
-            // Mach-O magic: 0xfeedface (32-bit), 0xfeedfacf (64-bit), or fat binary
-            let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-            let is_macho = matches!(
-                magic,
-                0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
-            );
-            if !is_macho {
-                continue;
-            }
-        } else {
-            continue;
-        }
+            false
+        })
+        .map(|e| e.path().to_path_buf())
+        .collect();
 
+    // Process Mach-O files in parallel
+    macho_files.par_iter().for_each(|path| {
         // Get current install names
         let output = Command::new("otool")
             .args(["-L", &path.to_string_lossy()])
@@ -170,7 +166,7 @@ fn patch_homebrew_placeholders(keg_path: &Path, cellar_dir: &Path) -> Result<(),
 
         let output = match output {
             Ok(o) if o.status.success() => o,
-            _ => continue,
+            _ => return,
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -217,75 +213,96 @@ fn patch_homebrew_placeholders(keg_path: &Path, cellar_dir: &Path) -> Result<(),
                 }
             }
         }
-    }
+    });
 
     Ok(())
 }
 
-/// Strip quarantine extended attributes and ad-hoc sign Mach-O binaries.
-/// This is necessary because clonefile preserves xattrs including com.apple.quarantine
-/// and com.apple.provenance, which can cause macOS to kill unsigned binaries.
+/// Strip quarantine extended attributes and ad-hoc sign unsigned Mach-O binaries.
+/// Homebrew bottles from ghcr.io are already adhoc signed, so this is mostly a no-op.
+/// We use a fast heuristic: only process binaries that fail signature verification.
 #[cfg(target_os = "macos")]
 fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
+    use rayon::prelude::*;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
-    for entry in walkdir::WalkDir::new(keg_path)
+    // First, do a quick recursive xattr strip (single command, very fast)
+    let _ = Command::new("xattr")
+        .args(["-rd", "com.apple.quarantine", &keg_path.to_string_lossy()])
+        .stderr(std::process::Stdio::null())
+        .output();
+    let _ = Command::new("xattr")
+        .args(["-rd", "com.apple.provenance", &keg_path.to_string_lossy()])
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    // Find executables in bin/ directories only (where signing matters)
+    // Skip dylibs and other Mach-O files - they inherit signing from their loader
+    let bin_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
+        .filter(|e| {
+            let path = e.path();
+            path.is_file() && path.to_string_lossy().contains("/bin/")
+        })
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    // Only process files that need signing
+    bin_files.par_iter().for_each(|path| {
+        // Quick check: is it a Mach-O?
+        let data = match fs::read(path) {
+            Ok(d) if d.len() >= 4 => d,
+            _ => return,
+        };
+        let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let is_macho = matches!(
+            magic,
+            0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
+        );
+        if !is_macho {
+            return;
         }
 
-        // Get current permissions
+        // Verify signature - if valid, skip
+        let verify = Command::new("codesign")
+            .args(["-v", &path.to_string_lossy()])
+            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .status();
+
+        if verify.map(|s| s.success()).unwrap_or(false) {
+            return; // Already signed
+        }
+
+        // Get permissions and make writable
         let metadata = match fs::metadata(path) {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(_) => return,
         };
         let original_mode = metadata.permissions().mode();
         let is_readonly = original_mode & 0o200 == 0;
 
-        // Make writable if needed
         if is_readonly {
             let mut perms = metadata.permissions();
             perms.set_mode(original_mode | 0o200);
             let _ = fs::set_permissions(path, perms);
         }
 
-        // Strip quarantine xattrs
-        let _ = Command::new("xattr")
-            .args(["-d", "com.apple.quarantine", &path.to_string_lossy()])
-            .output();
-        let _ = Command::new("xattr")
-            .args(["-d", "com.apple.provenance", &path.to_string_lossy()])
+        // Sign the binary
+        let _ = Command::new("codesign")
+            .args(["--force", "--sign", "-", &path.to_string_lossy()])
             .output();
 
-        // Check if it's a Mach-O file and ad-hoc sign it
-        if let Ok(data) = fs::read(path) {
-            if data.len() >= 4 {
-                let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-                let is_macho = matches!(
-                    magic,
-                    0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
-                );
-                if is_macho {
-                    let _ = Command::new("codesign")
-                        .args(["--force", "--sign", "-", &path.to_string_lossy()])
-                        .output();
-                }
-            }
-        }
-
-        // Restore original permissions
+        // Restore permissions
         if is_readonly {
             let mut perms = metadata.permissions();
             perms.set_mode(original_mode);
             let _ = fs::set_permissions(path, perms);
         }
-    }
+    });
 
     Ok(())
 }

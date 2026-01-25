@@ -37,6 +37,10 @@ enum Commands {
         /// Number of top packages to test (default: 10)
         #[arg(short, long, default_value = "10")]
         count: usize,
+
+        /// Use abridged list (fast packages with few deps)
+        #[arg(long)]
+        quick: bool,
     },
 }
 
@@ -335,46 +339,47 @@ async fn run_real_bench(formula: &str) -> Result<BenchResult, Box<dyn std::error
     })
 }
 
-// Top 100 Homebrew packages (based on homebrew-formulae analytics)
-const POPULAR_PACKAGES: &[&str] = &[
-    "wget", "jq", "git", "node", "python", "go", "rust", "cmake",
-    "openssl", "curl", "htop", "tree", "ffmpeg", "imagemagick",
-    "sqlite", "postgresql", "mysql", "redis", "nginx", "httpd",
-    "vim", "neovim", "tmux", "zsh", "fish", "bash",
-    "ripgrep", "fd", "bat", "exa", "fzf", "zoxide",
-    "gh", "hub", "git-lfs", "git-delta",
-    "docker", "docker-compose", "kubernetes-cli", "helm",
-    "awscli", "azure-cli", "gcloud",
-    "terraform", "ansible", "vagrant",
-    "yarn", "pnpm", "deno", "bun",
-    "ruby", "rbenv", "pyenv", "nvm",
-    "gradle", "maven", "ant",
-    "protobuf", "grpc", "graphql",
-    "jemalloc", "boost", "zlib", "brotli", "lz4", "zstd",
-    "libpng", "jpeg", "webp", "giflib",
-    "openssl@3", "gnutls", "libssh2",
-    "pcre", "pcre2", "oniguruma",
-    "readline", "ncurses", "gettext",
-    "libyaml", "libxml2", "libxslt",
-    "icu4c", "utf8proc",
-    "gmp", "mpfr", "isl",
-    "autoconf", "automake", "libtool", "pkg-config", "make",
-    "llvm", "gcc", "clang-format",
-    "pandoc", "hugo", "jekyll",
-    "graphviz", "gnuplot", "plantuml",
-    "shellcheck", "shfmt", "prettier",
-    "black", "flake8", "mypy", "pylint",
-    "eslint", "typescript",
-    "rustfmt", "clippy",
-    "gofmt", "golangci-lint",
+// Abridged list for quick testing (fast packages with few deps)
+const POPULAR_PACKAGES_ABRIDGED: &[&str] = &[
+    "jq", "tree", "htop", "bat", "fd", "ripgrep", "fzf",
+    "wget", "curl", "git", "tmux", "zoxide",
+    "openssl@3", "sqlite", "readline", "pcre2", "zstd", "lz4",
+    "node", "go", "ruby", "gh",
 ];
 
-async fn run_suite_bench(count: usize) -> Result<(), Box<dyn std::error::Error>> {
+// Top 100 Homebrew packages from analytics (30d install count)
+// Fetched from: https://formulae.brew.sh/api/analytics/install/30d.json
+const POPULAR_PACKAGES: &[&str] = &[
+    "ca-certificates", "openssl@3", "xz", "sqlite", "readline",
+    "icu4c@78", "python@3.14", "awscli", "node", "harfbuzz",
+    "ncurses", "gh", "pcre2", "libpng", "zstd",
+    "glib", "lz4", "gettext", "libngtcp2", "libnghttp3",
+    "pkgconf", "libunistring", "mpdecimal", "brotli", "jpeg-turbo",
+    "xorgproto", "ffmpeg", "cmake", "libnghttp2", "go",
+    "uv", "gmp", "libtiff", "fontconfig", "python@3.13",
+    "git", "little-cms2", "dav1d", "openexr", "c-ares",
+    "tesseract", "p11-kit", "imagemagick", "zlib", "libx11",
+    "freetype", "protobuf", "gnupg", "openjph", "libtasn1",
+    "ruby", "gnutls", "expat", "libsodium", "simdjson",
+    "gemini-cli", "libarchive", "pyenv", "pixman", "curl",
+    "opus", "unbound", "cairo", "pango", "leptonica",
+    "libxcb", "jpeg-xl", "coreutils", "certifi", "krb5",
+    "docker", "libheif", "webp", "libxext", "libxau",
+    "gcc", "bzip2", "libxdmcp", "abseil", "xcbeautify",
+    "libuv", "giflib", "utf8proc", "libxrender", "m4",
+    "graphite2", "openjdk", "uvwasi", "libffi", "libdeflate",
+    "llvm", "aom", "lzo", "libevent", "libgpg-error",
+    "libidn2", "berkeley-db@5", "deno", "libedit", "oniguruma",
+];
+
+async fn run_suite_bench(count: usize, quick: bool) -> Result<(), Box<dyn std::error::Error>> {
     use std::process::Command;
 
-    println!("Running benchmark suite ({} packages)...\n", count);
+    let source = if quick { "abridged" } else { "top 100" };
+    println!("Running benchmark suite ({} packages from {} list)...\n", count, source);
 
-    let packages: Vec<&str> = POPULAR_PACKAGES.iter().take(count).copied().collect();
+    let package_list = if quick { POPULAR_PACKAGES_ABRIDGED } else { POPULAR_PACKAGES };
+    let packages: Vec<&str> = package_list.iter().take(count).copied().collect();
     let mut results: Vec<BenchResult> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
 
@@ -493,8 +498,8 @@ async fn main() {
                 }
             }
         }
-        Commands::Suite { count } => {
-            if let Err(e) = run_suite_bench(count).await {
+        Commands::Suite { count, quick } => {
+            if let Err(e) = run_suite_bench(count, quick).await {
                 eprintln!("Suite benchmark failed: {}", e);
                 std::process::exit(1);
             }

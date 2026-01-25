@@ -92,26 +92,51 @@ impl Installer {
         })
     }
 
-    /// Recursively fetch a formula and all its dependencies
+    /// Recursively fetch a formula and all its dependencies in parallel batches
     async fn fetch_all_formulas(&self, name: &str) -> Result<BTreeMap<String, Formula>, Error> {
+        use std::collections::HashSet;
+
         let mut formulas = BTreeMap::new();
-        let mut to_fetch = vec![name.to_string()];
+        let mut fetched: HashSet<String> = HashSet::new();
+        let mut to_fetch: Vec<String> = vec![name.to_string()];
 
-        while let Some(fetch_name) = to_fetch.pop() {
-            if formulas.contains_key(&fetch_name) {
-                continue;
+        while !to_fetch.is_empty() {
+            // Fetch current batch in parallel
+            let batch: Vec<String> = to_fetch
+                .drain(..)
+                .filter(|n| !fetched.contains(n))
+                .collect();
+
+            if batch.is_empty() {
+                break;
             }
 
-            let formula = self.api_client.get_formula(&fetch_name).await?;
+            // Mark as fetched before starting (to avoid re-queueing)
+            for n in &batch {
+                fetched.insert(n.clone());
+            }
 
-            // Queue dependencies
-            for dep in &formula.dependencies {
-                if !formulas.contains_key(dep) {
-                    to_fetch.push(dep.clone());
+            // Fetch all in parallel
+            let futures: Vec<_> = batch
+                .iter()
+                .map(|n| self.api_client.get_formula(n))
+                .collect();
+
+            let results = futures::future::join_all(futures).await;
+
+            // Process results and queue new dependencies
+            for (i, result) in results.into_iter().enumerate() {
+                let formula = result?;
+
+                // Queue dependencies for next batch
+                for dep in &formula.dependencies {
+                    if !fetched.contains(dep) && !to_fetch.contains(dep) {
+                        to_fetch.push(dep.clone());
+                    }
                 }
-            }
 
-            formulas.insert(fetch_name, formula);
+                formulas.insert(batch[i].clone(), formula);
+            }
         }
 
         Ok(formulas)
@@ -769,5 +794,88 @@ mod tests {
         // Both packages should be installed
         assert!(installer.db.get_installed("mainpkg").is_some());
         assert!(installer.db.get_installed("deplib").is_some());
+    }
+
+    #[tokio::test]
+    async fn parallel_api_fetching_with_deep_deps() {
+        // Tests that parallel API fetching works with a deeper dependency tree:
+        // root -> mid1 -> leaf1
+        //      -> mid2 -> leaf2
+        //              -> leaf1 (shared)
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        // Create bottles
+        let leaf1_bottle = create_bottle_tarball("leaf1");
+        let leaf1_sha = sha256_hex(&leaf1_bottle);
+        let leaf2_bottle = create_bottle_tarball("leaf2");
+        let leaf2_sha = sha256_hex(&leaf2_bottle);
+        let mid1_bottle = create_bottle_tarball("mid1");
+        let mid1_sha = sha256_hex(&mid1_bottle);
+        let mid2_bottle = create_bottle_tarball("mid2");
+        let mid2_sha = sha256_hex(&mid2_bottle);
+        let root_bottle = create_bottle_tarball("root");
+        let root_sha = sha256_hex(&root_bottle);
+
+        // Formula JSONs
+        let leaf1_json = format!(
+            r#"{{"name":"leaf1","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/leaf1.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+            mock_server.uri(), leaf1_sha
+        );
+        let leaf2_json = format!(
+            r#"{{"name":"leaf2","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/leaf2.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+            mock_server.uri(), leaf2_sha
+        );
+        let mid1_json = format!(
+            r#"{{"name":"mid1","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/mid1.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+            mock_server.uri(), mid1_sha
+        );
+        let mid2_json = format!(
+            r#"{{"name":"mid2","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1","leaf2"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/mid2.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+            mock_server.uri(), mid2_sha
+        );
+        let root_json = format!(
+            r#"{{"name":"root","versions":{{"stable":"1.0.0"}},"dependencies":["mid1","mid2"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/root.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+            mock_server.uri(), root_sha
+        );
+
+        // Mount all mocks
+        for (name, json) in [("leaf1", &leaf1_json), ("leaf2", &leaf2_json), ("mid1", &mid1_json), ("mid2", &mid2_json), ("root", &root_json)] {
+            Mock::given(method("GET"))
+                .and(path(format!("/{}.json", name)))
+                .respond_with(ResponseTemplate::new(200).set_body_string(json))
+                .mount(&mock_server)
+                .await;
+        }
+        for (name, bottle) in [("leaf1", &leaf1_bottle), ("leaf2", &leaf2_bottle), ("mid1", &mid1_bottle), ("mid2", &mid2_bottle), ("root", &root_bottle)] {
+            Mock::given(method("GET"))
+                .and(path(format!("/bottles/{}.tar.gz", name)))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
+                .mount(&mock_server)
+                .await;
+        }
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4, None);
+
+        // Install root (should install all 5 packages)
+        installer.install("root", true).await.unwrap();
+
+        // All packages should be installed
+        assert!(installer.db.get_installed("root").is_some());
+        assert!(installer.db.get_installed("mid1").is_some());
+        assert!(installer.db.get_installed("mid2").is_some());
+        assert!(installer.db.get_installed("leaf1").is_some());
+        assert!(installer.db.get_installed("leaf2").is_some());
     }
 }
