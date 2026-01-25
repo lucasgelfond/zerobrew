@@ -10,6 +10,7 @@ pub enum Error {
     NetworkFailure { message: String },
     MissingFormula { name: String },
     DependencyCycle { cycle: Vec<String> },
+    NotInstalled { name: String },
 }
 
 impl fmt::Display for Error {
@@ -31,6 +32,7 @@ impl fmt::Display for Error {
                 let rendered = cycle.join(" -> ");
                 write!(f, "dependency cycle detected: {rendered}")
             }
+            Error::NotInstalled { name } => write!(f, "formula '{name}' is not installed"),
         }
     }
 }

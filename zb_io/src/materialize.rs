@@ -49,8 +49,12 @@ impl Cellar {
             })?;
         }
 
-        // Copy the entire store entry to the cellar using best available strategy
-        copy_dir_with_fallback(store_entry, &keg_path)?;
+        // Homebrew bottles have structure {name}/{version}/ inside
+        // Find the source directory to copy from
+        let src_path = find_bottle_content(store_entry, name, version)?;
+
+        // Copy the content to the cellar using best available strategy
+        copy_dir_with_fallback(&src_path, &keg_path)?;
 
         Ok(keg_path)
     }
@@ -73,6 +77,37 @@ impl Cellar {
 
         Ok(())
     }
+}
+
+/// Find the bottle content directory inside a store entry.
+/// Homebrew bottles have structure {name}/{version}/ inside the tarball.
+/// This function finds that directory, falling back to the store_entry root
+/// if the expected structure isn't found.
+fn find_bottle_content(store_entry: &Path, name: &str, version: &str) -> Result<PathBuf, Error> {
+    // Try the expected Homebrew structure: {name}/{version}/
+    let expected_path = store_entry.join(name).join(version);
+    if expected_path.exists() && expected_path.is_dir() {
+        return Ok(expected_path);
+    }
+
+    // Try just {name}/ (some bottles may have different versioning)
+    let name_path = store_entry.join(name);
+    if name_path.exists() && name_path.is_dir() {
+        // Check if there's a single version directory inside
+        if let Ok(entries) = fs::read_dir(&name_path) {
+            let dirs: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .collect();
+            if dirs.len() == 1 {
+                return Ok(dirs[0].path());
+            }
+        }
+        return Ok(name_path);
+    }
+
+    // Fall back to store entry root (for flat tarballs or tests)
+    Ok(store_entry.to_path_buf())
 }
 
 fn copy_dir_with_fallback(src: &Path, dst: &Path) -> Result<(), Error> {

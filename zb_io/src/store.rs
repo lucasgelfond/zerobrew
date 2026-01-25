@@ -88,6 +88,39 @@ impl Store {
         // Lock will be released when lock_file is dropped
         Ok(entry_path)
     }
+
+    /// Remove a store entry. This should only be called when the refcount is 0.
+    pub fn remove_entry(&self, store_key: &str) -> Result<(), Error> {
+        let entry_path = self.entry_path(store_key);
+
+        if !entry_path.exists() {
+            return Ok(());
+        }
+
+        // Acquire exclusive lock for this store_key
+        let lock_path = self.locks_dir.join(format!("{store_key}.lock"));
+        let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to create lock file: {e}"),
+        })?;
+
+        lock_file
+            .lock_exclusive()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to acquire lock: {e}"),
+            })?;
+
+        // Remove the directory
+        if entry_path.exists() {
+            fs::remove_dir_all(&entry_path).map_err(|e| Error::StoreCorruption {
+                message: format!("failed to remove store entry: {e}"),
+            })?;
+        }
+
+        // Clean up the lock file
+        let _ = fs::remove_file(&lock_path);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
