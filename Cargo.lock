@@ -1725,6 +1725,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "serde_json",
+ "tempfile",
  "tokio",
  "wiremock",
  "zb_core",
