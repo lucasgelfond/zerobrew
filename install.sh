@@ -49,7 +49,12 @@ echo "Installed zb to $ZEROBREW_BIN/zb"
 # Detect shell config file
 case "$SHELL" in
     */zsh)
-        SHELL_CONFIG="$HOME/.zshrc"
+        ZDOTDIR="${ZDOTDIR:-$HOME}"
+        if [[ -f "$ZDOTDIR/.zshenv" ]]; then
+            SHELL_CONFIG="$ZDOTDIR/.zshenv"
+        else
+            SHELL_CONFIG="$ZDOTDIR/.zshrc"
+        fi
         ;;
     */bash)
         if [[ -f "$HOME/.bash_profile" ]]; then
