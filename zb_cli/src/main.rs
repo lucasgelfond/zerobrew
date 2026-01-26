@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use zb_io::install::{InstallPlan, Installer, create_installer};
-use zb_io::{InstallProgress, ProgressCallback};
+use zb_io::{Brewfile, InstallProgress, ProgressCallback};
 
 /// Progress tracking state for install operations
 type ProgressState = (
@@ -45,6 +45,17 @@ enum Commands {
         /// Formula names to install
         #[arg(required = true)]
         formulas: Vec<String>,
+
+        /// Skip linking executables
+        #[arg(long)]
+        no_link: bool,
+    },
+
+    /// Install packages from a Brewfile
+    Bundle {
+        /// Path to Brewfile (default: ./Brewfile)
+        #[arg(default_value = "Brewfile")]
+        file: PathBuf,
 
         /// Skip linking executables
         #[arg(long)]
@@ -504,6 +515,80 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     return Err(e);
                 }
             };
+
+            let elapsed = start.elapsed();
+            println!();
+            println!(
+                "{} Installed {} packages in {:.2}s",
+                style("==>").cyan().bold(),
+                style(installed).green().bold(),
+                elapsed.as_secs_f64()
+            );
+        }
+
+        Commands::Bundle { file, no_link } => {
+            let start = Instant::now();
+
+            // Resolve to absolute path
+            let brewfile_path = if file.is_absolute() {
+                file.clone()
+            } else {
+                std::env::current_dir()
+                    .map_err(|e| zb_core::Error::StoreCorruption {
+                        message: format!("Failed to get current directory: {}", e),
+                    })?
+                    .join(&file)
+            };
+
+            println!(
+                "{} Reading {}...",
+                style("==>").cyan().bold(),
+                style(brewfile_path.display()).bold()
+            );
+
+            // Parse the Brewfile using Ruby
+            let brewfile = Brewfile::parse(&brewfile_path)?;
+            let formulas = brewfile.formulas();
+            let tap_formulas = brewfile.tap_formulas();
+            let casks = brewfile.casks();
+            let taps = brewfile.taps();
+
+            // Warn about unsupported entries
+            if !taps.is_empty() {
+                println!(
+                    "{} Skipping {} taps (not yet supported)",
+                    style("    Note:").yellow(),
+                    taps.len()
+                );
+            }
+            if !tap_formulas.is_empty() {
+                println!(
+                    "{} Skipping {} tap formulas (not yet supported)",
+                    style("    Note:").yellow(),
+                    tap_formulas.len()
+                );
+            }
+            if !casks.is_empty() {
+                println!(
+                    "{} Skipping {} casks (not yet supported)",
+                    style("    Note:").yellow(),
+                    casks.len()
+                );
+            }
+
+            if formulas.is_empty() {
+                println!("No formulas to install.");
+                return Ok(());
+            }
+
+            println!(
+                "{} Planning installation of {} formulas...",
+                style("==>").cyan().bold(),
+                formulas.len()
+            );
+
+            let plan = installer.plan_multiple(&formulas).await?;
+            let installed = execute_install(&mut installer, plan, !no_link).await?;
 
             let elapsed = start.elapsed();
             println!();

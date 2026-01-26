@@ -1,5 +1,6 @@
 pub mod api;
 pub mod blob;
+pub mod brewfile;
 pub mod cache;
 pub mod db;
 pub mod download;
@@ -12,6 +13,7 @@ pub mod store;
 
 pub use api::ApiClient;
 pub use blob::BlobCache;
+pub use brewfile::Brewfile;
 pub use cache::ApiCache;
 pub use db::{Database, InstalledKeg};
 pub use download::{DownloadProgressCallback, DownloadRequest, Downloader, ParallelDownloader};
