@@ -1785,11 +1785,48 @@ mod tests {
     // Patchelf single-invocation tests (prevent ELF corruption regression)
     // ========================================================================
 
-    /// Helper to find a suitable test binary for patchelf tests.
-    /// Prefers linuxbrew binaries (known to work with patchelf) over system binaries.
+    /// Helper to create or find a suitable test binary for patchelf tests.
+    /// First tries to compile a minimal test binary (most reliable), then falls back
+    /// to linuxbrew binaries, then system binaries.
     #[cfg(target_os = "linux")]
-    fn find_patchable_binary() -> Option<std::path::PathBuf> {
-        // Linuxbrew binaries are built to be relocatable and work well with patchelf
+    fn create_or_find_patchable_binary(dir: &Path) -> Option<std::path::PathBuf> {
+        use std::process::Command;
+
+        // First, try to compile a minimal test binary - this is the most reliable approach
+        // because we control the binary and know it will work with patchelf
+        let source_path = dir.join("test_main.c");
+        let binary_path = dir.join("test_binary");
+
+        // Minimal C program that links dynamically
+        let source_code = r#"
+#include <stdio.h>
+int main() {
+    printf("test\n");
+    return 0;
+}
+"#;
+
+        if fs::write(&source_path, source_code).is_ok() {
+            // Try gcc first, then cc
+            for compiler in &["gcc", "cc", "clang"] {
+                let result = Command::new(compiler)
+                    .args([
+                        "-o",
+                        &binary_path.to_string_lossy(),
+                        &source_path.to_string_lossy(),
+                        "-pie",  // Position independent executable
+                    ])
+                    .output();
+
+                if let Ok(output) = result {
+                    if output.status.success() && binary_path.exists() {
+                        return Some(binary_path);
+                    }
+                }
+            }
+        }
+
+        // Fallback: linuxbrew binaries (known to work with patchelf)
         let linuxbrew_candidates = [
             "/home/linuxbrew/.linuxbrew/bin/zstd",
             "/home/linuxbrew/.linuxbrew/bin/xz",
@@ -1799,22 +1836,36 @@ mod tests {
         for candidate in linuxbrew_candidates {
             let path = std::path::Path::new(candidate);
             if path.exists() {
-                return Some(path.to_path_buf());
+                // Copy to our temp dir so we can modify it
+                let dest = dir.join("test_binary_copy");
+                if fs::copy(path, &dest).is_ok() {
+                    return Some(dest);
+                }
             }
         }
 
-        // System binaries may not work well with patchelf on some distros
-        // but try them as a fallback
+        // Last resort: system binaries (may not work on all distros)
         let system_candidates = ["/bin/true", "/usr/bin/true", "/bin/echo", "/usr/bin/echo"];
 
         for candidate in system_candidates {
             let path = std::path::Path::new(candidate);
             if path.exists() {
-                return Some(path.to_path_buf());
+                let dest = dir.join("test_binary_copy");
+                if fs::copy(path, &dest).is_ok() {
+                    return Some(dest);
+                }
             }
         }
 
         None
+    }
+
+    /// Check if test binary is from linuxbrew (for execution tests)
+    #[cfg(target_os = "linux")]
+    fn is_compiled_or_linuxbrew_binary(path: &Path) -> bool {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        // Our compiled binary or linuxbrew copy
+        name == "test_binary" || name == "test_binary_copy"
     }
 
     /// Test that patched ELF binaries have valid structure (no sections outside segments).
@@ -1833,14 +1884,11 @@ mod tests {
             return;
         }
 
-        let source_binary = match find_patchable_binary() {
+        let tmp = TempDir::new().unwrap();
+        let test_binary = match create_or_find_patchable_binary(tmp.path()) {
             Some(p) => p,
             None => return, // No suitable binary found, skip test
         };
-
-        let tmp = TempDir::new().unwrap();
-        let test_binary = tmp.path().join("test_binary");
-        fs::copy(&source_binary, &test_binary).unwrap();
 
         // Make writable
         let mut perms = fs::metadata(&test_binary).unwrap().permissions();
@@ -1857,7 +1905,7 @@ mod tests {
 
         // Build new RPATH: add our test path but preserve original paths
         let new_rpath = if orig_rpath.is_empty() {
-            "/opt/test/lib".to_string()
+            "/opt/test/lib:/lib64:/usr/lib64".to_string()
         } else {
             format!("/opt/test/lib:{}", orig_rpath)
         };
@@ -1895,13 +1943,10 @@ mod tests {
             stderr
         );
 
-        // Verify the binary can still be executed (if it was from linuxbrew)
-        if source_binary.to_string_lossy().contains("linuxbrew") {
-            let exec_result = Command::new(&test_binary)
-                .arg("--version")
-                .output();
+        // Verify the binary can still be executed (compiled or linuxbrew binaries)
+        if is_compiled_or_linuxbrew_binary(&test_binary) {
+            let exec_result = Command::new(&test_binary).output();
             assert!(exec_result.is_ok(), "Patched binary should be executable");
-            // Note: exit code may vary depending on binary, just check it runs
         }
     }
 
@@ -1921,14 +1966,11 @@ mod tests {
             return;
         }
 
-        let source_binary = match find_patchable_binary() {
+        let tmp = TempDir::new().unwrap();
+        let test_binary = match create_or_find_patchable_binary(tmp.path()) {
             Some(p) => p,
             None => return,
         };
-
-        let tmp = TempDir::new().unwrap();
-        let test_binary = tmp.path().join("test_binary");
-        fs::copy(&source_binary, &test_binary).unwrap();
 
         let mut perms = fs::metadata(&test_binary).unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
@@ -1970,14 +2012,11 @@ mod tests {
             return;
         }
 
-        let source_binary = match find_patchable_binary() {
+        let tmp = TempDir::new().unwrap();
+        let test_binary = match create_or_find_patchable_binary(tmp.path()) {
             Some(p) => p,
             None => return,
         };
-
-        let tmp = TempDir::new().unwrap();
-        let test_binary = tmp.path().join("test_binary");
-        fs::copy(&source_binary, &test_binary).unwrap();
 
         let mut perms = fs::metadata(&test_binary).unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
@@ -1992,7 +2031,7 @@ mod tests {
             .unwrap_or_default();
 
         let expected_rpath = if orig_rpath.is_empty() {
-            "/opt/zerobrew/test/lib:/opt/zerobrew/prefix/lib".to_string()
+            "/opt/zerobrew/test/lib:/opt/zerobrew/prefix/lib:/lib64:/usr/lib64".to_string()
         } else {
             format!("/opt/zerobrew/test/lib:/opt/zerobrew/prefix/lib:{}", orig_rpath)
         };
@@ -2029,9 +2068,9 @@ mod tests {
         let actual_interp = String::from_utf8_lossy(&interp_output.stdout).trim().to_string();
         assert_eq!(actual_interp, expected_interp, "Interpreter should be set correctly");
 
-        // Verify binary still executes (if from linuxbrew)
-        if source_binary.to_string_lossy().contains("linuxbrew") {
-            let exec_result = Command::new(&test_binary).arg("--version").output();
+        // Verify binary still executes (compiled or linuxbrew binaries)
+        if is_compiled_or_linuxbrew_binary(&test_binary) {
+            let exec_result = Command::new(&test_binary).output();
             assert!(exec_result.is_ok(), "Binary should still be executable after patching");
         }
     }
@@ -2051,11 +2090,6 @@ mod tests {
             return;
         }
 
-        let source_binary = match find_patchable_binary() {
-            Some(p) => p,
-            None => return,
-        };
-
         let tmp = TempDir::new().unwrap();
         let keg = tmp.path().join("keg");
         let cellar = tmp.path().join("Cellar");
@@ -2067,9 +2101,11 @@ mod tests {
         fs::create_dir_all(prefix.join("lib")).unwrap();
         std::os::unix::fs::symlink("/lib64/ld-linux-x86-64.so.2", prefix.join("lib/ld.so")).unwrap();
 
-        // Copy the test binary
-        let test_binary = keg.join("bin/test_app");
-        fs::copy(&source_binary, &test_binary).unwrap();
+        // Create or find a test binary directly in the keg/bin directory
+        let test_binary = match create_or_find_patchable_binary(&keg.join("bin")) {
+            Some(p) => p,
+            None => return,
+        };
 
         let mut perms = fs::metadata(&test_binary).unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
@@ -2095,9 +2131,9 @@ mod tests {
             "Binary should have valid ELF structure after patching function runs"
         );
 
-        // Verify binary still executes (if from linuxbrew)
-        if source_binary.to_string_lossy().contains("linuxbrew") {
-            let exec_result = Command::new(&test_binary).arg("--version").output();
+        // Verify binary still executes (compiled or linuxbrew binaries)
+        if is_compiled_or_linuxbrew_binary(&test_binary) {
+            let exec_result = Command::new(&test_binary).output();
             assert!(exec_result.is_ok(), "Binary should still execute after patching");
         }
     }
