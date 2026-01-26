@@ -105,6 +105,65 @@ impl ApiClient {
 
         Ok(formula)
     }
+
+    /// Fetch a formula without using cached ETag headers (always get fresh data).
+    /// This is used for update checking to ensure we get the latest formula data.
+    pub async fn get_formula_fresh(&self, name: &str) -> Result<Formula, Error> {
+        let url = format!("{}/{}.json", self.base_url, name);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(Error::MissingFormula {
+                name: name.to_string(),
+            });
+        }
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("HTTP {}", response.status()),
+            });
+        }
+
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let last_modified = response
+            .headers()
+            .get("last-modified")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let body = response.text().await.map_err(|e| Error::NetworkFailure {
+            message: format!("failed to read response body: {e}"),
+        })?;
+
+        // Update cache with fresh data
+        if let Some(ref cache) = self.cache {
+            let entry = CacheEntry {
+                etag,
+                last_modified,
+                body: body.clone(),
+            };
+            let _ = cache.put(&url, &entry);
+        }
+
+        let formula: Formula = serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
+            message: format!("failed to parse formula JSON: {e}"),
+        })?;
+
+        Ok(formula)
+    }
 }
 
 impl Default for ApiClient {

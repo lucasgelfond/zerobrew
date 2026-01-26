@@ -61,6 +61,19 @@ enum Commands {
     /// Garbage collect unreferenced store entries
     Gc,
 
+    /// Check for available package updates
+    Update,
+
+    /// Upgrade packages to latest versions
+    Upgrade {
+        /// Formula name to upgrade (omit to upgrade all)
+        formula: Option<String>,
+
+        /// Skip linking executables
+        #[arg(long)]
+        no_link: bool,
+    },
+
     /// Reset zerobrew (delete all data for cold install testing)
     Reset {
         /// Skip confirmation prompt
@@ -572,6 +585,339 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     style("==>").cyan().bold(),
                     style(removed.len()).green().bold()
                 );
+            }
+        }
+
+        Commands::Update => {
+            println!("{} Checking for updates...", style("==>").cyan().bold());
+
+            let result = installer.check_for_updates().await?;
+
+            // Report any errors
+            for (name, err) in &result.errors {
+                eprintln!(
+                    "    {} Failed to check {}: {}",
+                    style("!").yellow(),
+                    name,
+                    err
+                );
+            }
+
+            if result.outdated.is_empty() {
+                println!(
+                    "{} All {} packages are up to date.",
+                    style("==>").cyan().bold(),
+                    result.up_to_date.len()
+                );
+            } else {
+                println!(
+                    "{} {} packages have updates available:",
+                    style("==>").cyan().bold(),
+                    style(result.outdated.len()).yellow().bold()
+                );
+                for pkg in &result.outdated {
+                    println!(
+                        "    {} {} -> {}",
+                        style(&pkg.name).bold(),
+                        style(&pkg.installed_version).dim(),
+                        style(&pkg.latest_version).green()
+                    );
+                }
+                println!();
+                println!(
+                    "Run {} to upgrade all packages.",
+                    style("zb upgrade").cyan()
+                );
+            }
+        }
+
+        Commands::Upgrade { formula, no_link } => {
+            match formula {
+                Some(name) => {
+                    // Upgrade a specific package
+                    println!(
+                        "{} Checking {}...",
+                        style("==>").cyan().bold(),
+                        style(&name).bold()
+                    );
+
+                    // Set up progress display (reuse from install)
+                    let multi = MultiProgress::new();
+                    let bars: Arc<Mutex<HashMap<String, ProgressBar>>> =
+                        Arc::new(Mutex::new(HashMap::new()));
+
+                    let download_style = ProgressStyle::default_bar()
+                        .template(
+                            "    {prefix:<16} {bar:25.cyan/dim} {bytes:>10}/{total_bytes:<10} {eta:>6}",
+                        )
+                        .unwrap()
+                        .progress_chars("━━╸");
+
+                    let spinner_style = ProgressStyle::default_spinner()
+                        .template("    {prefix:<16} {spinner:.cyan} {msg}")
+                        .unwrap()
+                        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+
+                    let done_style = ProgressStyle::default_spinner()
+                        .template("    {prefix:<16} {msg}")
+                        .unwrap();
+
+                    let bars_clone = bars.clone();
+                    let multi_clone = multi.clone();
+                    let download_style_clone = download_style.clone();
+                    let spinner_style_clone = spinner_style.clone();
+                    let done_style_clone = done_style.clone();
+
+                    let progress_callback: Arc<zb_io::ProgressCallback> =
+                        Arc::new(Box::new(move |event| {
+                            let mut bars = bars_clone.lock().unwrap();
+                            match event {
+                                InstallProgress::DownloadStarted { name, total_bytes } => {
+                                    let pb = if let Some(total) = total_bytes {
+                                        let pb = multi_clone.add(ProgressBar::new(total));
+                                        pb.set_style(download_style_clone.clone());
+                                        pb
+                                    } else {
+                                        let pb = multi_clone.add(ProgressBar::new_spinner());
+                                        pb.set_style(spinner_style_clone.clone());
+                                        pb.set_message("downloading...");
+                                        pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                                        pb
+                                    };
+                                    pb.set_prefix(name.clone());
+                                    bars.insert(name, pb);
+                                }
+                                InstallProgress::DownloadProgress {
+                                    name,
+                                    downloaded,
+                                    total_bytes,
+                                } => {
+                                    if let Some(pb) = bars.get(&name)
+                                        && total_bytes.is_some()
+                                    {
+                                        pb.set_position(downloaded);
+                                    }
+                                }
+                                InstallProgress::DownloadCompleted { name, total_bytes } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        if total_bytes > 0 {
+                                            pb.set_position(total_bytes);
+                                        }
+                                        pb.set_style(spinner_style_clone.clone());
+                                        pb.set_message("unpacking...");
+                                        pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                                    }
+                                }
+                                InstallProgress::UnpackStarted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_message("unpacking...");
+                                    }
+                                }
+                                InstallProgress::UnpackCompleted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_message("unpacked");
+                                    }
+                                }
+                                InstallProgress::LinkStarted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_message("linking...");
+                                    }
+                                }
+                                InstallProgress::LinkCompleted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_message("linked");
+                                    }
+                                }
+                                InstallProgress::InstallCompleted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_style(done_style_clone.clone());
+                                        pb.set_message(format!("{} installed", style("✓").green()));
+                                        pb.finish();
+                                    }
+                                }
+                            }
+                        }));
+
+                    let result = installer
+                        .upgrade_package(&name, !no_link, Some(progress_callback))
+                        .await;
+
+                    // Cleanup progress bars
+                    {
+                        let bars = bars.lock().unwrap();
+                        for (_, pb) in bars.iter() {
+                            if !pb.is_finished() {
+                                pb.finish();
+                            }
+                        }
+                    }
+
+                    match result {
+                        Ok(Some(pkg)) => {
+                            println!();
+                            println!(
+                                "{} Upgraded {} ({} -> {})",
+                                style("==>").cyan().bold(),
+                                style(&pkg.name).green().bold(),
+                                style(&pkg.installed_version).dim(),
+                                style(&pkg.latest_version).green()
+                            );
+                        }
+                        Ok(None) => {
+                            println!(
+                                "{} {} is already up to date.",
+                                style("==>").cyan().bold(),
+                                style(&name).green()
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e);
+                        }
+                    }
+                }
+                None => {
+                    // Upgrade all packages
+                    println!("{} Upgrading all packages...", style("==>").cyan().bold());
+
+                    // Set up progress display
+                    let multi = MultiProgress::new();
+                    let bars: Arc<Mutex<HashMap<String, ProgressBar>>> =
+                        Arc::new(Mutex::new(HashMap::new()));
+
+                    let download_style = ProgressStyle::default_bar()
+                        .template(
+                            "    {prefix:<16} {bar:25.cyan/dim} {bytes:>10}/{total_bytes:<10} {eta:>6}",
+                        )
+                        .unwrap()
+                        .progress_chars("━━╸");
+
+                    let spinner_style = ProgressStyle::default_spinner()
+                        .template("    {prefix:<16} {spinner:.cyan} {msg}")
+                        .unwrap()
+                        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+
+                    let done_style = ProgressStyle::default_spinner()
+                        .template("    {prefix:<16} {msg}")
+                        .unwrap();
+
+                    let bars_clone = bars.clone();
+                    let multi_clone = multi.clone();
+                    let download_style_clone = download_style.clone();
+                    let spinner_style_clone = spinner_style.clone();
+                    let done_style_clone = done_style.clone();
+
+                    let progress_callback: Arc<zb_io::ProgressCallback> =
+                        Arc::new(Box::new(move |event| {
+                            let mut bars = bars_clone.lock().unwrap();
+                            match event {
+                                InstallProgress::DownloadStarted { name, total_bytes } => {
+                                    let pb = if let Some(total) = total_bytes {
+                                        let pb = multi_clone.add(ProgressBar::new(total));
+                                        pb.set_style(download_style_clone.clone());
+                                        pb
+                                    } else {
+                                        let pb = multi_clone.add(ProgressBar::new_spinner());
+                                        pb.set_style(spinner_style_clone.clone());
+                                        pb.set_message("downloading...");
+                                        pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                                        pb
+                                    };
+                                    pb.set_prefix(name.clone());
+                                    bars.insert(name, pb);
+                                }
+                                InstallProgress::DownloadProgress {
+                                    name,
+                                    downloaded,
+                                    total_bytes,
+                                } => {
+                                    if let Some(pb) = bars.get(&name)
+                                        && total_bytes.is_some()
+                                    {
+                                        pb.set_position(downloaded);
+                                    }
+                                }
+                                InstallProgress::DownloadCompleted { name, total_bytes } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        if total_bytes > 0 {
+                                            pb.set_position(total_bytes);
+                                        }
+                                        pb.set_style(spinner_style_clone.clone());
+                                        pb.set_message("unpacking...");
+                                        pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                                    }
+                                }
+                                InstallProgress::UnpackStarted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_message("unpacking...");
+                                    }
+                                }
+                                InstallProgress::UnpackCompleted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_message("unpacked");
+                                    }
+                                }
+                                InstallProgress::LinkStarted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_message("linking...");
+                                    }
+                                }
+                                InstallProgress::LinkCompleted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_message("linked");
+                                    }
+                                }
+                                InstallProgress::InstallCompleted { name } => {
+                                    if let Some(pb) = bars.get(&name) {
+                                        pb.set_style(done_style_clone.clone());
+                                        pb.set_message(format!("{} installed", style("✓").green()));
+                                        pb.finish();
+                                    }
+                                }
+                            }
+                        }));
+
+                    let result = installer
+                        .upgrade_all(!no_link, Some(progress_callback))
+                        .await?;
+
+                    // Cleanup progress bars
+                    {
+                        let bars = bars.lock().unwrap();
+                        for (_, pb) in bars.iter() {
+                            if !pb.is_finished() {
+                                pb.finish();
+                            }
+                        }
+                    }
+
+                    // Report errors
+                    for (name, err) in &result.errors {
+                        eprintln!(
+                            "    {} Failed to upgrade {}: {}",
+                            style("!").red(),
+                            name,
+                            err
+                        );
+                    }
+
+                    if result.upgraded.is_empty() && result.errors.is_empty() {
+                        println!(
+                            "{} All packages are up to date.",
+                            style("==>").cyan().bold()
+                        );
+                    } else if !result.upgraded.is_empty() {
+                        println!();
+                        for pkg in &result.upgraded {
+                            println!(
+                                "{} Upgraded {} ({} -> {})",
+                                style("==>").cyan().bold(),
+                                style(&pkg.name).green().bold(),
+                                style(&pkg.installed_version).dim(),
+                                style(&pkg.latest_version).green()
+                            );
+                        }
+                    }
+                }
             }
         }
 

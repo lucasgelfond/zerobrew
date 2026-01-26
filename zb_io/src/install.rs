@@ -13,7 +13,7 @@ use crate::materialize::Cellar;
 use crate::progress::{InstallProgress, ProgressCallback};
 use crate::store::Store;
 
-use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
+use zb_core::{Error, Formula, SelectedBottle, Version, resolve_closure, select_bottle};
 
 /// Maximum number of retries for corrupted downloads
 const MAX_CORRUPTION_RETRIES: usize = 3;
@@ -34,6 +34,29 @@ pub struct InstallPlan {
 
 pub struct ExecuteResult {
     pub installed: usize,
+}
+
+/// Information about a package that has an available update.
+#[derive(Debug, Clone)]
+pub struct OutdatedPackage {
+    pub name: String,
+    pub installed_version: String,
+    pub latest_version: String,
+}
+
+/// Result of checking for updates across all installed packages.
+#[derive(Debug)]
+pub struct UpdateCheckResult {
+    pub outdated: Vec<OutdatedPackage>,
+    pub up_to_date: Vec<String>,
+    pub errors: Vec<(String, Error)>,
+}
+
+/// Result of upgrading packages.
+#[derive(Debug)]
+pub struct UpgradeResult {
+    pub upgraded: Vec<OutdatedPackage>,
+    pub errors: Vec<(String, Error)>,
 }
 
 /// Internal struct for tracking processed packages during streaming install
@@ -430,6 +453,139 @@ impl Installer {
     /// List all installed formulas
     pub fn list_installed(&self) -> Result<Vec<crate::db::InstalledKeg>, Error> {
         self.db.list_installed()
+    }
+
+    /// Check all installed packages for available updates.
+    /// Fetches fresh formula data (bypassing cache) to compare versions.
+    pub async fn check_for_updates(&self) -> Result<UpdateCheckResult, Error> {
+        let installed = self.db.list_installed()?;
+
+        let mut outdated = Vec::new();
+        let mut up_to_date = Vec::new();
+        let mut errors = Vec::new();
+
+        // Fetch fresh formula data for all installed packages in parallel
+        let futures: Vec<_> = installed
+            .iter()
+            .map(|keg| self.api_client.get_formula_fresh(&keg.name))
+            .collect();
+
+        let results = futures::future::join_all(futures).await;
+
+        for (keg, result) in installed.iter().zip(results.into_iter()) {
+            match result {
+                Ok(formula) => {
+                    let installed_version = Version::parse(&keg.version);
+                    let latest_version = Version::parse(&formula.effective_version());
+
+                    if latest_version.is_newer_than(&installed_version) {
+                        outdated.push(OutdatedPackage {
+                            name: keg.name.clone(),
+                            installed_version: keg.version.clone(),
+                            latest_version: formula.effective_version(),
+                        });
+                    } else {
+                        up_to_date.push(keg.name.clone());
+                    }
+                }
+                Err(e) => {
+                    errors.push((keg.name.clone(), e));
+                }
+            }
+        }
+
+        Ok(UpdateCheckResult {
+            outdated,
+            up_to_date,
+            errors,
+        })
+    }
+
+    /// Upgrade a specific package to its latest version.
+    /// Returns the outdated package info if an upgrade was performed, None if already up-to-date.
+    pub async fn upgrade_package(
+        &mut self,
+        name: &str,
+        link: bool,
+        progress: Option<Arc<ProgressCallback>>,
+    ) -> Result<Option<OutdatedPackage>, Error> {
+        // Check if package is installed
+        let installed = self.db.get_installed(name).ok_or(Error::NotInstalled {
+            name: name.to_string(),
+        })?;
+
+        // Fetch fresh formula data
+        let formula = self.api_client.get_formula_fresh(name).await?;
+
+        let installed_version = Version::parse(&installed.version);
+        let latest_version = Version::parse(&formula.effective_version());
+
+        // Check if upgrade is needed
+        if !latest_version.is_newer_than(&installed_version) {
+            return Ok(None);
+        }
+
+        let outdated_info = OutdatedPackage {
+            name: name.to_string(),
+            installed_version: installed.version.clone(),
+            latest_version: formula.effective_version(),
+        };
+
+        // Check if old version is linked (we'll preserve this state)
+        let old_keg_path = self.cellar.keg_path(name, &installed.version);
+        let was_linked = self.linker.is_linked(&old_keg_path);
+        let should_link = link && was_linked;
+
+        // Unlink old version first
+        if was_linked {
+            self.linker.unlink_keg(&old_keg_path)?;
+        }
+
+        // Plan and install new version (with deps)
+        let plan = self.plan(name).await?;
+        self.execute_with_progress(plan, should_link, progress)
+            .await?;
+
+        // Remove old cellar entry
+        self.cellar.remove_keg(name, &installed.version)?;
+
+        // Note: Database is updated automatically by execute() with INSERT OR REPLACE
+
+        Ok(Some(outdated_info))
+    }
+
+    /// Upgrade all outdated packages.
+    /// Continues on error - reports all errors at the end.
+    pub async fn upgrade_all(
+        &mut self,
+        link: bool,
+        progress: Option<Arc<ProgressCallback>>,
+    ) -> Result<UpgradeResult, Error> {
+        // First check what needs upgrading
+        let check_result = self.check_for_updates().await?;
+
+        let mut upgraded = Vec::new();
+        let mut errors = check_result.errors; // Start with any errors from the check
+
+        // Upgrade each outdated package
+        for outdated in check_result.outdated {
+            match self
+                .upgrade_package(&outdated.name, link, progress.clone())
+                .await
+            {
+                Ok(Some(info)) => {
+                    upgraded.push(info);
+                }
+                Ok(None) => {
+                    // Package was already up-to-date (race condition, unlikely)
+                }
+                Err(e) => {
+                    errors.push((outdated.name, e));
+                }
+            }
+        }
+
+        Ok(UpgradeResult { upgraded, errors })
     }
 }
 
