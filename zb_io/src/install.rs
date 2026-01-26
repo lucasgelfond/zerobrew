@@ -92,6 +92,55 @@ impl Installer {
         })
     }
 
+    /// Resolve dependencies and plan the install for multiple formulas
+    ///
+    /// This is more efficient than calling plan() multiple times as it
+    /// deduplicates shared dependencies across all requested formulas.
+    pub async fn plan_multiple(&self, names: &[String]) -> Result<InstallPlan, Error> {
+        use std::collections::HashSet;
+
+        if names.is_empty() {
+            return Ok(InstallPlan {
+                formulas: Vec::new(),
+                bottles: Vec::new(),
+            });
+        }
+
+        // Fetch all formulas for all roots
+        let mut all_formulas_map = BTreeMap::new();
+        for name in names {
+            let formulas = self.fetch_all_formulas(name).await?;
+            all_formulas_map.extend(formulas);
+        }
+
+        // Resolve each root and collect unique ordered formulas
+        let mut seen = HashSet::new();
+        let mut ordered_formulas = Vec::new();
+
+        for name in names {
+            let ordered = resolve_closure(name, &all_formulas_map)?;
+            for formula_name in ordered {
+                if seen.insert(formula_name.clone())
+                    && let Some(formula) = all_formulas_map.get(&formula_name)
+                {
+                    ordered_formulas.push(formula.clone());
+                }
+            }
+        }
+
+        // Select bottles for each formula
+        let mut bottles = Vec::new();
+        for formula in &ordered_formulas {
+            let bottle = select_bottle(formula)?;
+            bottles.push(bottle);
+        }
+
+        Ok(InstallPlan {
+            formulas: ordered_formulas,
+            bottles,
+        })
+    }
+
     /// Try to extract a download, with automatic retry on corruption
     async fn extract_with_retry(
         &self,
