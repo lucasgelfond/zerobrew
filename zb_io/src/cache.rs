@@ -55,6 +55,31 @@ impl ApiCache {
             .ok()
     }
 
+    /// Get cached entry only if it's still fresh (within max_age_secs of being cached).
+    /// Returns None if entry doesn't exist or is stale.
+    pub fn get_if_fresh(&self, url: &str, max_age_secs: u64) -> Option<CacheEntry> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let min_cached_at = now - max_age_secs as i64;
+
+        self.conn
+            .query_row(
+                "SELECT etag, last_modified, body FROM api_cache WHERE url = ?1 AND cached_at >= ?2",
+                params![url, min_cached_at],
+                |row| {
+                    Ok(CacheEntry {
+                        etag: row.get(0)?,
+                        last_modified: row.get(1)?,
+                        body: row.get(2)?,
+                    })
+                },
+            )
+            .ok()
+    }
+
     pub fn put(&self, url: &str, entry: &CacheEntry) -> Result<(), rusqlite::Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -95,5 +120,32 @@ mod tests {
     fn returns_none_for_missing_entry() {
         let cache = ApiCache::in_memory().unwrap();
         assert!(cache.get("https://example.com/nonexistent.json").is_none());
+    }
+
+    #[test]
+    fn get_if_fresh_returns_entry_within_ttl() {
+        let cache = ApiCache::in_memory().unwrap();
+
+        let entry = CacheEntry {
+            etag: Some("abc123".to_string()),
+            last_modified: None,
+            body: r#"{"name":"foo"}"#.to_string(),
+        };
+
+        cache.put("https://example.com/foo.json", &entry).unwrap();
+
+        // Should return entry within 1 hour TTL
+        let retrieved = cache.get_if_fresh("https://example.com/foo.json", 3600);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().body, r#"{"name":"foo"}"#);
+    }
+
+    #[test]
+    fn get_if_fresh_returns_none_for_missing_entry() {
+        let cache = ApiCache::in_memory().unwrap();
+
+        // No entry was added, should return None
+        let retrieved = cache.get_if_fresh("https://example.com/nonexistent.json", 3600);
+        assert!(retrieved.is_none());
     }
 }

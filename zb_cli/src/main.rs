@@ -7,6 +7,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use zb_io::cache::ApiCache;
 use zb_io::install::create_installer;
 use zb_io::{ApiClient, InstallProgress, ProgressCallback};
 
@@ -70,6 +71,9 @@ enum Commands {
 
     /// Initialize zerobrew directories with correct permissions
     Init,
+
+    /// Update the formula list cache
+    Update,
 }
 
 #[tokio::main]
@@ -308,8 +312,18 @@ fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!();
 }
 
-async fn suggest_similar_formulas(query: &str) {
-    let client = ApiClient::new();
+fn get_api_cache(root: &Path) -> Option<ApiCache> {
+    let cache_path = root.join("cache").join("api.db");
+    ApiCache::open(&cache_path).ok()
+}
+
+async fn suggest_similar_formulas(query: &str, root: &Path) {
+    let client = if let Some(cache) = get_api_cache(root) {
+        ApiClient::new().with_cache(cache)
+    } else {
+        ApiClient::new()
+    };
+
     if let Ok(names) = client.get_formula_names().await {
         let suggestions = ApiClient::find_similar_formulas(query, &names, 3);
         if !suggestions.is_empty() {
@@ -332,6 +346,42 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     if matches!(cli.command, Commands::Init) {
         return run_init(&cli.root, &cli.prefix)
             .map_err(|e| zb_core::Error::StoreCorruption { message: e });
+    }
+
+    // Handle Update command early - it only needs cache, not full installer
+    if matches!(cli.command, Commands::Update) {
+        println!(
+            "{} Updating formula list...",
+            style("==>").cyan().bold()
+        );
+
+        // Ensure cache directory exists
+        let cache_dir = cli.root.join("cache");
+        if !cache_dir.exists() {
+            std::fs::create_dir_all(&cache_dir).map_err(|e| zb_core::Error::StoreCorruption {
+                message: format!("Failed to create cache directory: {}", e),
+            })?;
+        }
+
+        let client = if let Some(cache) = get_api_cache(&cli.root) {
+            ApiClient::new().with_cache(cache)
+        } else {
+            ApiClient::new()
+        };
+
+        match client.get_formula_names_cached(true).await {
+            Ok(names) => {
+                println!(
+                    "{} Updated ({} formulas)",
+                    style("==>").cyan().bold(),
+                    style(names.len()).green().bold()
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
     }
 
     // For reset, handle specially since directories may not be writable
@@ -358,7 +408,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 Ok(p) => p,
                 Err(e) => {
                     if matches!(e, zb_core::Error::MissingFormula { .. }) {
-                        suggest_similar_formulas(&formula).await;
+                        suggest_similar_formulas(&formula, &cli.root).await;
                     }
                     suggest_homebrew(&formula, &e);
                     return Err(e);
@@ -596,6 +646,8 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 );
             }
         }
+
+        Commands::Update => unreachable!(), // Handled above
 
         Commands::Reset { yes } => {
             if !cli.root.exists() && !cli.prefix.exists() {

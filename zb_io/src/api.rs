@@ -113,18 +113,68 @@ impl ApiClient {
         Ok(formula)
     }
 
-    /// Fetch list of all formula names from Homebrew API
+    /// Default TTL for formula names cache (24 hours, like Homebrew)
+    pub const FORMULA_NAMES_TTL_SECS: u64 = 86400;
+
+    /// Fetch list of all formula names from Homebrew API (uncached)
     pub async fn get_formula_names(&self) -> Result<Vec<String>, Error> {
+        self.get_formula_names_cached(false).await
+    }
+
+    /// Fetch list of all formula names from Homebrew API with caching support.
+    ///
+    /// - If `force_refresh` is false and a fresh cache exists (within 24h), returns cached data.
+    /// - Otherwise, performs a conditional HTTP request (with ETag/Last-Modified) and updates cache.
+    pub async fn get_formula_names_cached(&self, force_refresh: bool) -> Result<Vec<String>, Error> {
         let url = format!("{}.json", self.base_url);
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::NetworkFailure {
-                message: e.to_string(),
-            })?;
+        // Check for fresh cache (unless force refresh)
+        if !force_refresh
+            && let Some(ref cache) = self.cache
+            && let Some(entry) = cache.get_if_fresh(&url, Self::FORMULA_NAMES_TTL_SECS)
+        {
+            // Parse cached names
+            let formulas: Vec<FormulaName> =
+                serde_json::from_str(&entry.body).map_err(|e| Error::NetworkFailure {
+                    message: format!("failed to parse cached formula list JSON: {e}"),
+                })?;
+            return Ok(formulas.into_iter().map(|f| f.name).collect());
+        }
+
+        // Check for stale cache entry (for conditional request headers)
+        let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
+
+        let mut request = self.client.get(&url);
+
+        // Add conditional request headers if we have a cached entry
+        if let Some(ref entry) = cached_entry {
+            if let Some(ref etag) = entry.etag {
+                request = request.header("If-None-Match", etag.as_str());
+            }
+            if let Some(ref last_modified) = entry.last_modified {
+                request = request.header("If-Modified-Since", last_modified.as_str());
+            }
+        }
+
+        let response = request.send().await.map_err(|e| Error::NetworkFailure {
+            message: e.to_string(),
+        })?;
+
+        // Handle 304 Not Modified - use cached body
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED
+            && let Some(entry) = cached_entry
+        {
+            // Update the cached_at timestamp by re-storing the entry
+            if let Some(ref cache) = self.cache {
+                let _ = cache.put(&url, &entry);
+            }
+
+            let formulas: Vec<FormulaName> =
+                serde_json::from_str(&entry.body).map_err(|e| Error::NetworkFailure {
+                    message: format!("failed to parse cached formula list JSON: {e}"),
+                })?;
+            return Ok(formulas.into_iter().map(|f| f.name).collect());
+        }
 
         if !response.status().is_success() {
             return Err(Error::NetworkFailure {
@@ -132,8 +182,34 @@ impl ApiClient {
             });
         }
 
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let last_modified = response
+            .headers()
+            .get("last-modified")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let body = response.text().await.map_err(|e| Error::NetworkFailure {
+            message: format!("failed to read response body: {e}"),
+        })?;
+
+        // Cache the response
+        if let Some(ref cache) = self.cache {
+            let entry = CacheEntry {
+                etag,
+                last_modified,
+                body: body.clone(),
+            };
+            let _ = cache.put(&url, &entry);
+        }
+
         let formulas: Vec<FormulaName> =
-            response.json().await.map_err(|e| Error::NetworkFailure {
+            serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
                 message: format!("failed to parse formula list JSON: {e}"),
             })?;
 
