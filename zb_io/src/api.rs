@@ -125,7 +125,10 @@ impl ApiClient {
     ///
     /// - If `force_refresh` is false and a fresh cache exists (within 24h), returns cached data.
     /// - Otherwise, performs a conditional HTTP request (with ETag/Last-Modified) and updates cache.
-    pub async fn get_formula_names_cached(&self, force_refresh: bool) -> Result<Vec<String>, Error> {
+    pub async fn get_formula_names_cached(
+        &self,
+        force_refresh: bool,
+    ) -> Result<Vec<String>, Error> {
         let url = format!("{}.json", self.base_url);
 
         // Check for fresh cache (unless force refresh)

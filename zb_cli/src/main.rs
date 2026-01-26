@@ -350,10 +350,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
 
     // Handle Update command early - it only needs cache, not full installer
     if matches!(cli.command, Commands::Update) {
-        println!(
-            "{} Updating formula list...",
-            style("==>").cyan().bold()
-        );
+        println!("{} Updating formula list...", style("==>").cyan().bold());
 
         // Ensure cache directory exists
         let cache_dir = cli.root.join("cache");
