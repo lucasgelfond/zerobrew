@@ -569,8 +569,8 @@ fn patch_homebrew_placeholders_linux(
                 let current_interp = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
                 if !current_interp.is_empty() {
-                    // If interpreter contains Homebrew placeholder, use system loader
-                    let new_interp = if current_interp.contains("@@HOMEBREW") || current_interp.contains("ld.so") {
+                    // Only patch interpreter if it contains Homebrew placeholder
+                    let new_interp = if current_interp.contains("@@HOMEBREW") {
                         // Use the system dynamic linker based on architecture
                         #[cfg(target_arch = "aarch64")]
                         { Some("/lib/ld-linux-aarch64.so.1".to_string()) }
@@ -1098,7 +1098,7 @@ mod tests {
     fn reflink_fallback_to_copy() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src");
-        let dst = tmp.path().join("dst");
+        let _dst = tmp.path().join("dst"); // Unused, but kept for clarity
 
         fs::create_dir_all(&src).unwrap();
         fs::write(src.join("file.txt"), b"test content").unwrap();

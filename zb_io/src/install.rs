@@ -497,6 +497,25 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// Get the bottle tag for the current platform (for test fixtures)
+    fn platform_bottle_tag() -> &'static str {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        { "arm64_sonoma" }
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        { "sonoma" }
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        { "arm64_linux" }
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        { "x86_64_linux" }
+        #[cfg(not(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "aarch64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+        )))]
+        { "all" }
+    }
+
     fn create_bottle_tarball(formula_name: &str) -> Vec<u8> {
         use flate2::Compression;
         use flate2::write::GzEncoder;
@@ -535,12 +554,13 @@ mod tests {
     async fn install_completes_successfully() {
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
+        let tag = platform_bottle_tag();
 
         // Create bottle
         let bottle = create_bottle_tarball("testpkg");
         let bottle_sha = sha256_hex(&bottle);
 
-        // Create formula JSON
+        // Create formula JSON with platform-specific bottle tag
         let formula_json = format!(
             r#"{{
                 "name": "testpkg",
@@ -549,16 +569,17 @@ mod tests {
                 "bottle": {{
                     "stable": {{
                         "files": {{
-                            "arm64_sonoma": {{
-                                "url": "{}/bottles/testpkg-1.0.0.arm64_sonoma.bottle.tar.gz",
-                                "sha256": "{}"
+                            "{tag}": {{
+                                "url": "{base}/bottles/testpkg-1.0.0.{tag}.bottle.tar.gz",
+                                "sha256": "{sha}"
                             }}
                         }}
                     }}
                 }}
             }}"#,
-            mock_server.uri(),
-            bottle_sha
+            tag = tag,
+            base = mock_server.uri(),
+            sha = bottle_sha
         );
 
         // Mount formula API mock
@@ -569,8 +590,9 @@ mod tests {
             .await;
 
         // Mount bottle download mock
+        let bottle_path = format!("/bottles/testpkg-1.0.0.{}.bottle.tar.gz", tag);
         Mock::given(method("GET"))
-            .and(path("/bottles/testpkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .and(path(bottle_path))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
             .mount(&mock_server)
             .await;
@@ -608,6 +630,7 @@ mod tests {
     async fn uninstall_cleans_everything() {
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
+        let tag = platform_bottle_tag();
 
         // Create bottle
         let bottle = create_bottle_tarball("uninstallme");
@@ -622,16 +645,17 @@ mod tests {
                 "bottle": {{
                     "stable": {{
                         "files": {{
-                            "arm64_sonoma": {{
-                                "url": "{}/bottles/uninstallme-1.0.0.arm64_sonoma.bottle.tar.gz",
-                                "sha256": "{}"
+                            "{tag}": {{
+                                "url": "{base}/bottles/uninstallme-1.0.0.{tag}.bottle.tar.gz",
+                                "sha256": "{sha}"
                             }}
                         }}
                     }}
                 }}
             }}"#,
-            mock_server.uri(),
-            bottle_sha
+            tag = tag,
+            base = mock_server.uri(),
+            sha = bottle_sha
         );
 
         // Mount mocks
@@ -641,10 +665,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let bottle_path = format!("/bottles/uninstallme-1.0.0.{}.bottle.tar.gz", tag);
         Mock::given(method("GET"))
-            .and(path(
-                "/bottles/uninstallme-1.0.0.arm64_sonoma.bottle.tar.gz",
-            ))
+            .and(path(bottle_path))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
             .mount(&mock_server)
             .await;
@@ -684,6 +707,7 @@ mod tests {
     async fn gc_removes_unreferenced_store_entries() {
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
+        let tag = platform_bottle_tag();
 
         // Create bottle
         let bottle = create_bottle_tarball("gctest");
@@ -698,16 +722,17 @@ mod tests {
                 "bottle": {{
                     "stable": {{
                         "files": {{
-                            "arm64_sonoma": {{
-                                "url": "{}/bottles/gctest-1.0.0.arm64_sonoma.bottle.tar.gz",
-                                "sha256": "{}"
+                            "{tag}": {{
+                                "url": "{base}/bottles/gctest-1.0.0.{tag}.bottle.tar.gz",
+                                "sha256": "{sha}"
                             }}
                         }}
                     }}
                 }}
             }}"#,
-            mock_server.uri(),
-            bottle_sha
+            tag = tag,
+            base = mock_server.uri(),
+            sha = bottle_sha
         );
 
         // Mount mocks
@@ -717,8 +742,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let bottle_path = format!("/bottles/gctest-1.0.0.{}.bottle.tar.gz", tag);
         Mock::given(method("GET"))
-            .and(path("/bottles/gctest-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .and(path(bottle_path))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
             .mount(&mock_server)
             .await;
@@ -761,6 +787,7 @@ mod tests {
     async fn gc_does_not_remove_referenced_store_entries() {
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
+        let tag = platform_bottle_tag();
 
         // Create bottle
         let bottle = create_bottle_tarball("keepme");
@@ -775,16 +802,17 @@ mod tests {
                 "bottle": {{
                     "stable": {{
                         "files": {{
-                            "arm64_sonoma": {{
-                                "url": "{}/bottles/keepme-1.0.0.arm64_sonoma.bottle.tar.gz",
-                                "sha256": "{}"
+                            "{tag}": {{
+                                "url": "{base}/bottles/keepme-1.0.0.{tag}.bottle.tar.gz",
+                                "sha256": "{sha}"
                             }}
                         }}
                     }}
                 }}
             }}"#,
-            mock_server.uri(),
-            bottle_sha
+            tag = tag,
+            base = mock_server.uri(),
+            sha = bottle_sha
         );
 
         // Mount mocks
@@ -794,8 +822,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let bottle_path = format!("/bottles/keepme-1.0.0.{}.bottle.tar.gz", tag);
         Mock::given(method("GET"))
-            .and(path("/bottles/keepme-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .and(path(bottle_path))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
             .mount(&mock_server)
             .await;
@@ -832,6 +861,7 @@ mod tests {
     async fn install_with_dependencies() {
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
+        let tag = platform_bottle_tag();
 
         // Create bottles
         let dep_bottle = create_bottle_tarball("deplib");
@@ -849,16 +879,17 @@ mod tests {
                 "bottle": {{
                     "stable": {{
                         "files": {{
-                            "arm64_sonoma": {{
-                                "url": "{}/bottles/deplib-1.0.0.arm64_sonoma.bottle.tar.gz",
-                                "sha256": "{}"
+                            "{tag}": {{
+                                "url": "{base}/bottles/deplib-1.0.0.{tag}.bottle.tar.gz",
+                                "sha256": "{sha}"
                             }}
                         }}
                     }}
                 }}
             }}"#,
-            mock_server.uri(),
-            dep_sha
+            tag = tag,
+            base = mock_server.uri(),
+            sha = dep_sha
         );
 
         let main_json = format!(
@@ -869,16 +900,17 @@ mod tests {
                 "bottle": {{
                     "stable": {{
                         "files": {{
-                            "arm64_sonoma": {{
-                                "url": "{}/bottles/mainpkg-2.0.0.arm64_sonoma.bottle.tar.gz",
-                                "sha256": "{}"
+                            "{tag}": {{
+                                "url": "{base}/bottles/mainpkg-2.0.0.{tag}.bottle.tar.gz",
+                                "sha256": "{sha}"
                             }}
                         }}
                     }}
                 }}
             }}"#,
-            mock_server.uri(),
-            main_sha
+            tag = tag,
+            base = mock_server.uri(),
+            sha = main_sha
         );
 
         // Mount mocks
@@ -894,14 +926,16 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let dep_bottle_path = format!("/bottles/deplib-1.0.0.{}.bottle.tar.gz", tag);
         Mock::given(method("GET"))
-            .and(path("/bottles/deplib-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .and(path(dep_bottle_path))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(dep_bottle))
             .mount(&mock_server)
             .await;
 
+        let main_bottle_path = format!("/bottles/mainpkg-2.0.0.{}.bottle.tar.gz", tag);
         Mock::given(method("GET"))
-            .and(path("/bottles/mainpkg-2.0.0.arm64_sonoma.bottle.tar.gz"))
+            .and(path(main_bottle_path))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(main_bottle))
             .mount(&mock_server)
             .await;
@@ -936,6 +970,7 @@ mod tests {
         //              -> leaf1 (shared)
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
+        let tag = platform_bottle_tag();
 
         // Create bottles
         let leaf1_bottle = create_bottle_tarball("leaf1");
@@ -949,31 +984,26 @@ mod tests {
         let root_bottle = create_bottle_tarball("root");
         let root_sha = sha256_hex(&root_bottle);
 
-        // Formula JSONs
+        // Formula JSONs (using platform-specific bottle tag)
         let leaf1_json = format!(
-            r#"{{"name":"leaf1","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/leaf1.tar.gz","sha256":"{}"}}}}}}}}}}"#,
-            mock_server.uri(),
-            leaf1_sha
+            r#"{{"name":"leaf1","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"{tag}":{{"url":"{base}/bottles/leaf1.tar.gz","sha256":"{sha}"}}}}}}}}}}"#,
+            tag = tag, base = mock_server.uri(), sha = leaf1_sha
         );
         let leaf2_json = format!(
-            r#"{{"name":"leaf2","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/leaf2.tar.gz","sha256":"{}"}}}}}}}}}}"#,
-            mock_server.uri(),
-            leaf2_sha
+            r#"{{"name":"leaf2","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"{tag}":{{"url":"{base}/bottles/leaf2.tar.gz","sha256":"{sha}"}}}}}}}}}}"#,
+            tag = tag, base = mock_server.uri(), sha = leaf2_sha
         );
         let mid1_json = format!(
-            r#"{{"name":"mid1","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/mid1.tar.gz","sha256":"{}"}}}}}}}}}}"#,
-            mock_server.uri(),
-            mid1_sha
+            r#"{{"name":"mid1","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1"],"bottle":{{"stable":{{"files":{{"{tag}":{{"url":"{base}/bottles/mid1.tar.gz","sha256":"{sha}"}}}}}}}}}}"#,
+            tag = tag, base = mock_server.uri(), sha = mid1_sha
         );
         let mid2_json = format!(
-            r#"{{"name":"mid2","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1","leaf2"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/mid2.tar.gz","sha256":"{}"}}}}}}}}}}"#,
-            mock_server.uri(),
-            mid2_sha
+            r#"{{"name":"mid2","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1","leaf2"],"bottle":{{"stable":{{"files":{{"{tag}":{{"url":"{base}/bottles/mid2.tar.gz","sha256":"{sha}"}}}}}}}}}}"#,
+            tag = tag, base = mock_server.uri(), sha = mid2_sha
         );
         let root_json = format!(
-            r#"{{"name":"root","versions":{{"stable":"1.0.0"}},"dependencies":["mid1","mid2"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/root.tar.gz","sha256":"{}"}}}}}}}}}}"#,
-            mock_server.uri(),
-            root_sha
+            r#"{{"name":"root","versions":{{"stable":"1.0.0"}},"dependencies":["mid1","mid2"],"bottle":{{"stable":{{"files":{{"{tag}":{{"url":"{base}/bottles/root.tar.gz","sha256":"{sha}"}}}}}}}}}}"#,
+            tag = tag, base = mock_server.uri(), sha = root_sha
         );
 
         // Mount all mocks
@@ -1036,6 +1066,7 @@ mod tests {
 
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
+        let tag = platform_bottle_tag();
 
         // Create bottles
         let fast_bottle = create_bottle_tarball("fastpkg");
@@ -1045,16 +1076,14 @@ mod tests {
 
         // Fast package formula
         let fast_json = format!(
-            r#"{{"name":"fastpkg","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/fast.tar.gz","sha256":"{}"}}}}}}}}}}"#,
-            mock_server.uri(),
-            fast_sha
+            r#"{{"name":"fastpkg","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"{tag}":{{"url":"{base}/bottles/fast.tar.gz","sha256":"{sha}"}}}}}}}}}}"#,
+            tag = tag, base = mock_server.uri(), sha = fast_sha
         );
 
         // Slow package formula (depends on fast)
         let slow_json = format!(
-            r#"{{"name":"slowpkg","versions":{{"stable":"1.0.0"}},"dependencies":["fastpkg"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/slow.tar.gz","sha256":"{}"}}}}}}}}}}"#,
-            mock_server.uri(),
-            slow_sha
+            r#"{{"name":"slowpkg","versions":{{"stable":"1.0.0"}},"dependencies":["fastpkg"],"bottle":{{"stable":{{"files":{{"{tag}":{{"url":"{base}/bottles/slow.tar.gz","sha256":"{sha}"}}}}}}}}}}"#,
+            tag = tag, base = mock_server.uri(), sha = slow_sha
         );
 
         // Mount API mocks
@@ -1124,6 +1153,7 @@ mod tests {
 
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
+        let tag = platform_bottle_tag();
 
         // Create valid bottle
         let bottle = create_bottle_tarball("retrypkg");
@@ -1138,16 +1168,17 @@ mod tests {
                 "bottle": {{
                     "stable": {{
                         "files": {{
-                            "arm64_sonoma": {{
-                                "url": "{}/bottles/retrypkg-1.0.0.arm64_sonoma.bottle.tar.gz",
-                                "sha256": "{}"
+                            "{tag}": {{
+                                "url": "{base}/bottles/retrypkg-1.0.0.{tag}.bottle.tar.gz",
+                                "sha256": "{sha}"
                             }}
                         }}
                     }}
                 }}
             }}"#,
-            mock_server.uri(),
-            bottle_sha
+            tag = tag,
+            base = mock_server.uri(),
+            sha = bottle_sha
         );
 
         // Mount formula API mock
@@ -1164,8 +1195,9 @@ mod tests {
 
         // First request returns corrupted data (wrong content but matches sha for download)
         // This simulates CDN corruption where sha passes but tar is invalid
+        let bottle_path = format!("/bottles/retrypkg-1.0.0.{}.bottle.tar.gz", tag);
         Mock::given(method("GET"))
-            .and(path("/bottles/retrypkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .and(path(bottle_path))
             .respond_with(move |_: &wiremock::Request| {
                 let attempt = attempt_clone.fetch_add(1, Ordering::SeqCst);
                 if attempt == 0 {
