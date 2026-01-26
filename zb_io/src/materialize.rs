@@ -455,10 +455,10 @@ fn patch_homebrew_placeholders_linux(
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .filter(|e| {
-            if let Ok(data) = fs::read(e.path()) {
-                if data.len() >= 4 {
-                    return data[0..4] == ELF_MAGIC;
-                }
+            if let Ok(data) = fs::read(e.path())
+                && data.len() >= 4
+            {
+                return data[0..4] == ELF_MAGIC;
             }
             false
         })
@@ -482,21 +482,21 @@ fn patch_homebrew_placeholders_linux(
         }
 
         // Fix version mismatches for this package
-        if let Some(re) = &version_regex {
-            if re.is_match(&new_rpath) {
-                let replacement = format!("/{}/{}/", pkg_name, pkg_version);
-                let fixed = re.replace(&new_rpath, |caps: &regex::Captures| {
-                    let matched_version = &caps[2];
-                    if matched_version != pkg_version {
-                        replacement.clone()
-                    } else {
-                        caps[0].to_string()
-                    }
-                });
-                if fixed != new_rpath {
-                    new_rpath = fixed.to_string();
-                    changed = true;
+        if let Some(re) = &version_regex
+            && re.is_match(&new_rpath)
+        {
+            let replacement = format!("/{}/{}/", pkg_name, pkg_version);
+            let fixed = re.replace(&new_rpath, |caps: &regex::Captures| {
+                let matched_version = &caps[2];
+                if matched_version != pkg_version {
+                    replacement.clone()
+                } else {
+                    caps[0].to_string()
                 }
+            });
+            if fixed != new_rpath {
+                new_rpath = fixed.to_string();
+                changed = true;
             }
         }
 
@@ -532,28 +532,28 @@ fn patch_homebrew_placeholders_linux(
             .args(["--print-rpath", &path.to_string_lossy()])
             .output();
 
-        if let Ok(output) = rpath_output {
-            if output.status.success() {
-                let current_rpath = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if let Ok(output) = rpath_output
+            && output.status.success()
+        {
+            let current_rpath = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
-                if !current_rpath.is_empty() {
-                    // Process each path in RPATH (colon-separated)
-                    let new_rpath_parts: Vec<String> = current_rpath
-                        .split(':')
-                        .map(|p| patch_rpath(p).unwrap_or_else(|| p.to_string()))
-                        .collect();
+            if !current_rpath.is_empty() {
+                // Process each path in RPATH (colon-separated)
+                let new_rpath_parts: Vec<String> = current_rpath
+                    .split(':')
+                    .map(|p| patch_rpath(p).unwrap_or_else(|| p.to_string()))
+                    .collect();
 
-                    let new_rpath = new_rpath_parts.join(":");
+                let new_rpath = new_rpath_parts.join(":");
 
-                    if new_rpath != current_rpath {
-                        // Apply the patched RPATH
-                        let result = Command::new("patchelf")
-                            .args(["--set-rpath", &new_rpath, &path.to_string_lossy()])
-                            .output();
+                if new_rpath != current_rpath {
+                    // Apply the patched RPATH
+                    let result = Command::new("patchelf")
+                        .args(["--set-rpath", &new_rpath, &path.to_string_lossy()])
+                        .output();
 
-                        if result.map(|o| !o.status.success()).unwrap_or(true) {
-                            patch_failures.fetch_add(1, Ordering::Relaxed);
-                        }
+                    if result.map(|o| !o.status.success()).unwrap_or(true) {
+                        patch_failures.fetch_add(1, Ordering::Relaxed);
                     }
                 }
             }
@@ -564,33 +564,33 @@ fn patch_homebrew_placeholders_linux(
             .args(["--print-interpreter", &path.to_string_lossy()])
             .output();
 
-        if let Ok(output) = interp_output {
-            if output.status.success() {
-                let current_interp = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if let Ok(output) = interp_output
+            && output.status.success()
+        {
+            let current_interp = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
-                if !current_interp.is_empty() {
-                    // Only patch interpreter if it contains Homebrew placeholder
-                    let new_interp = if current_interp.contains("@@HOMEBREW") {
-                        // Use the system dynamic linker based on architecture
-                        #[cfg(target_arch = "aarch64")]
-                        { Some("/lib/ld-linux-aarch64.so.1".to_string()) }
-                        #[cfg(target_arch = "x86_64")]
-                        { Some("/lib64/ld-linux-x86-64.so.2".to_string()) }
-                        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-                        { None }
-                    } else {
-                        None
-                    };
+            if !current_interp.is_empty() {
+                // Only patch interpreter if it contains Homebrew placeholder
+                let new_interp = if current_interp.contains("@@HOMEBREW") {
+                    // Use the system dynamic linker based on architecture
+                    #[cfg(target_arch = "aarch64")]
+                    { Some("/lib/ld-linux-aarch64.so.1".to_string()) }
+                    #[cfg(target_arch = "x86_64")]
+                    { Some("/lib64/ld-linux-x86-64.so.2".to_string()) }
+                    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+                    { None }
+                } else {
+                    None
+                };
 
-                    if let Some(interp) = new_interp {
-                        let result = Command::new("patchelf")
-                            .args(["--set-interpreter", &interp, &path.to_string_lossy()])
-                            .output();
+                if let Some(interp) = new_interp {
+                    let result = Command::new("patchelf")
+                        .args(["--set-interpreter", &interp, &path.to_string_lossy()])
+                        .output();
 
-                        if result.map(|o| !o.status.success()).unwrap_or(true) {
-                            // Interpreter patching can fail for shared libraries, that's okay
-                            // Only count it as a real failure if we expected it to work
-                        }
+                    if result.map(|o| !o.status.success()).unwrap_or(true) {
+                        // Interpreter patching can fail for shared libraries, that's okay
+                        // Only count it as a real failure if we expected it to work
                     }
                 }
             }
@@ -1026,19 +1026,19 @@ mod tests {
         const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
 
         // Valid ELF header
-        let elf_data = vec![0x7f, b'E', b'L', b'F', 0x02, 0x01, 0x01, 0x00];
+        let elf_data = [0x7f, b'E', b'L', b'F', 0x02, 0x01, 0x01, 0x00];
         assert_eq!(&elf_data[0..4], &ELF_MAGIC);
 
         // Invalid - wrong magic
-        let not_elf = vec![0x00, 0x00, 0x00, 0x00];
+        let not_elf = [0x00, 0x00, 0x00, 0x00];
         assert_ne!(&not_elf[0..4], &ELF_MAGIC);
 
         // Invalid - Mach-O (macOS) magic
-        let macho_data = vec![0xfe, 0xed, 0xfa, 0xce]; // feedface
+        let macho_data = [0xfe, 0xed, 0xfa, 0xce]; // feedface
         assert_ne!(&macho_data[0..4], &ELF_MAGIC);
 
         // Invalid - shell script
-        let script_data = vec![b'#', b'!', b'/', b'b'];
+        let script_data = [b'#', b'!', b'/', b'b'];
         assert_ne!(&script_data[0..4], &ELF_MAGIC);
     }
 
@@ -1160,10 +1160,10 @@ mod tests {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .filter(|e| {
-                if let Ok(data) = fs::read(e.path()) {
-                    if data.len() >= 4 {
-                        return data[0..4] == ELF_MAGIC;
-                    }
+                if let Ok(data) = fs::read(e.path())
+                    && data.len() >= 4
+                {
+                    return data[0..4] == ELF_MAGIC;
                 }
                 false
             })
@@ -1628,6 +1628,7 @@ mod tests {
     /// Test handling of multiple file types in same directory
     #[test]
     fn handles_mixed_file_types() {
+        #[allow(unused_imports)]
         use std::os::unix::fs::PermissionsExt;
 
         let tmp = TempDir::new().unwrap();

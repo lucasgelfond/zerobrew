@@ -617,6 +617,7 @@ fn handles_hidden_files() {
 #[test]
 #[cfg(target_os = "linux")]
 fn handles_special_files_gracefully() {
+    #[allow(unused_imports)]
     use std::os::unix::fs::FileTypeExt;
 
     let tmp = TempDir::new().unwrap();
