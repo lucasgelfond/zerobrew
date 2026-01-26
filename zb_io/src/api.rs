@@ -33,77 +33,118 @@ impl ApiClient {
     }
 
     pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
-        let url = format!("{}/{}.json", self.base_url, name);
+        // Use a loop to handle alias resolution without recursion
+        let mut current_name = name.to_string();
+        let mut alias_resolved = false;
 
-        let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
+        loop {
+            let url = format!("{}/{}.json", self.base_url, current_name);
 
-        let mut request = self.client.get(&url);
+            let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
 
-        if let Some(ref entry) = cached_entry {
-            if let Some(ref etag) = entry.etag {
-                request = request.header("If-None-Match", etag.as_str());
+            let mut request = self.client.get(&url);
+
+            if let Some(ref entry) = cached_entry {
+                if let Some(ref etag) = entry.etag {
+                    request = request.header("If-None-Match", etag.as_str());
+                }
+                if let Some(ref last_modified) = entry.last_modified {
+                    request = request.header("If-Modified-Since", last_modified.as_str());
+                }
             }
-            if let Some(ref last_modified) = entry.last_modified {
-                request = request.header("If-Modified-Since", last_modified.as_str());
+
+            let response = request.send().await.map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })?;
+
+            if response.status() == reqwest::StatusCode::NOT_MODIFIED
+                && let Some(entry) = cached_entry
+            {
+                let formula: Formula =
+                    serde_json::from_str(&entry.body).map_err(|e| Error::NetworkFailure {
+                        message: format!("failed to parse cached formula JSON: {e}"),
+                    })?;
+                return Ok(formula);
             }
-        }
 
-        let response = request.send().await.map_err(|e| Error::NetworkFailure {
-            message: e.to_string(),
-        })?;
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                // Only try alias resolution once
+                if !alias_resolved {
+                    if let Some(target) = self.resolve_alias(&current_name).await {
+                        current_name = target;
+                        alias_resolved = true;
+                        continue;
+                    }
+                }
+                return Err(Error::MissingFormula {
+                    name: name.to_string(),
+                });
+            }
 
-        if response.status() == reqwest::StatusCode::NOT_MODIFIED
-            && let Some(entry) = cached_entry
-        {
+            if !response.status().is_success() {
+                return Err(Error::NetworkFailure {
+                    message: format!("HTTP {}", response.status()),
+                });
+            }
+
+            let etag = response
+                .headers()
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let last_modified = response
+                .headers()
+                .get("last-modified")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let body = response.text().await.map_err(|e| Error::NetworkFailure {
+                message: format!("failed to read response body: {e}"),
+            })?;
+
+            if let Some(ref cache) = self.cache {
+                let entry = CacheEntry {
+                    etag,
+                    last_modified,
+                    body: body.clone(),
+                };
+                let _ = cache.put(&url, &entry);
+            }
+
             let formula: Formula =
-                serde_json::from_str(&entry.body).map_err(|e| Error::NetworkFailure {
-                    message: format!("failed to parse cached formula JSON: {e}"),
+                serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
+                    message: format!("failed to parse formula JSON: {e}"),
                 })?;
+
             return Ok(formula);
         }
+    }
 
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(Error::MissingFormula {
-                name: name.to_string(),
-            });
-        }
+    /// Check if a formula name is an alias and return the target formula name
+    async fn resolve_alias(&self, name: &str) -> Option<String> {
+        let alias_url = format!(
+            "https://raw.githubusercontent.com/Homebrew/homebrew-core/master/Aliases/{}",
+            name
+        );
+
+        let response = self.client.get(&alias_url).send().await.ok()?;
 
         if !response.status().is_success() {
-            return Err(Error::NetworkFailure {
-                message: format!("HTTP {}", response.status()),
-            });
+            return None;
         }
 
-        let etag = response
-            .headers()
-            .get("etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+        let body = response.text().await.ok()?;
+        // Alias file contains a relative path like "../Formula/p/python@3.14.rb"
+        // Extract the formula name from the path
+        let formula_name = body
+            .trim()
+            .rsplit('/')
+            .next()?
+            .strip_suffix(".rb")?
+            .to_string();
 
-        let last_modified = response
-            .headers()
-            .get("last-modified")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let body = response.text().await.map_err(|e| Error::NetworkFailure {
-            message: format!("failed to read response body: {e}"),
-        })?;
-
-        if let Some(ref cache) = self.cache {
-            let entry = CacheEntry {
-                etag,
-                last_modified,
-                body: body.clone(),
-            };
-            let _ = cache.put(&url, &entry);
-        }
-
-        let formula: Formula = serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
-            message: format!("failed to parse formula JSON: {e}"),
-        })?;
-
-        Ok(formula)
+        Some(formula_name)
     }
 }
 
