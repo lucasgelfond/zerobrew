@@ -8,7 +8,15 @@ pub fn resolve_closure(
     root: &str,
     formulas: &BTreeMap<String, Formula>,
 ) -> Result<Vec<String>, Error> {
-    let closure = compute_closure(root, formulas)?;
+    resolve_closure_multiple(&[root.to_string()], formulas)
+}
+
+/// Resolve dependencies for multiple root formulas, merging their dependency graphs
+pub fn resolve_closure_multiple(
+    roots: &[String],
+    formulas: &BTreeMap<String, Formula>,
+) -> Result<Vec<String>, Error> {
+    let closure = compute_closure_multiple(roots, formulas)?;
     let (mut indegree, adjacency) = build_graph(&closure, formulas)?;
 
     let mut ready: BTreeSet<String> = indegree
@@ -49,12 +57,12 @@ pub fn resolve_closure(
     Ok(ordered)
 }
 
-fn compute_closure(
-    root: &str,
+fn compute_closure_multiple(
+    roots: &[String],
     formulas: &BTreeMap<String, Formula>,
 ) -> Result<BTreeSet<String>, Error> {
     let mut closure = BTreeSet::new();
-    let mut stack = vec![root.to_string()];
+    let mut stack: Vec<String> = roots.to_vec();
 
     while let Some(name) = stack.pop() {
         if !closure.insert(name.clone()) {

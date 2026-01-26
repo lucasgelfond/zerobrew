@@ -13,7 +13,7 @@ use crate::materialize::Cellar;
 use crate::progress::{InstallProgress, ProgressCallback};
 use crate::store::Store;
 
-use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
+use zb_core::{Error, Formula, SelectedBottle, resolve_closure_multiple, select_bottle};
 
 /// Maximum number of retries for corrupted downloads
 const MAX_CORRUPTION_RETRIES: usize = 3;
@@ -67,16 +67,26 @@ impl Installer {
 
     /// Resolve dependencies and plan the install
     pub async fn plan(&self, name: &str) -> Result<InstallPlan, Error> {
-        // Recursively fetch all formulas we need
-        let formulas = self.fetch_all_formulas(name).await?;
+        self.plan_multiple(&[name.to_string()]).await
+    }
 
-        // Resolve in topological order
-        let ordered = resolve_closure(name, &formulas)?;
+    /// Plan installation of multiple formulas, merging their dependency graphs
+    pub async fn plan_multiple(&self, names: &[String]) -> Result<InstallPlan, Error> {
+        let mut all_formulas_map = BTreeMap::new();
+
+        // Fetch all formulas for each requested package
+        for name in names {
+            let formulas = self.fetch_all_formulas(name).await?;
+            all_formulas_map.extend(formulas);
+        }
+
+        // Resolve combined closure - start from all requested names
+        let ordered = resolve_closure_multiple(names, &all_formulas_map)?;
 
         // Build list of formulas in order
         let all_formulas: Vec<Formula> = ordered
             .iter()
-            .map(|n| formulas.get(n).cloned().unwrap())
+            .map(|n| all_formulas_map.get(n).cloned().unwrap())
             .collect();
 
         // Select bottles for each formula

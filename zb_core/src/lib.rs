@@ -8,4 +8,4 @@ pub use bottle::{SelectedBottle, select_bottle};
 pub use context::{ConcurrencyLimits, Context, LogLevel, LoggerHandle, Paths};
 pub use errors::Error;
 pub use formula::Formula;
-pub use resolve::resolve_closure;
+pub use resolve::{resolve_closure, resolve_closure_multiple};

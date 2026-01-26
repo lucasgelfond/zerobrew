@@ -33,20 +33,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Install a formula
+    /// Install one or more formulas
     Install {
-        /// Formula name to install
-        formula: String,
+        /// Formula names to install
+        #[arg(required = true)]
+        formulas: Vec<String>,
 
         /// Skip linking executables
         #[arg(long)]
         no_link: bool,
     },
 
-    /// Uninstall a formula (or all formulas if no name given)
+    /// Uninstall one or more formulas
     Uninstall {
-        /// Formula name to uninstall (omit to uninstall all)
-        formula: Option<String>,
+        /// Formula names to uninstall
+        #[arg(required = true)]
+        formulas: Vec<String>,
     },
 
     /// List installed formulas
@@ -327,15 +329,16 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
 
     match cli.command {
         Commands::Init => unreachable!(), // Handled above
-        Commands::Install { formula, no_link } => {
+        Commands::Install { formulas, no_link } => {
             let start = Instant::now();
+            let formula = formulas.join(", ");
             println!(
                 "{} Installing {}...",
                 style("==>").cyan().bold(),
                 style(&formula).bold()
             );
 
-            let plan = match installer.plan(&formula).await {
+            let plan = match installer.plan_multiple(&formulas).await {
                 Ok(p) => p,
                 Err(e) => {
                     suggest_homebrew(&formula, &e);
@@ -490,42 +493,30 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             );
         }
 
-        Commands::Uninstall { formula } => match formula {
-            Some(name) => {
+        Commands::Uninstall { formulas } => {
+            let formula = formulas.join(", ");
+            println!(
+                "{} Uninstalling {}...",
+                style("==>").cyan().bold(),
+                style(&formula).bold()
+            );
+
+            for name in &formulas {
+                installer.uninstall(name)?;
                 println!(
-                    "{} Uninstalling {}...",
-                    style("==>").cyan().bold(),
-                    style(&name).bold()
-                );
-                installer.uninstall(&name)?;
-                println!(
-                    "{} Uninstalled {}",
-                    style("==>").cyan().bold(),
-                    style(&name).green()
+                    "    {} {} uninstalled",
+                    style("✓").green(),
+                    style(name).bold()
                 );
             }
-            None => {
-                let installed = installer.list_installed()?;
-                if installed.is_empty() {
-                    println!("No formulas installed.");
-                    return Ok(());
-                }
 
-                println!(
-                    "{} Uninstalling {} packages...",
-                    style("==>").cyan().bold(),
-                    installed.len()
-                );
-
-                for keg in installed {
-                    print!("    {} {}...", style("○").dim(), keg.name);
-                    installer.uninstall(&keg.name)?;
-                    println!(" {}", style("✓").green());
-                }
-
-                println!("{} Uninstalled all packages", style("==>").cyan().bold());
-            }
-        },
+            println!(
+                "{} Uninstalled {} package{}",
+                style("==>").cyan().bold(),
+                style(formulas.len()).green().bold(),
+                if formulas.len() == 1 { "" } else { "s" }
+            );
+        }
 
         Commands::List => {
             let installed = installer.list_installed()?;
