@@ -300,17 +300,17 @@ impl Installer {
                         .unwrap_or_else(|| formula.effective_version());
 
                     // Materialize to cellar
-                    let keg_path = match self.cellar.materialize(
-                        &formula.name,
-                        &version,
-                        &store_entry,
-                    ) {
-                        Ok(path) => path,
-                        Err(e) => {
-                            error = Some(e);
-                            continue;
-                        }
-                    };
+                    let keg_path =
+                        match self
+                            .cellar
+                            .materialize(&formula.name, &version, &store_entry)
+                        {
+                            Ok(path) => path,
+                            Err(e) => {
+                                error = Some(e);
+                                continue;
+                            }
+                        };
 
                     report(InstallProgress::UnpackCompleted {
                         name: formula.name.clone(),

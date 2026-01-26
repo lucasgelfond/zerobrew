@@ -539,10 +539,11 @@ fn patch_embedded_strings(
                 // Found the prefix, now find the end of the version (next / or null)
                 let version_start = i + old_prefix_bytes.len();
                 let mut version_end = version_start;
+                // Find end of version: stop at /, null, or space (configure flags)
                 while version_end < data.len()
                     && data[version_end] != b'/'
                     && data[version_end] != 0
-                    && data[version_end] != b' ' // Stop at space (used in configure flags)
+                    && data[version_end] != b' '
                 {
                     version_end += 1;
                 }
@@ -634,7 +635,7 @@ fn patch_embedded_strings(
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "pdmp"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "pdmp"))
         .map(|e| e.path().to_path_buf())
         .collect();
 
