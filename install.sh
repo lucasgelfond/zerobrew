@@ -69,7 +69,7 @@ case "$SHELL" in
 esac
 
 # Add to PATH in shell config if not already there
-PATHS_TO_ADD=("$ZEROBREW_BIN" "/opt/zerobrew/prefix/bin")
+PATHS_TO_ADD=("$ZEROBREW_BIN" "/opt/zerobrew/bin")
 for path_entry in "${PATHS_TO_ADD[@]}"; do
     if ! grep -q "$path_entry" "$SHELL_CONFIG" 2>/dev/null; then
         echo "" >> "$SHELL_CONFIG"
@@ -80,7 +80,7 @@ for path_entry in "${PATHS_TO_ADD[@]}"; do
 done
 
 # Export for current session so zb init works
-export PATH="$ZEROBREW_BIN:/opt/zerobrew/prefix/bin:$PATH"
+export PATH="$ZEROBREW_BIN:/opt/zerobrew/bin:$PATH"
 
 # Set up /opt/zerobrew directories with correct ownership
 echo ""
@@ -89,9 +89,8 @@ CURRENT_USER=$(whoami)
 if [[ ! -d "/opt/zerobrew" ]] || [[ ! -w "/opt/zerobrew" ]]; then
     echo "Creating /opt/zerobrew (requires sudo)..."
     sudo mkdir -p /opt/zerobrew/store /opt/zerobrew/db /opt/zerobrew/cache /opt/zerobrew/locks
-    sudo mkdir -p /opt/zerobrew/prefix/bin /opt/zerobrew/prefix/Cellar
+    sudo mkdir -p /opt/zerobrew/bin /opt/zerobrew/Cellar
     sudo chown -R "$CURRENT_USER" /opt/zerobrew
-    sudo chown -R "$CURRENT_USER" /opt/zerobrew/prefix
 fi
 
 # Run zb init to finalize setup
@@ -106,7 +105,7 @@ echo "============================================"
 echo ""
 echo "Run this to start using zerobrew now:"
 echo ""
-echo "    export PATH=\"$ZEROBREW_BIN:/opt/zerobrew/prefix/bin:\$PATH\""
+echo "    export PATH=\"$ZEROBREW_BIN:/opt/zerobrew/bin:\$PATH\""
 echo ""
 echo "Or restart your terminal."
 echo ""

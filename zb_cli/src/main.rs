@@ -20,7 +20,7 @@ struct Cli {
     root: PathBuf,
 
     /// Prefix directory for linked binaries
-    #[arg(long, default_value = "/opt/zerobrew/prefix")]
+    #[arg(long, default_value = "/opt/zerobrew")]
     prefix: PathBuf,
 
     /// Number of parallel downloads

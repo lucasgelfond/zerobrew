@@ -67,6 +67,10 @@ impl Cellar {
         #[cfg(target_os = "macos")]
         patch_text_file_placeholders(&keg_path, &self.cellar_dir, name, version)?;
 
+        // Patch embedded string constants in binaries (for paths compiled into data sections)
+        #[cfg(target_os = "macos")]
+        patch_embedded_strings(&keg_path, &self.cellar_dir, name, version)?;
+
         // Strip quarantine xattrs and ad-hoc sign Mach-O binaries
         #[cfg(target_os = "macos")]
         codesign_and_strip_xattrs(&keg_path)?;
@@ -189,6 +193,21 @@ fn patch_homebrew_placeholders(
             new_path = new_path
                 .replace("@@HOMEBREW_CELLAR@@", &cellar_str)
                 .replace("@@HOMEBREW_PREFIX@@", &prefix_str);
+            changed = true;
+        }
+
+        // Replace literal Homebrew paths (ARM and Intel defaults)
+        // Order matters: replace cellar paths before prefix paths to avoid double-replacement
+        if old_path.contains("/opt/homebrew/Cellar") || old_path.contains("/usr/local/Cellar") {
+            new_path = new_path
+                .replace("/opt/homebrew/Cellar", &cellar_str)
+                .replace("/usr/local/Cellar", &cellar_str);
+            changed = true;
+        }
+        if old_path.contains("/opt/homebrew") || old_path.contains("/usr/local") {
+            new_path = new_path
+                .replace("/opt/homebrew", &prefix_str)
+                .replace("/usr/local", &prefix_str);
             changed = true;
         }
 
@@ -361,9 +380,12 @@ fn patch_text_file_placeholders(
                         return false;
                     }
                 }
-                // Check if file contains placeholders we need to fix
+                // Check if file contains placeholders or literal paths we need to fix
                 let content = String::from_utf8_lossy(&data);
-                content.contains("@@HOMEBREW_CELLAR@@") || content.contains("@@HOMEBREW_PREFIX@@")
+                content.contains("@@HOMEBREW_CELLAR@@")
+                    || content.contains("@@HOMEBREW_PREFIX@@")
+                    || content.contains("/opt/homebrew")
+                    || content.contains("/usr/local/Cellar")
             } else {
                 false
             }
@@ -387,10 +409,15 @@ fn patch_text_file_placeholders(
 
         let mut new_content = content.clone();
 
-        // Replace Homebrew placeholders
+        // Replace Homebrew placeholders and literal paths
+        // Order matters: replace cellar paths before prefix paths to avoid double-replacement
         new_content = new_content
             .replace("@@HOMEBREW_CELLAR@@", &cellar_str)
-            .replace("@@HOMEBREW_PREFIX@@", &prefix_str);
+            .replace("@@HOMEBREW_PREFIX@@", &prefix_str)
+            .replace("/opt/homebrew/Cellar", &cellar_str)
+            .replace("/usr/local/Cellar", &cellar_str)
+            .replace("/opt/homebrew", &prefix_str);
+        // Note: Skip bare /usr/local to avoid breaking system paths
 
         // Only write if content changed
         if new_content == content {
@@ -441,6 +468,161 @@ fn patch_text_file_placeholders(
             ),
         });
     }
+
+    Ok(())
+}
+
+/// Patch embedded string constants in Mach-O binaries.
+/// This handles paths compiled into the binary data section (not just Mach-O load commands).
+/// Used for packages like emacs that have hardcoded data directory paths.
+///
+/// Note: This only works when the new path is the same length or shorter than the original.
+/// After removing the /prefix/ level from zerobrew's path structure:
+///   /opt/homebrew (13 chars) -> /opt/zerobrew (13 chars) - EXACT MATCH
+///   /opt/homebrew/Cellar (20 chars) -> /opt/zerobrew/Cellar (20 chars) - EXACT MATCH
+#[cfg(target_os = "macos")]
+fn patch_embedded_strings(
+    keg_path: &Path,
+    cellar_dir: &Path,
+    pkg_name: &str,
+    _pkg_version: &str,
+) -> Result<(), Error> {
+    use rayon::prelude::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    let prefix = cellar_dir.parent().unwrap_or(Path::new("/opt/zerobrew"));
+    let prefix_str = prefix.to_string_lossy();
+
+    // The actual keg path string (e.g., "/opt/zerobrew/Cellar/emacs/30.2")
+    let keg_path_str = keg_path.to_string_lossy();
+
+    // Find all Mach-O binaries
+    let macho_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            if let Ok(data) = fs::read(e.path())
+                && data.len() >= 4
+            {
+                let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                matches!(
+                    magic,
+                    0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
+                )
+            } else {
+                false
+            }
+        })
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    macho_files.par_iter().for_each(|path| {
+        let mut data = match fs::read(path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let mut modified = false;
+
+        // First pass: replace package paths with version correction
+        // This handles cases like /opt/homebrew/Cellar/emacs/30.2_2 -> /opt/zerobrew/Cellar/emacs/30.2
+        // Search for the pattern directly in binary data to avoid UTF-8 position issues
+        let old_prefix = format!("/opt/homebrew/Cellar/{}/", pkg_name);
+        let old_prefix_bytes = old_prefix.as_bytes();
+        let new_replacement = keg_path_str.as_bytes();
+
+        let mut i = 0;
+        while i + old_prefix_bytes.len() <= data.len() {
+            if &data[i..i + old_prefix_bytes.len()] == old_prefix_bytes {
+                // Found the prefix, now find the end of the version (next / or null)
+                let version_start = i + old_prefix_bytes.len();
+                let mut version_end = version_start;
+                while version_end < data.len()
+                    && data[version_end] != b'/'
+                    && data[version_end] != 0
+                {
+                    version_end += 1;
+                }
+
+                // Calculate the full old path length (prefix + version)
+                let old_path_len = version_end - i;
+
+                // Only replace if new string fits (same length or shorter)
+                if new_replacement.len() <= old_path_len {
+                    // Copy new string
+                    data[i..i + new_replacement.len()].copy_from_slice(new_replacement);
+                    // Pad with nulls up to the version end (not including the trailing /)
+                    for j in new_replacement.len()..old_path_len {
+                        data[i + j] = 0;
+                    }
+                    modified = true;
+                    i = version_end;
+                } else {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        // Second pass: simple prefix replacement for any remaining /opt/homebrew paths
+        let prefix_replacement = prefix_str.as_bytes();
+        let old_prefix = b"/opt/homebrew";
+
+        let mut i = 0;
+        while i + old_prefix.len() <= data.len() {
+            if &data[i..i + old_prefix.len()] == old_prefix {
+                // Check this isn't part of a Cellar path we already handled
+                // (i.e., don't double-replace /opt/homebrew/Cellar/...)
+                let is_cellar_path = i + old_prefix.len() + 7 <= data.len()
+                    && &data[i + old_prefix.len()..i + old_prefix.len() + 7] == b"/Cellar";
+
+                if !is_cellar_path {
+                    // Replace /opt/homebrew with /opt/zerobrew (same length: 13 chars)
+                    data[i..i + prefix_replacement.len()].copy_from_slice(prefix_replacement);
+                    modified = true;
+                }
+                i += old_prefix.len();
+            } else {
+                i += 1;
+            }
+        }
+
+        if modified {
+            // Make writable if needed
+            let metadata = match fs::metadata(path) {
+                Ok(m) => m,
+                Err(_) => return,
+            };
+            let original_mode = metadata.permissions().mode();
+            let is_readonly = original_mode & 0o200 == 0;
+
+            if is_readonly {
+                let mut perms = metadata.permissions();
+                perms.set_mode(original_mode | 0o200);
+                if fs::set_permissions(path, perms).is_err() {
+                    return;
+                }
+            }
+
+            // Write patched binary
+            let _ = fs::write(path, &data);
+
+            // Re-sign the binary (patching invalidates the signature)
+            let _ = std::process::Command::new("codesign")
+                .args(["--force", "--sign", "-", &path.to_string_lossy()])
+                .output();
+
+            // Restore permissions
+            if is_readonly {
+                let mut perms = metadata.permissions();
+                perms.set_mode(original_mode);
+                let _ = fs::set_permissions(path, perms);
+            }
+        }
+    });
 
     Ok(())
 }
@@ -811,7 +993,7 @@ mod tests {
         let version_regex = Regex::new(&version_pattern).unwrap();
 
         // Test case: path with wrong version
-        let old_path = "/opt/zerobrew/prefix/Cellar/ffmpeg/8.0.1_1/lib/libavdevice.62.dylib";
+        let old_path = "/opt/zerobrew/Cellar/ffmpeg/8.0.1_1/lib/libavdevice.62.dylib";
         let replacement = format!("/{}/{}/", pkg_name, pkg_version);
 
         let fixed = version_regex.replace(old_path, |caps: &regex::Captures| {
@@ -825,11 +1007,11 @@ mod tests {
 
         assert_eq!(
             fixed,
-            "/opt/zerobrew/prefix/Cellar/ffmpeg/8.0.1_2/lib/libavdevice.62.dylib"
+            "/opt/zerobrew/Cellar/ffmpeg/8.0.1_2/lib/libavdevice.62.dylib"
         );
 
         // Test case: path with correct version (should not change)
-        let correct_path = "/opt/zerobrew/prefix/Cellar/ffmpeg/8.0.1_2/lib/libavdevice.62.dylib";
+        let correct_path = "/opt/zerobrew/Cellar/ffmpeg/8.0.1_2/lib/libavdevice.62.dylib";
         let fixed2 = version_regex.replace(correct_path, |caps: &regex::Captures| {
             let matched_version = &caps[2];
             if matched_version != pkg_version {
@@ -842,7 +1024,7 @@ mod tests {
         assert_eq!(fixed2, correct_path);
 
         // Test case: path for different package (should not change)
-        let other_path = "/opt/zerobrew/prefix/Cellar/libvpx/1.0.0/lib/libvpx.dylib";
+        let other_path = "/opt/zerobrew/Cellar/libvpx/1.0.0/lib/libvpx.dylib";
         let fixed3 = version_regex.replace(other_path, |caps: &regex::Captures| {
             let matched_version = &caps[2];
             if matched_version != pkg_version {
