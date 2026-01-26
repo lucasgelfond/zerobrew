@@ -1,3 +1,10 @@
 [workspace]
 members = ["zb_core", "zb_io", "zb_cli"]
 resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
