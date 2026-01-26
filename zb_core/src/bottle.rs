@@ -123,7 +123,9 @@ mod tests {
     use crate::formula::{Bottle, BottleFile, BottleStable, Versions};
     use std::collections::BTreeMap;
 
+    // This test uses the fixture which only has macOS bottles
     #[test]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     fn selects_arm64_bottle() {
         let fixture = include_str!("../fixtures/formula_foo.json");
         let formula: Formula = serde_json::from_str(fixture).unwrap();
@@ -169,19 +171,90 @@ mod tests {
     }
 
     #[test]
-    fn errors_when_no_arm64_bottle() {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn selects_x86_64_linux_bottle() {
         let mut files = BTreeMap::new();
         files.insert(
-            "x86_64_sonoma".to_string(),
+            "x86_64_linux".to_string(),
             BottleFile {
-                url: "https://example.com/legacy.tar.gz".to_string(),
-                sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-                    .to_string(),
+                url: "https://ghcr.io/v2/homebrew/core/test/blobs/sha256:linux123".to_string(),
+                sha256: "linux123".to_string(),
+            },
+        );
+        files.insert(
+            "arm64_sonoma".to_string(),
+            BottleFile {
+                url: "https://example.com/macos.tar.gz".to_string(),
+                sha256: "macos123".to_string(),
             },
         );
 
         let formula = Formula {
-            name: "legacy".to_string(),
+            name: "test-pkg".to_string(),
+            versions: Versions {
+                stable: "1.0.0".to_string(),
+            },
+            dependencies: Vec::new(),
+            bottle: Bottle {
+                stable: BottleStable { files, rebuild: 0 },
+            },
+        };
+
+        let selected = select_bottle(&formula).unwrap();
+        assert_eq!(selected.tag, "x86_64_linux");
+        assert!(selected.url.contains("linux123"));
+    }
+
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    fn selects_arm64_linux_bottle() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "arm64_linux".to_string(),
+            BottleFile {
+                url: "https://ghcr.io/v2/homebrew/core/test/blobs/sha256:arm64linux".to_string(),
+                sha256: "arm64linux".to_string(),
+            },
+        );
+
+        let formula = Formula {
+            name: "test-pkg".to_string(),
+            versions: Versions {
+                stable: "1.0.0".to_string(),
+            },
+            dependencies: Vec::new(),
+            bottle: Bottle {
+                stable: BottleStable { files, rebuild: 0 },
+            },
+        };
+
+        let selected = select_bottle(&formula).unwrap();
+        assert_eq!(selected.tag, "arm64_linux");
+    }
+
+    #[test]
+    fn errors_when_no_compatible_bottle() {
+        let mut files = BTreeMap::new();
+        // Only has a bottle that won't match the current platform
+        #[cfg(target_os = "macos")]
+        files.insert(
+            "x86_64_linux".to_string(),
+            BottleFile {
+                url: "https://example.com/linux.tar.gz".to_string(),
+                sha256: "linux".to_string(),
+            },
+        );
+        #[cfg(target_os = "linux")]
+        files.insert(
+            "arm64_sonoma".to_string(),
+            BottleFile {
+                url: "https://example.com/macos.tar.gz".to_string(),
+                sha256: "macos".to_string(),
+            },
+        );
+
+        let formula = Formula {
+            name: "incompatible".to_string(),
             versions: Versions {
                 stable: "0.1.0".to_string(),
             },
@@ -194,7 +267,7 @@ mod tests {
         let err = select_bottle(&formula).unwrap_err();
         assert!(matches!(
             err,
-            Error::UnsupportedBottle { name } if name == "legacy"
+            Error::UnsupportedBottle { name } if name == "incompatible"
         ));
     }
 }
