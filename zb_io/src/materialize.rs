@@ -527,6 +527,11 @@ fn patch_homebrew_placeholders_linux(
             }
         }
 
+        // Collect what needs to be patched - we'll apply everything in a single patchelf call
+        // to avoid corrupting the binary with multiple invocations
+        let mut new_rpath: Option<String> = None;
+        let mut new_interp: Option<String> = None;
+
         // Get current RPATH/RUNPATH using patchelf --print-rpath
         let rpath_output = Command::new("patchelf")
             .args(["--print-rpath", &path.to_string_lossy()])
@@ -544,22 +549,15 @@ fn patch_homebrew_placeholders_linux(
                     .map(|p| patch_rpath(p).unwrap_or_else(|| p.to_string()))
                     .collect();
 
-                let new_rpath = new_rpath_parts.join(":");
+                let patched_rpath = new_rpath_parts.join(":");
 
-                if new_rpath != current_rpath {
-                    // Apply the patched RPATH
-                    let result = Command::new("patchelf")
-                        .args(["--set-rpath", &new_rpath, &path.to_string_lossy()])
-                        .output();
-
-                    if result.map(|o| !o.status.success()).unwrap_or(true) {
-                        patch_failures.fetch_add(1, Ordering::Relaxed);
-                    }
+                if patched_rpath != current_rpath {
+                    new_rpath = Some(patched_rpath);
                 }
             }
         }
 
-        // Also check and patch the interpreter (for executables)
+        // Check and determine new interpreter (for executables)
         let interp_output = Command::new("patchelf")
             .args(["--print-interpreter", &path.to_string_lossy()])
             .output();
@@ -569,29 +567,49 @@ fn patch_homebrew_placeholders_linux(
         {
             let current_interp = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
-            if !current_interp.is_empty() {
-                // Only patch interpreter if it contains Homebrew placeholder
-                let new_interp = if current_interp.contains("@@HOMEBREW") {
-                    // Use the system dynamic linker based on architecture
-                    #[cfg(target_arch = "aarch64")]
-                    { Some("/lib/ld-linux-aarch64.so.1".to_string()) }
-                    #[cfg(target_arch = "x86_64")]
-                    { Some("/lib64/ld-linux-x86-64.so.2".to_string()) }
-                    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-                    { None }
+            if !current_interp.is_empty() && current_interp.contains("@@HOMEBREW") {
+                // The interpreter contains a placeholder - patch it
+                // Use zerobrew's ld.so symlink (which should point to system loader)
+                let zerobrew_ld = format!("{}/lib/ld.so", prefix.display());
+                if std::path::Path::new(&zerobrew_ld).exists() {
+                    new_interp = Some(zerobrew_ld);
                 } else {
-                    None
-                };
+                    // Fallback to system dynamic linker
+                    #[cfg(target_arch = "aarch64")]
+                    { new_interp = Some("/lib/ld-linux-aarch64.so.1".to_string()); }
+                    #[cfg(target_arch = "x86_64")]
+                    { new_interp = Some("/lib64/ld-linux-x86-64.so.2".to_string()); }
+                }
+            }
+        }
 
-                if let Some(interp) = new_interp {
-                    let result = Command::new("patchelf")
-                        .args(["--set-interpreter", &interp, &path.to_string_lossy()])
-                        .output();
+        // Apply all patches in a single patchelf invocation to avoid corruption
+        if new_rpath.is_some() || new_interp.is_some() {
+            let mut args: Vec<String> = Vec::new();
 
-                    if result.map(|o| !o.status.success()).unwrap_or(true) {
-                        // Interpreter patching can fail for shared libraries, that's okay
-                        // Only count it as a real failure if we expected it to work
-                    }
+            // Use --force-rpath to set DT_RPATH instead of DT_RUNPATH
+            // RPATH is inherited by transitive dependencies, RUNPATH is not
+            if let Some(ref rpath) = new_rpath {
+                args.push("--force-rpath".to_string());
+                args.push("--set-rpath".to_string());
+                args.push(rpath.clone());
+            }
+
+            if let Some(ref interp) = new_interp {
+                args.push("--set-interpreter".to_string());
+                args.push(interp.clone());
+            }
+
+            args.push(path.to_string_lossy().to_string());
+
+            let result = Command::new("patchelf")
+                .args(&args)
+                .output();
+
+            if result.map(|o| !o.status.success()).unwrap_or(true) {
+                // Only count RPATH failures, interpreter failures on shared libs are expected
+                if new_rpath.is_some() {
+                    patch_failures.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
