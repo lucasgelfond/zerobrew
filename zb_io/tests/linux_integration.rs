@@ -458,6 +458,7 @@ fn correct_bottle_tags_on_linux() {
             stable: "1.0.0".to_string(),
         },
         dependencies: Vec::new(),
+        uses_from_macos: Vec::new(),
         bottle: Bottle {
             stable: BottleStable { files, rebuild: 0 },
         },

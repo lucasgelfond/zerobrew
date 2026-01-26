@@ -160,6 +160,7 @@ mod tests {
                 stable: "2024-01-01".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -195,6 +196,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -223,6 +225,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -259,6 +262,7 @@ mod tests {
                 stable: "0.1.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -309,6 +313,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -350,6 +355,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -379,6 +385,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -409,6 +416,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -434,6 +442,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -566,6 +575,7 @@ mod tests {
                 stable: "3.4.1".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -611,6 +621,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -657,6 +668,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -701,6 +713,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -753,6 +766,7 @@ mod tests {
                 stable: "1.0.0".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable {
                     files: files.clone(),
@@ -808,6 +822,7 @@ mod tests {
                 stable: "3.12.1".to_string(),
             },
             dependencies: Vec::new(),
+            uses_from_macos: Vec::new(),
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
@@ -845,6 +860,7 @@ mod tests {
                     stable: version.to_string(),
                 },
                 dependencies: Vec::new(),
+                uses_from_macos: Vec::new(),
                 bottle: Bottle {
                     stable: BottleStable { files, rebuild: 0 },
                 },
