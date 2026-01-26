@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use zb_io::install::create_installer;
-use zb_io::{InstallProgress, ProgressCallback};
+use zb_io::{ApiClient, InstallProgress, ProgressCallback};
 
 #[derive(Parser)]
 #[command(name = "zb")]
@@ -308,6 +308,25 @@ fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!();
 }
 
+async fn suggest_similar_formulas(query: &str) {
+    let client = ApiClient::new();
+    if let Ok(names) = client.get_formula_names().await {
+        let suggestions = ApiClient::find_similar_formulas(query, &names, 3);
+        if !suggestions.is_empty() {
+            eprintln!(
+                "{} Did you mean: {}?",
+                style("Hint:").yellow().bold(),
+                suggestions
+                    .iter()
+                    .map(|s| style(s).cyan().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            eprintln!();
+        }
+    }
+}
+
 async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     // Handle init separately - it doesn't need the installer
     if matches!(cli.command, Commands::Init) {
@@ -338,6 +357,9 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             let plan = match installer.plan(&formula).await {
                 Ok(p) => p,
                 Err(e) => {
+                    if matches!(e, zb_core::Error::MissingFormula { .. }) {
+                        suggest_similar_formulas(&formula).await;
+                    }
                     suggest_homebrew(&formula, &e);
                     return Err(e);
                 }

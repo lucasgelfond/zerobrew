@@ -21,6 +21,7 @@ fs4 = "0.13"
 walkdir = "2"
 xz2 = "0.1"
 zstd = "0.13"
+strsim = "0.11"
 zb_core = { path = "../zb_core" }
 
 [dev-dependencies]

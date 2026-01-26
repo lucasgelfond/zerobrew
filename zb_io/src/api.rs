@@ -1,5 +1,12 @@
 use crate::cache::{ApiCache, CacheEntry};
+use strsim::levenshtein;
 use zb_core::{Error, Formula};
+
+/// Minimal struct to deserialize formula names from the API
+#[derive(serde::Deserialize)]
+struct FormulaName {
+    name: String,
+}
 
 pub struct ApiClient {
     base_url: String,
@@ -104,6 +111,70 @@ impl ApiClient {
         })?;
 
         Ok(formula)
+    }
+
+    /// Fetch list of all formula names from Homebrew API
+    pub async fn get_formula_names(&self) -> Result<Vec<String>, Error> {
+        let url = format!("{}.json", self.base_url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("HTTP {}", response.status()),
+            });
+        }
+
+        let formulas: Vec<FormulaName> =
+            response.json().await.map_err(|e| Error::NetworkFailure {
+                message: format!("failed to parse formula list JSON: {e}"),
+            })?;
+
+        Ok(formulas.into_iter().map(|f| f.name).collect())
+    }
+
+    /// Find similar formula names using substring matching and Levenshtein distance
+    pub fn find_similar_formulas(query: &str, names: &[String], max_results: usize) -> Vec<String> {
+        let query_lower = query.to_lowercase();
+
+        let mut results: Vec<(usize, &String)> = names
+            .iter()
+            .filter_map(|name| {
+                let name_lower = name.to_lowercase();
+
+                // Priority 0: Exact prefix match (e.g., "aws-sso" matches "aws-sso-cli")
+                if name_lower.starts_with(&query_lower) {
+                    return Some((0, name));
+                }
+
+                // Priority 1: Query is substring (e.g., "sso" matches "aws-sso-cli")
+                if name_lower.contains(&query_lower) {
+                    return Some((1, name));
+                }
+
+                // Priority 2: Close Levenshtein distance for typo correction
+                let dist = levenshtein(&query_lower, &name_lower);
+                if dist <= 3 {
+                    return Some((2 + dist, name));
+                }
+
+                None
+            })
+            .collect();
+
+        results.sort_by_key(|(score, _)| *score);
+        results
+            .into_iter()
+            .take(max_results)
+            .map(|(_, name)| name.clone())
+            .collect()
     }
 }
 
