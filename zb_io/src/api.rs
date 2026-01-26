@@ -1,10 +1,14 @@
 use crate::cache::{ApiCache, CacheEntry};
+use std::collections::HashMap;
+use std::sync::RwLock;
 use zb_core::{Error, Formula};
 
 pub struct ApiClient {
     base_url: String,
     client: reqwest::Client,
     cache: Option<ApiCache>,
+    /// Alias map: alias -> canonical name (lazily populated on first 404)
+    alias_map: RwLock<Option<HashMap<String, String>>>,
 }
 
 impl ApiClient {
@@ -24,6 +28,7 @@ impl ApiClient {
             base_url,
             client,
             cache: None,
+            alias_map: RwLock::new(None),
         }
     }
 
@@ -33,6 +38,29 @@ impl ApiClient {
     }
 
     pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
+        // First, try to fetch directly
+        match self.fetch_formula_by_name(name).await {
+            Ok(formula) => return Ok(formula),
+            Err(Error::MissingFormula { .. }) => {
+                // Formula not found - try alias resolution
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Check if we have an alias for this name
+        // If alias resolution fails (e.g., network error), just return the original error
+        if let Ok(Some(canonical_name)) = self.resolve_alias(name).await {
+            return self.fetch_formula_by_name(&canonical_name).await;
+        }
+
+        // No alias found (or alias resolution failed), return the original error
+        Err(Error::MissingFormula {
+            name: name.to_string(),
+        })
+    }
+
+    /// Fetch a formula by exact name (no alias resolution)
+    async fn fetch_formula_by_name(&self, name: &str) -> Result<Formula, Error> {
         let url = format!("{}/{}.json", self.base_url, name);
 
         let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
@@ -105,6 +133,89 @@ impl ApiClient {
 
         Ok(formula)
     }
+
+    /// Resolve an alias to its canonical formula name
+    async fn resolve_alias(&self, alias: &str) -> Result<Option<String>, Error> {
+        // Check if we already have the alias map
+        {
+            let guard = self.alias_map.read().unwrap();
+            if let Some(ref map) = *guard {
+                return Ok(map.get(alias).cloned());
+            }
+        }
+
+        // Need to fetch and build the alias map
+        self.fetch_alias_map().await?;
+
+        // Now check again
+        let guard = self.alias_map.read().unwrap();
+        if let Some(ref map) = *guard {
+            Ok(map.get(alias).cloned())
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Fetch the full formula list and build an alias map
+    async fn fetch_alias_map(&self) -> Result<(), Error> {
+        // base_url is like "https://formulae.brew.sh/api/formula"
+        // formula list is at "https://formulae.brew.sh/api/formula.json"
+        let url = format!("{}.json", self.base_url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: format!("failed to fetch formula list for alias resolution: {e}"),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("failed to fetch formula list: HTTP {}", response.status()),
+            });
+        }
+
+        let body = response.text().await.map_err(|e| Error::NetworkFailure {
+            message: format!("failed to read formula list: {e}"),
+        })?;
+
+        // Parse just enough to extract aliases
+        // The format is an array of objects with "name" and "aliases" fields
+        let formulas: Vec<FormulaListEntry> =
+            serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
+                message: format!("failed to parse formula list: {e}"),
+            })?;
+
+        let mut map = HashMap::new();
+        for formula in formulas {
+            // Map each alias to the canonical name
+            for alias in formula.aliases {
+                map.insert(alias, formula.name.clone());
+            }
+            // Also map old_names to the canonical name
+            for old_name in formula.old_names {
+                map.insert(old_name, formula.name.clone());
+            }
+        }
+
+        // Store the map
+        let mut guard = self.alias_map.write().unwrap();
+        *guard = Some(map);
+
+        Ok(())
+    }
+}
+
+/// Minimal struct for parsing formula list (only fields we need)
+#[derive(serde::Deserialize)]
+struct FormulaListEntry {
+    name: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    old_names: Vec<String>,
 }
 
 impl Default for ApiClient {
