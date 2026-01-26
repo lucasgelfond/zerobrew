@@ -426,7 +426,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     }
                     InstallProgress::UnpackCompleted { name } => {
                         if let Some(pb) = bars.get(&name) {
-                            pb.set_message("linking...");
+                            pb.set_message("unpacked");
                         }
                     }
                     InstallProgress::LinkStarted { name } => {
@@ -436,6 +436,11 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     }
                     InstallProgress::LinkCompleted { name } => {
                         if let Some(pb) = bars.get(&name) {
+                            pb.set_message("linked");
+                        }
+                    }
+                    InstallProgress::InstallCompleted { name } => {
+                        if let Some(pb) = bars.get(&name) {
                             pb.set_style(done_style_clone.clone());
                             pb.set_message(format!("{} installed", style("✓").green()));
                             pb.finish();
@@ -444,18 +449,11 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 }
             }));
 
-            let result = match installer
+            let result_val = installer
                 .execute_with_progress(plan, !no_link, Some(progress_callback))
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    suggest_homebrew(&formula, &e);
-                    return Err(e);
-                }
-            };
+                .await;
 
-            // Finish any remaining bars
+            // Cleanup progress bars BEFORE handling errors to avoid visual artifacts
             {
                 let bars = bars.lock().unwrap();
                 for (_, pb) in bars.iter() {
@@ -464,6 +462,15 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     }
                 }
             }
+
+            // Now handle the result
+            let result = match result_val {
+                Ok(r) => r,
+                Err(e) => {
+                    suggest_homebrew(&formula, &e);
+                    return Err(e);
+                }
+            };
 
             let elapsed = start.elapsed();
             println!();
