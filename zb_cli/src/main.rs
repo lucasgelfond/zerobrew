@@ -196,7 +196,15 @@ fn add_to_path(prefix: &Path) -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
 
     let config_file = if shell.contains("zsh") {
-        format!("{}/.zshrc", home)
+        let zdotdir = std::env::var("ZDOTDIR").unwrap_or_else(|_| home.clone());
+        let zshenv = format!("{}/.zshenv", zdotdir);
+
+        // Prefer .zshenv (sourced for all shells), fall back to .zshrc
+        if std::path::Path::new(&zshenv).exists() {
+            zshenv
+        } else {
+            format!("{}/.zshrc", zdotdir)
+        }
     } else if shell.contains("bash") {
         let bash_profile = format!("{}/.bash_profile", home);
         if std::path::Path::new(&bash_profile).exists() {
