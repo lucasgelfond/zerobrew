@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -97,24 +97,11 @@ fn extract_tar_archive<R: Read>(reader: R, dest_dir: &Path) -> Result<(), Error>
             message: format!("failed to read entry path: {e}"),
         })?;
 
-        // Security check: reject path traversal
-        validate_path(&entry_path)?;
-
         // Store path as owned string for error message
         let path_display = entry_path.display().to_string();
 
-        // Ensure the entry doesn't escape the destination directory
-        let full_path = dest_dir.join(&*entry_path);
-        let canonical_dest = dest_dir
-            .canonicalize()
-            .unwrap_or_else(|_| dest_dir.to_path_buf());
-        if let Ok(canonical_full) = full_path.canonicalize()
-            && !canonical_full.starts_with(&canonical_dest)
-        {
-            return Err(Error::StoreCorruption {
-                message: format!("path traversal attempt: {path_display}"),
-            });
-        }
+        // Security check: validate path doesn't escape destination
+        validate_path(&entry_path, dest_dir)?;
 
         entry
             .unpack_in(dest_dir)
@@ -126,7 +113,16 @@ fn extract_tar_archive<R: Read>(reader: R, dest_dir: &Path) -> Result<(), Error>
     Ok(())
 }
 
-fn validate_path(path: &Path) -> Result<(), Error> {
+/// Validate that a path from a tar entry is safe to extract.
+///
+/// This function ensures:
+/// 1. The path is not absolute
+/// 2. The path contains no `..` components  
+/// 3. When joined with dest_dir, the normalized path stays within dest_dir
+///
+/// The normalization is done without filesystem access, so it works for
+/// files that don't exist yet.
+fn validate_path(path: &Path, dest_dir: &Path) -> Result<(), Error> {
     // Reject absolute paths
     if path.is_absolute() {
         return Err(Error::StoreCorruption {
@@ -143,7 +139,82 @@ fn validate_path(path: &Path) -> Result<(), Error> {
         }
     }
 
+    // Here we normalize the full path and verify it stays within dest_dir.
+    // This catches edge cases where multiple normal components could somehow escape
+    // (though the .. check above should prevent this in practice, so this shouldn't fire).
+    let full_path = dest_dir.join(path);
+    let normalized = normalize_path(&full_path);
+
+    // Normalize dest_dir for comparison
+    let normalized_dest = normalize_path(dest_dir);
+
+    if !normalized.starts_with(&normalized_dest) {
+        return Err(Error::StoreCorruption {
+            message: format!(
+                "path escapes destination directory: {} (normalized: {}) not within {}",
+                path.display(),
+                normalized.display(),
+                normalized_dest.display()
+            ),
+        });
+    }
+
     Ok(())
+}
+
+/// Normalize a path by resolving . and .. components without filesystem access.
+///
+/// This is safer than `canonicalize()` because:
+/// - It works for paths that don't exist yet
+/// - It doesn't follow symlinks (which could be malicious in a tarball)
+/// - It's purely lexical, making behavior predictable
+///
+/// For absolute paths, .. components cannot escape above the root.
+/// For relative paths, leading .. components are preserved.
+fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut components = Vec::new();
+    let mut is_absolute = false;
+
+    for component in path.components() {
+        match component {
+            Component::RootDir => {
+                // This is an absolute path
+                is_absolute = true;
+                components.push(component);
+            }
+            Component::CurDir => {
+                // Skip . components
+            }
+            Component::ParentDir => {
+                // Try to pop the last component
+                if !components.is_empty() {
+                    let last = components.last();
+                    // Only pop if the last component is a normal component
+                    if matches!(last, Some(Component::Normal(_))) {
+                        components.pop();
+                    } else if matches!(last, Some(Component::RootDir)) {
+                        // For absolute paths, cannot go above root - silently ignore
+                        // e.g., /foo/../../bar -> /bar (the extra .. is dropped)
+                    } else {
+                        // For relative paths, keep the .. if we hit prefix or another ..
+                        components.push(component);
+                    }
+                } else if !is_absolute {
+                    // Keep leading .. for relative paths
+                    components.push(component);
+                }
+                // For absolute paths with nothing to pop, drop the .. (can't go above root)
+            }
+            _ => {
+                components.push(component);
+            }
+        }
+    }
+
+    // Reconstruct the path from components
+    components.iter().collect()
 }
 
 /// Extract a tarball from a reader (assumes gzip compression).
@@ -348,5 +419,103 @@ mod tests {
 
         let err = result.unwrap_err();
         assert!(err.to_string().contains("absolute path"));
+    }
+
+    #[test]
+    fn normalize_path_removes_dot_components() {
+        let path = PathBuf::from("/foo/./bar/./baz");
+        let normalized = normalize_path(&path);
+        assert_eq!(normalized, PathBuf::from("/foo/bar/baz"));
+    }
+
+    #[test]
+    fn normalize_path_resolves_parent_dirs() {
+        let path = PathBuf::from("/foo/bar/../baz");
+        let normalized = normalize_path(&path);
+        assert_eq!(normalized, PathBuf::from("/foo/baz"));
+    }
+
+    #[test]
+    fn normalize_path_handles_multiple_parent_dirs() {
+        let path = PathBuf::from("/foo/bar/qux/../../baz");
+        let normalized = normalize_path(&path);
+        assert_eq!(normalized, PathBuf::from("/foo/baz"));
+    }
+
+    #[test]
+    fn normalize_path_preserves_leading_parent_dirs_in_relative_paths() {
+        let path = PathBuf::from("../foo/bar");
+        let normalized = normalize_path(&path);
+        assert_eq!(normalized, PathBuf::from("../foo/bar"));
+    }
+
+    #[test]
+    fn normalize_path_handles_complex_relative_path() {
+        let path = PathBuf::from("foo/./bar/../baz/./qux");
+        let normalized = normalize_path(&path);
+        assert_eq!(normalized, PathBuf::from("foo/baz/qux"));
+    }
+
+    #[test]
+    fn normalize_path_cannot_escape_root() {
+        let path = PathBuf::from("/foo/../../etc/passwd");
+        let normalized = normalize_path(&path);
+        // For absolute paths, .. cannot go above root
+        // /foo/../../etc/passwd -> /etc/passwd (the extra .. is dropped)
+        assert_eq!(normalized, PathBuf::from("/etc/passwd"));
+    }
+
+    #[test]
+    fn normalize_path_multiple_attempts_to_escape_root() {
+        let path = PathBuf::from("/../../../../etc/passwd");
+        let normalized = normalize_path(&path);
+        // All the .. components above root are dropped
+        assert_eq!(normalized, PathBuf::from("/etc/passwd"));
+    }
+
+    #[test]
+    fn normalize_path_root_with_only_parent_dirs() {
+        let path = PathBuf::from("/../..");
+        let normalized = normalize_path(&path);
+        // Should normalize to just root
+        assert_eq!(normalized, PathBuf::from("/"));
+    }
+
+    #[test]
+    fn validate_path_rejects_normalized_escape() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("extracted");
+        fs::create_dir(&dest).unwrap();
+
+        // Even though this doesn't have explicit .., after normalization it could escape
+        // (This is a defense-in-depth test - the .. check should catch real cases)
+        let tricky_path = PathBuf::from("foo/../../etc/passwd");
+
+        let result = validate_path(&tricky_path, &dest);
+        // Should be rejected by the .. component check
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_path_accepts_safe_nested_paths() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("extracted");
+        fs::create_dir(&dest).unwrap();
+
+        let safe_path = PathBuf::from("foo/bar/baz.txt");
+        let result = validate_path(&safe_path, &dest);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_path_accepts_paths_with_dots_in_names() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("extracted");
+        fs::create_dir(&dest).unwrap();
+
+        // Files with dots in names should be fine
+        let safe_path = PathBuf::from("foo/file.tar.gz");
+        let result = validate_path(&safe_path, &dest);
+        assert!(result.is_ok());
     }
 }
