@@ -1,6 +1,6 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -8,6 +8,39 @@ use xz2::read::XzDecoder;
 use zstd::stream::read::Decoder as ZstdDecoder;
 
 use zb_core::Error;
+
+/// Result of bottle extraction containing the detected version
+#[derive(Debug, Clone)]
+pub struct ExtractResult {
+    pub path: PathBuf,
+    /// The actual version directory found in the bottle (e.g., "30.2_2")
+    pub bottle_version: Option<String>,
+}
+
+/// Detect the actual version directory inside an extracted bottle.
+/// Homebrew bottles have structure {name}/{version}/ inside the tarball.
+/// Returns the version string if exactly one version directory is found.
+pub fn detect_bottle_version(store_path: &Path, pkg_name: &str) -> Option<String> {
+    let pkg_dir = store_path.join(pkg_name);
+    if !pkg_dir.exists() || !pkg_dir.is_dir() {
+        return None;
+    }
+
+    // Find the version directory (should be only one)
+    let entries: Vec<_> = match fs::read_dir(&pkg_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect(),
+        Err(_) => return None,
+    };
+
+    if entries.len() == 1 {
+        Some(entries[0].file_name().to_string_lossy().to_string())
+    } else {
+        None // Multiple or no versions, fall back to API version
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompressionFormat {
@@ -348,5 +381,49 @@ mod tests {
 
         let err = result.unwrap_err();
         assert!(err.to_string().contains("absolute path"));
+    }
+
+    #[test]
+    fn detect_bottle_version_finds_single_version_dir() {
+        let tmp = TempDir::new().unwrap();
+
+        // Create structure: store_entry/emacs/30.2_2/bin/emacs
+        let version_dir = tmp.path().join("emacs/30.2_2/bin");
+        fs::create_dir_all(&version_dir).unwrap();
+        fs::write(version_dir.join("emacs"), b"binary").unwrap();
+
+        let version = detect_bottle_version(tmp.path(), "emacs");
+        assert_eq!(version, Some("30.2_2".to_string()));
+    }
+
+    #[test]
+    fn detect_bottle_version_returns_none_for_missing_pkg() {
+        let tmp = TempDir::new().unwrap();
+
+        let version = detect_bottle_version(tmp.path(), "nonexistent");
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn detect_bottle_version_returns_none_for_multiple_versions() {
+        let tmp = TempDir::new().unwrap();
+
+        // Create structure with multiple versions (unusual but possible)
+        fs::create_dir_all(tmp.path().join("pkg/1.0.0")).unwrap();
+        fs::create_dir_all(tmp.path().join("pkg/2.0.0")).unwrap();
+
+        let version = detect_bottle_version(tmp.path(), "pkg");
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn detect_bottle_version_returns_none_for_empty_pkg_dir() {
+        let tmp = TempDir::new().unwrap();
+
+        // Create pkg dir but no version subdirectory
+        fs::create_dir_all(tmp.path().join("pkg")).unwrap();
+
+        let version = detect_bottle_version(tmp.path(), "pkg");
+        assert_eq!(version, None);
     }
 }

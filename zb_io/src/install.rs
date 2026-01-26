@@ -8,6 +8,7 @@ use crate::db::Database;
 use crate::download::{
     DownloadProgressCallback, DownloadRequest, DownloadResult, ParallelDownloader,
 };
+use crate::extract::detect_bottle_version;
 use crate::link::{LinkedFile, Linker};
 use crate::materialize::Cellar;
 use crate::progress::{InstallProgress, ProgressCallback};
@@ -290,11 +291,18 @@ impl Installer {
                         }
                     };
 
+                    // Detect the actual version from the bottle contents.
+                    // The bottle may contain a different version than the API reports
+                    // (e.g., bottle has "30.2_2" but API says "30.2" with rebuild=0).
+                    // Using the wrong version causes path length mismatches during
+                    // binary patching, resulting in truncated paths and broken apps.
+                    let version = detect_bottle_version(&store_entry, &formula.name)
+                        .unwrap_or_else(|| formula.effective_version());
+
                     // Materialize to cellar
-                    // Use effective_version() which includes rebuild suffix if applicable
                     let keg_path = match self.cellar.materialize(
                         &formula.name,
-                        &formula.effective_version(),
+                        &version,
                         &store_entry,
                     ) {
                         Ok(path) => path,
@@ -336,7 +344,7 @@ impl Installer {
 
                     completed[idx] = Some(ProcessedPackage {
                         name: formula.name.clone(),
-                        version: formula.effective_version(),
+                        version,
                         store_key: bottle.sha256.clone(),
                         linked_files,
                     });

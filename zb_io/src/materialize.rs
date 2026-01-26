@@ -542,6 +542,7 @@ fn patch_embedded_strings(
                 while version_end < data.len()
                     && data[version_end] != b'/'
                     && data[version_end] != 0
+                    && data[version_end] != b' ' // Stop at space (used in configure flags)
                 {
                     version_end += 1;
                 }
@@ -621,6 +622,84 @@ fn patch_embedded_strings(
                 perms.set_mode(original_mode);
                 let _ = fs::set_permissions(path, perms);
             }
+        }
+    });
+
+    // Also patch Emacs portable dump files (.pdmp) which contain serialized paths
+    // These are NOT Mach-O binaries but data files with embedded path strings.
+    // Unlike Mach-O binaries, pdmp files can change size, so we use a buffer-based
+    // approach that rebuilds the file rather than in-place modification.
+    let pdmp_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "pdmp"))
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    pdmp_files.par_iter().for_each(|path| {
+        let data = match fs::read(path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        // Build new buffer - this allows length changes in data files
+        let mut result = Vec::with_capacity(data.len());
+        let old_cellar_prefix = format!("/opt/homebrew/Cellar/{}/", pkg_name);
+        let old_cellar_prefix_bytes = old_cellar_prefix.as_bytes();
+        let old_homebrew_prefix = b"/opt/homebrew";
+
+        let mut i = 0;
+        while i < data.len() {
+            // Check for package-specific Cellar path (e.g., /opt/homebrew/Cellar/emacs/)
+            if i + old_cellar_prefix_bytes.len() <= data.len()
+                && &data[i..i + old_cellar_prefix_bytes.len()] == old_cellar_prefix_bytes
+            {
+                // Find the end of the version string
+                let version_start = i + old_cellar_prefix_bytes.len();
+                let mut version_end = version_start;
+                while version_end < data.len()
+                    && data[version_end] != b'/'
+                    && data[version_end] != 0
+                    && data[version_end] != b' '
+                {
+                    version_end += 1;
+                }
+
+                // Replace the entire /opt/homebrew/Cellar/pkg/version with our keg path
+                result.extend_from_slice(keg_path_str.as_bytes());
+                i = version_end;
+            }
+            // Check for generic /opt/homebrew prefix (not followed by /Cellar)
+            else if i + old_homebrew_prefix.len() <= data.len()
+                && &data[i..i + old_homebrew_prefix.len()] == old_homebrew_prefix
+            {
+                // Check if this is a Cellar path we should skip
+                // (will be handled by package-specific replacement above)
+                let is_cellar_path = i + old_homebrew_prefix.len() + 7 <= data.len()
+                    && &data[i + old_homebrew_prefix.len()..i + old_homebrew_prefix.len() + 7]
+                        == b"/Cellar";
+
+                if !is_cellar_path {
+                    // Replace /opt/homebrew with our prefix
+                    result.extend_from_slice(prefix_str.as_bytes());
+                    i += old_homebrew_prefix.len();
+                } else {
+                    // Copy the byte and continue (Cellar path will be handled above)
+                    result.push(data[i]);
+                    i += 1;
+                }
+            } else {
+                result.push(data[i]);
+                i += 1;
+            }
+        }
+
+        // Only write if content changed
+        if result != data {
+            let _ = fs::write(path, &result);
+            // No codesigning needed for pdmp files - they're data, not code
         }
     });
 
