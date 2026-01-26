@@ -2,6 +2,9 @@
 members = ["zb_core", "zb_io", "zb_cli"]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.90"
+
 [profile.release]
 opt-level = 3
 lto = "fat"
