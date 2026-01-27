@@ -29,7 +29,8 @@ echo "Rust version: $(rustc --version)"
 if [[ -d "$ZEROBREW_DIR" ]]; then
     echo "Updating zerobrew..."
     cd "$ZEROBREW_DIR"
-    git pull
+    git fetch --depth=1 origin main
+    git reset --hard origin/main
 else
     echo "Cloning zerobrew..."
     git clone --depth 1 "$ZEROBREW_REPO" "$ZEROBREW_DIR"
