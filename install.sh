@@ -32,7 +32,7 @@ if [[ -d "$ZEROBREW_DIR" ]]; then
     git pull
 else
     echo "Cloning zerobrew..."
-    git clone "$ZEROBREW_REPO" "$ZEROBREW_DIR"
+    git clone --depth 1 "$ZEROBREW_REPO" "$ZEROBREW_DIR"
     cd "$ZEROBREW_DIR"
 fi
 
