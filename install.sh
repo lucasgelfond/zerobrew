@@ -72,7 +72,7 @@ esac
 # Add to PATH in shell config if not already there
 PATHS_TO_ADD=("$ZEROBREW_BIN" "/opt/zerobrew/prefix/bin")
 if ! grep -q "^# zerobrew$" "$SHELL_CONFIG" 2>/dev/null; then
-    cat >> "$SHELL_CONFIG" <<EOF
+    cat >>"$SHELL_CONFIG" <<EOF
 # zerobrew
 export ZEROBREW_DIR=$ZEROBREW_DIR
 export ZEROBREW_BIN=$ZEROBREW_BIN
@@ -86,7 +86,7 @@ _zb_path_append() {
 EOF
     for path_entry in "${PATHS_TO_ADD[@]}"; do
         if ! grep -q "$path_entry" "$SHELL_CONFIG" 2>/dev/null; then
-            echo "_zb_path_append $path_entry" >> "$SHELL_CONFIG"
+            echo "_zb_path_append $path_entry" >>"$SHELL_CONFIG"
             echo "Added $path_entry to PATH in $SHELL_CONFIG"
         fi
     done
