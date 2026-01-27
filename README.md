@@ -78,6 +78,10 @@ cargo build --release
 cargo install --path zb_cli
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup instructions, including optional pre-commit hooks.
+
 ## Benchmarking
 
 ```bash

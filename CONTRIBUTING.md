@@ -7,6 +7,22 @@ Thanks for your interest in contributing to zerobrew! This document provides gui
 - Rust 1.90 or later
 - Access to either a macOS or Linux machine
 
+## Development Setup
+
+### Pre-commit Hooks (Optional)
+
+We provide optional pre-commit hooks to catch formatting and linting issues early:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+This installs a pre-commit hook that automatically runs:
+- `cargo fmt --all --check` - Ensures code is formatted
+- `cargo clippy --all-targets --all-features -- -D warnings` - Catches common mistakes
+
+The hook will prevent commits with issues. You can bypass it with `git commit --no-verify` if needed.
+
 ## A note on LLM usage
 While we encourage the use of LLM's for thinking through problems, helping with tests, and even writing code, we simply 
 cannot accept or tolerate PRs with no clear guidance or thought put into them.
