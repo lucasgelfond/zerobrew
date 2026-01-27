@@ -2282,6 +2282,7 @@ dependencies = [
  "tokio",
  "zb_core",
  "zb_io",
+ "zb_migrate",
 ]
 
 [[package]]

@@ -16,6 +16,7 @@ console.workspace = true
 
 zb_core = { path = "../zb_core" }
 zb_io = { path = "../zb_io" }
+zb_migrate = { path = "../zb_migrate" }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

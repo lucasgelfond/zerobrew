@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use zb_io::install::create_installer;
 use zb_io::{InstallProgress, ProgressCallback};
+use zb_migrate::{IncompatibleReason, MigrationPlan, Migrator};
 
 #[derive(Parser)]
 #[command(name = "zb")]
@@ -70,6 +71,20 @@ enum Commands {
 
     /// Initialize zerobrew directories with correct permissions
     Init,
+
+    /// Migrate packages from Homebrew to zerobrew
+    Migrate {
+        /// Specific formulas to migrate (default: all user-requested)
+        formulas: Vec<String>,
+
+        /// Only show what would be migrated (don't actually install)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Homebrew prefix path (default: /opt/homebrew)
+        #[arg(long, default_value = "/opt/homebrew")]
+        homebrew_prefix: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -638,6 +653,208 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 style("==>").cyan().bold()
             );
         }
+
+        Commands::Migrate {
+            formulas,
+            dry_run,
+            homebrew_prefix,
+        } => {
+            let start = Instant::now();
+
+            println!(
+                "{} Scanning Homebrew at {}...",
+                style("==>").cyan().bold(),
+                homebrew_prefix.display()
+            );
+
+            let mut migrator = Migrator::with_prefix(&mut installer, &homebrew_prefix);
+
+            if !migrator.is_homebrew_installed() {
+                return Err(zb_core::Error::StoreCorruption {
+                    message: format!(
+                        "Homebrew not found at {}. Is Homebrew installed?",
+                        homebrew_prefix.display()
+                    ),
+                });
+            }
+
+            // Create migration plan
+            let specific = if formulas.is_empty() {
+                None
+            } else {
+                Some(formulas.as_slice())
+            };
+
+            let plan = migrator
+                .plan(specific)
+                .map_err(|e| zb_core::Error::StoreCorruption {
+                    message: format!("Failed to create migration plan: {}", e),
+                })?;
+
+            print_migration_plan(&plan);
+
+            if plan.is_empty() {
+                println!("{} Nothing to migrate.", style("==>").cyan().bold());
+                return Ok(());
+            }
+
+            if dry_run {
+                println!(
+                    "{} Dry run - no packages were installed.",
+                    style("==>").cyan().bold()
+                );
+                println!(
+                    "    Run {} to actually migrate {} packages.",
+                    style("zb migrate").cyan(),
+                    plan.to_install.len()
+                );
+                return Ok(());
+            }
+
+            // Execute migration
+            println!(
+                "{} Migrating {} packages from Homebrew...",
+                style("==>").cyan().bold(),
+                plan.to_install.len()
+            );
+
+            // Set up progress display (same as install)
+            let multi = MultiProgress::new();
+            let bars: Arc<Mutex<HashMap<String, ProgressBar>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+
+            let download_style = ProgressStyle::default_bar()
+                .template(
+                    "    {prefix:<16} {bar:25.cyan/dim} {bytes:>10}/{total_bytes:<10} {eta:>6}",
+                )
+                .unwrap()
+                .progress_chars("━━╸");
+
+            let spinner_style = ProgressStyle::default_spinner()
+                .template("    {prefix:<16} {spinner:.cyan} {msg}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+
+            let done_style = ProgressStyle::default_spinner()
+                .template("    {prefix:<16} {msg}")
+                .unwrap();
+
+            let bars_clone = bars.clone();
+            let multi_clone = multi.clone();
+            let download_style_clone = download_style.clone();
+            let spinner_style_clone = spinner_style.clone();
+            let done_style_clone = done_style.clone();
+
+            let progress_callback: Arc<ProgressCallback> = Arc::new(Box::new(move |event| {
+                let mut bars = bars_clone.lock().unwrap();
+                match event {
+                    InstallProgress::DownloadStarted { name, total_bytes } => {
+                        let pb = if let Some(total) = total_bytes {
+                            let pb = multi_clone.add(ProgressBar::new(total));
+                            pb.set_style(download_style_clone.clone());
+                            pb
+                        } else {
+                            let pb = multi_clone.add(ProgressBar::new_spinner());
+                            pb.set_style(spinner_style_clone.clone());
+                            pb.set_message("downloading...");
+                            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                            pb
+                        };
+                        pb.set_prefix(name.clone());
+                        bars.insert(name, pb);
+                    }
+                    InstallProgress::DownloadProgress {
+                        name,
+                        downloaded,
+                        total_bytes,
+                    } => {
+                        if let Some(pb) = bars.get(&name)
+                            && total_bytes.is_some()
+                        {
+                            pb.set_position(downloaded);
+                        }
+                    }
+                    InstallProgress::DownloadCompleted { name, total_bytes } => {
+                        if let Some(pb) = bars.get(&name) {
+                            if total_bytes > 0 {
+                                pb.set_position(total_bytes);
+                            }
+                            pb.set_style(spinner_style_clone.clone());
+                            pb.set_message("unpacking...");
+                            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                        }
+                    }
+                    InstallProgress::UnpackStarted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("unpacking...");
+                        }
+                    }
+                    InstallProgress::UnpackCompleted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("linking...");
+                        }
+                    }
+                    InstallProgress::LinkStarted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("linking...");
+                        }
+                    }
+                    InstallProgress::LinkCompleted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_style(done_style_clone.clone());
+                            pb.set_message(format!("{} installed", style("✓").green()));
+                            pb.finish();
+                        }
+                    }
+                    InstallProgress::InstallCompleted { name: _ } => {}
+                }
+            }));
+
+            let result = migrator
+                .execute_with_progress(&plan, Some(progress_callback))
+                .await
+                .map_err(|e| zb_core::Error::StoreCorruption {
+                    message: format!("Migration failed: {}", e),
+                })?;
+
+            // Finish any remaining bars
+            {
+                let bars = bars.lock().unwrap();
+                for (_, pb) in bars.iter() {
+                    if !pb.is_finished() {
+                        pb.finish();
+                    }
+                }
+            }
+
+            let elapsed = start.elapsed();
+            println!();
+            println!("{} Migration complete!", style("==>").cyan().bold());
+            println!(
+                "    {} Installed: {} packages",
+                style("✓").green(),
+                style(result.installed.len()).green().bold()
+            );
+
+            if !result.failed.is_empty() {
+                println!(
+                    "    {} Failed: {} packages",
+                    style("✗").red(),
+                    style(result.failed.len()).red().bold()
+                );
+                for (name, err) in &result.failed {
+                    println!("      {} {}: {}", style("•").dim(), name, style(err).dim());
+                }
+            }
+
+            println!("    Time: {:.2}s", elapsed.as_secs_f64());
+            println!();
+            println!(
+                "    {} Your Homebrew packages are still installed.",
+                style("Note:").yellow()
+            );
+            println!("    To clean up: brew uninstall --force <package>");
+        }
     }
 
     Ok(())
@@ -649,4 +866,80 @@ fn chrono_lite_format(timestamp: i64) -> String {
 
     let dt = UNIX_EPOCH + Duration::from_secs(timestamp as u64);
     format!("{:?}", dt)
+}
+
+fn print_migration_plan(plan: &MigrationPlan) {
+    println!();
+    println!("{} Migration Plan", style("==>").cyan().bold());
+    println!();
+
+    if !plan.to_install.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("Packages to install").green().bold(),
+            plan.to_install.len()
+        );
+        for name in &plan.to_install {
+            println!("    {} {}", style("•").dim(), name);
+        }
+        println!();
+    }
+
+    if !plan.dependencies.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("Dependencies (auto-installed)").dim(),
+            plan.dependencies.len()
+        );
+        for name in &plan.dependencies {
+            println!("    {} {}", style("•").dim(), style(name).dim());
+        }
+        println!();
+    }
+
+    if !plan.already_installed.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("Already installed in Zerobrew").yellow(),
+            plan.already_installed.len()
+        );
+        for name in &plan.already_installed {
+            println!("    {} {}", style("✓").green(), name);
+        }
+        println!();
+    }
+
+    if !plan.incompatible.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("Cannot migrate").red(),
+            plan.incompatible.len()
+        );
+        for item in &plan.incompatible {
+            let reason = match &item.reason {
+                IncompatibleReason::RequiresTap(tap) => format!("requires tap: {}", tap),
+                IncompatibleReason::AlreadyInstalled => "already installed".to_string(),
+                IncompatibleReason::ApiError(e) => format!("API error: {}", e),
+            };
+            println!(
+                "    {} {} ({})",
+                style("✗").red(),
+                item.name,
+                style(reason).dim()
+            );
+        }
+        println!();
+    }
+
+    if !plan.services_warning.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("⚠ Services running (manage separately)").yellow(),
+            plan.services_warning.len()
+        );
+        for name in &plan.services_warning {
+            println!("    {} {}", style("⚠").yellow(), name);
+        }
+        println!();
+    }
 }
