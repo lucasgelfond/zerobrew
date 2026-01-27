@@ -1,3 +1,12 @@
+<div align="center">
+
+# zerobrew
+
+[![Lint](https://github.com/lucasgelfond/zerobrew/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasgelfond/zerobrew/actions/workflows/ci.yml)
+[![Test](https://github.com/lucasgelfond/zerobrew/actions/workflows/test.yml/badge.svg)](https://github.com/lucasgelfond/zerobrew/actions/workflows/test.yml)
+
+</div>
+
 ## Install
 
 ```bash
@@ -8,7 +17,7 @@ After install, run the export command it prints, or restart your terminal.
 
 Join the [Discord](https://discord.gg/UxAAvZ93) for support / discussion.
 
-# zerobrew
+## About
 
 A faster, modern Mac package manager.
 

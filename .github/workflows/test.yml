@@ -1,0 +1,45 @@
+name: test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.name }} / rust ${{ matrix.rust }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos-arm64
+            rust: stable
+          - os: macos-latest
+            name: macos-arm64
+            rust: "1.90"
+          - os: ubuntu-latest
+            name: linux
+            rust: stable
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: install rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      
+      - name: cache rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.os }}-${{ matrix.rust }}
+      
+      - name: build (debug)
+        run: cargo build --workspace --all-targets
+      
+      - name: build (release)
+        run: cargo build --workspace --release
+      
+      - name: run tests
+        run: cargo test --workspace
