@@ -3,7 +3,17 @@ name: lint
 on:
   push:
     branches: [ main ]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
 
 permissions:
   contents: read
