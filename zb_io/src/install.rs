@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -43,6 +43,73 @@ struct ProcessedPackage {
     version: String,
     store_key: String,
     linked_files: Vec<LinkedFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct TapRef {
+    owner: String,
+    repo: String,
+}
+
+#[derive(Clone, Debug)]
+struct FormulaRef {
+    name: String,
+    tap: Option<TapRef>,
+    exact_tap: bool,
+}
+
+#[derive(Clone, Debug)]
+struct FormulaRequest {
+    name: String,
+    preferred_tap: Option<TapRef>,
+    exact_tap: bool,
+}
+
+impl TapRef {
+    fn label(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
+    }
+}
+
+fn parse_formula_ref(input: &str) -> Result<FormulaRef, Error> {
+    let parts: Vec<&str> = input.split('/').collect();
+    match parts.len() {
+        1 => Ok(FormulaRef {
+            name: parts[0].to_string(),
+            tap: None,
+            exact_tap: false,
+        }),
+        3 => {
+            if parts.iter().any(|p| p.is_empty()) {
+                return Err(Error::InvalidTap {
+                    tap: input.to_string(),
+                });
+            }
+
+            Ok(FormulaRef {
+                name: parts[2].to_string(),
+                tap: Some(TapRef {
+                    owner: parts[0].to_string(),
+                    repo: parts[1].to_string(),
+                }),
+                exact_tap: true,
+            })
+        }
+        _ => Err(Error::InvalidTap {
+            tap: input.to_string(),
+        }),
+    }
+}
+
+fn tap_base_url(core_base: &str, tap: &TapRef) -> String {
+    format!("{}/{}/{}", core_base, tap.owner, tap.repo)
+}
+
+fn source_label(source: Option<&TapRef>) -> String {
+    match source {
+        Some(tap) => format!("tap {}", tap.label()),
+        None => "core".to_string(),
+    }
 }
 
 impl Installer {
@@ -162,17 +229,32 @@ impl Installer {
 
     /// Recursively fetch a formula and all its dependencies in parallel batches
     async fn fetch_all_formulas(&self, name: &str) -> Result<BTreeMap<String, Formula>, Error> {
-        use std::collections::HashSet;
-
         let mut formulas = BTreeMap::new();
         let mut fetched: HashSet<String> = HashSet::new();
-        let mut to_fetch: Vec<String> = vec![name.to_string()];
+        let mut sources: HashMap<String, Option<TapRef>> = HashMap::new();
+
+        let taps: Vec<TapRef> = self
+            .db
+            .list_taps()?
+            .into_iter()
+            .map(|tap| TapRef {
+                owner: tap.owner,
+                repo: tap.repo,
+            })
+            .collect();
+
+        let root_ref = parse_formula_ref(name)?;
+        let mut to_fetch: Vec<FormulaRequest> = vec![FormulaRequest {
+            name: root_ref.name,
+            preferred_tap: root_ref.tap,
+            exact_tap: root_ref.exact_tap,
+        }];
 
         while !to_fetch.is_empty() {
             // Fetch current batch in parallel
-            let batch: Vec<String> = to_fetch
+            let batch: Vec<FormulaRequest> = to_fetch
                 .drain(..)
-                .filter(|n| !fetched.contains(n))
+                .filter(|r| !fetched.contains(&r.name))
                 .collect();
 
             if batch.is_empty() {
@@ -180,34 +262,130 @@ impl Installer {
             }
 
             // Mark as fetched before starting (to avoid re-queueing)
-            for n in &batch {
-                fetched.insert(n.clone());
+            for req in &batch {
+                fetched.insert(req.name.clone());
             }
 
             // Fetch all in parallel
             let futures: Vec<_> = batch
                 .iter()
-                .map(|n| self.api_client.get_formula(n))
+                .map(|req| {
+                    self.fetch_formula_with_resolution(
+                        &req.name,
+                        req.preferred_tap.as_ref(),
+                        req.exact_tap,
+                        &taps,
+                    )
+                })
                 .collect();
 
             let results = futures::future::join_all(futures).await;
 
             // Process results and queue new dependencies
             for (i, result) in results.into_iter().enumerate() {
-                let formula = result?;
+                let (formula, source) = result?;
+                let name = batch[i].name.clone();
 
-                // Queue dependencies for next batch
-                for dep in &formula.dependencies {
-                    if !fetched.contains(dep) && !to_fetch.contains(dep) {
-                        to_fetch.push(dep.clone());
+                if let Some(existing) = sources.get(&name) {
+                    if existing != &source {
+                        return Err(Error::ConflictingFormulaSource {
+                            name,
+                            first: source_label(existing.as_ref()),
+                            second: source_label(source.as_ref()),
+                        });
                     }
                 }
 
-                formulas.insert(batch[i].clone(), formula);
+                sources.insert(name.clone(), source.clone());
+
+                // Queue dependencies for next batch
+                for dep in &formula.dependencies {
+                    let dep_ref = parse_formula_ref(dep)?;
+                    let next_request = FormulaRequest {
+                        name: dep_ref.name,
+                        preferred_tap: dep_ref.tap.or_else(|| source.clone()),
+                        exact_tap: dep_ref.exact_tap,
+                    };
+
+                    if fetched.contains(&next_request.name) {
+                        continue;
+                    }
+
+                    if let Some(existing) = to_fetch.iter().find(|r| r.name == next_request.name) {
+                        if existing.preferred_tap != next_request.preferred_tap
+                            || existing.exact_tap != next_request.exact_tap
+                        {
+                            return Err(Error::ConflictingFormulaSource {
+                                name: next_request.name.clone(),
+                                first: source_label(existing.preferred_tap.as_ref()),
+                                second: source_label(next_request.preferred_tap.as_ref()),
+                            });
+                        }
+
+                        continue;
+                    }
+
+                    to_fetch.push(next_request);
+                }
+
+                formulas.insert(name, formula);
             }
         }
 
         Ok(formulas)
+    }
+
+    async fn fetch_formula_with_resolution(
+        &self,
+        name: &str,
+        preferred_tap: Option<&TapRef>,
+        exact_tap: bool,
+        taps: &[TapRef],
+    ) -> Result<(Formula, Option<TapRef>), Error> {
+        let core_base = self.api_client.base_url();
+
+        if exact_tap {
+            if let Some(tap) = preferred_tap {
+                let base_url = tap_base_url(core_base, tap);
+                let formula = self
+                    .api_client
+                    .get_formula_with_base_url(&base_url, name)
+                    .await?;
+                return Ok((formula, Some(tap.clone())));
+            }
+        }
+
+        let mut candidates: Vec<Option<TapRef>> = Vec::new();
+        if let Some(tap) = preferred_tap {
+            candidates.push(Some(tap.clone()));
+        }
+        for tap in taps {
+            if preferred_tap.map(|p| p != tap).unwrap_or(true) {
+                candidates.push(Some(tap.clone()));
+            }
+        }
+        candidates.push(None);
+
+        for source in candidates {
+            let base_url = match &source {
+                Some(tap) => tap_base_url(core_base, tap),
+                None => core_base.to_string(),
+            };
+
+            match self
+                .api_client
+                .get_formula_with_base_url(&base_url, name)
+                .await
+            {
+                Ok(formula) => return Ok((formula, source)),
+                Err(Error::MissingFormula { .. }) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(Error::MissingFormula {
+            name: name.to_string(),
+        })
     }
 
     /// Execute the install plan
@@ -931,6 +1109,63 @@ mod tests {
         // Both packages should be installed
         assert!(installer.db.get_installed("mainpkg").is_some());
         assert!(installer.db.get_installed("deplib").is_some());
+    }
+
+    #[tokio::test]
+    async fn install_from_explicit_tap() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let bottle = create_bottle_tarball("tappkg");
+        let bottle_sha = sha256_hex(&bottle);
+
+        let formula_json = format!(
+            r#"{{
+                "name": "tappkg",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "arm64_sonoma": {{
+                                "url": "{}/bottles/tappkg-1.0.0.arm64_sonoma.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            mock_server.uri(),
+            bottle_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/user/tools/tappkg.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/bottles/tappkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        installer.install("user/tools/tappkg", true).await.unwrap();
+
+        assert!(installer.db.get_installed("tappkg").is_some());
     }
 
     #[tokio::test]
