@@ -74,13 +74,13 @@ PATHS_TO_ADD=("$ZEROBREW_BIN" "/opt/zerobrew/prefix/bin")
 if ! grep -q "^# zerobrew$" "$SHELL_CONFIG" 2>/dev/null; then
     cat >> "$SHELL_CONFIG" <<EOF
 # zerobrew
-# (from default ~/.cargo/env PATH addition)
-# affix colons on either side of $PATH to simplify matching
+export ZEROBREW_DIR=$ZEROBREW_DIR
+export ZEROBREW_BIN=$ZEROBREW_BIN
 _zb_path_append() {
-    local argpath="$1"
-    case ":${PATH}:" in
-        *:"$argpath":*) ;;
-        *) export PATH="$argpath:$PATH" ;;
+    local argpath="\$1"
+    case ":\${PATH}:" in
+        *:"\$argpath":*) ;;
+        *) export PATH="\$argpath:\$PATH" ;;
     esac;
 }
 EOF
