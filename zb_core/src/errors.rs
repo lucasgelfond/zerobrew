@@ -12,6 +12,8 @@ pub enum Error {
     UnsupportedTap { name: String },
     DependencyCycle { cycle: Vec<String> },
     NotInstalled { name: String },
+    InvalidTap { tap: String },
+    ConflictingFormulaSource { name: String, first: String, second: String },
 }
 
 impl fmt::Display for Error {
@@ -40,6 +42,15 @@ impl fmt::Display for Error {
                 write!(f, "dependency cycle detected: {rendered}")
             }
             Error::NotInstalled { name } => write!(f, "formula '{name}' is not installed"),
+            Error::InvalidTap { tap } => write!(f, "invalid tap '{tap}'"),
+            Error::ConflictingFormulaSource {
+                name,
+                first,
+                second,
+            } => write!(
+                f,
+                "formula '{name}' resolved from multiple taps ({first} vs {second})"
+            ),
         }
     }
 }

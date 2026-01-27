@@ -32,8 +32,20 @@ impl ApiClient {
         self
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
-        let url = format!("{}/{}.json", self.base_url, name);
+        self.get_formula_with_base_url(&self.base_url, name).await
+    }
+
+    pub async fn get_formula_with_base_url(
+        &self,
+        base_url: &str,
+        name: &str,
+    ) -> Result<Formula, Error> {
+        let url = format!("{}/{}.json", base_url, name);
 
         let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
 

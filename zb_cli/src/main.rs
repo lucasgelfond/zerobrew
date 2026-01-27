@@ -63,6 +63,26 @@ enum Commands {
     /// Garbage collect unreferenced store entries
     Gc,
 
+    /// Add a tap or list taps
+    Tap {
+        /// Tap in the form owner/repo (omit to list taps)
+        tap: Option<String>,
+
+        /// Show full tap details when listing
+        #[arg(long)]
+        full: bool,
+    },
+
+    /// Remove a tap
+    Untap {
+        /// Tap in the form owner/repo
+        tap: Option<String>,
+
+        /// Remove all taps
+        #[arg(long)]
+        all: bool,
+    },
+
     /// Reset zerobrew (delete all data for cold install testing)
     Reset {
         /// Skip confirmation prompt
@@ -351,6 +371,17 @@ fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!();
 }
 
+fn parse_tap_name(tap: &str) -> Result<(String, String), zb_core::Error> {
+    let parts: Vec<&str> = tap.split('/').collect();
+    if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+        return Ok((parts[0].to_string(), parts[1].to_string()));
+    }
+
+    Err(zb_core::Error::InvalidTap {
+        tap: tap.to_string(),
+    })
+}
+
 async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     // Handle completion first - it doesn't need the installer
     if let Commands::Completion { shell } = cli.command {
@@ -371,6 +402,80 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     } else {
         // Ensure initialized before other commands
         ensure_init(&cli.root, &cli.prefix)?;
+    }
+
+    if matches!(cli.command, Commands::Tap { .. } | Commands::Untap { .. }) {
+        std::fs::create_dir_all(cli.root.join("db")).map_err(|e| {
+            zb_core::Error::StoreCorruption {
+                message: format!("failed to create db directory: {e}"),
+            }
+        })?;
+
+        let db = zb_io::db::Database::open(&cli.root.join("db/zb.sqlite3"))?;
+
+        match cli.command {
+            Commands::Tap { tap, full } => {
+                if let Some(tap) = tap {
+                    let (owner, repo) = parse_tap_name(&tap)?;
+                    let added = db.add_tap(&owner, &repo)?;
+                    if added {
+                        println!("{} Tapped {}/{}", style("==>").cyan().bold(), owner, repo);
+                    } else {
+                        println!("{} Already tapped {}/{}", style("==>").cyan().bold(), owner, repo);
+                    }
+                } else {
+                    let taps = db.list_taps()?;
+                    if taps.is_empty() {
+                        println!("No taps installed.");
+                    } else {
+                        if full {
+                            for tap in taps {
+                                println!(
+                                    "{}/{} priority={} added_at={}",
+                                    tap.owner, tap.repo, tap.priority, tap.added_at
+                                );
+                            }
+                        } else {
+                            for tap in taps {
+                                println!("{}/{}", tap.owner, tap.repo);
+                            }
+                        }
+                    }
+                }
+
+                return Ok(());
+            }
+            Commands::Untap { tap, all } => {
+                if all {
+                    let taps = db.list_taps()?;
+                    if taps.is_empty() {
+                        println!("No taps installed.");
+                        return Ok(());
+                    }
+
+                    for tap in taps {
+                        let _ = db.remove_tap(&tap.owner, &tap.repo)?;
+                        println!("{} Untapped {}/{}", style("==>").cyan().bold(), tap.owner, tap.repo);
+                    }
+
+                    return Ok(());
+                }
+
+                let tap = tap.ok_or(zb_core::Error::InvalidTap {
+                    tap: "".to_string(),
+                })?;
+                let (owner, repo) = parse_tap_name(&tap)?;
+                let removed = db.remove_tap(&owner, &repo)?;
+                if removed {
+                    println!("{} Untapped {}/{}", style("==>").cyan().bold(), owner, repo);
+                } else {
+                    println!("{} Tap not found: {}/{}", style("==>").cyan().bold(), owner, repo);
+                }
+
+                return Ok(());
+            }
+            _ => {}
+        }
     }
 
     let mut installer = create_installer(&cli.root, &cli.prefix, cli.concurrency)?;
