@@ -29,6 +29,11 @@ impl BlobCache {
         self.blob_path(sha256).exists()
     }
 
+    /// Get the temporary directory path (used by aria2c backend)
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.tmp_dir.clone()
+    }
+
     /// Remove a blob from the cache (used when extraction fails due to corruption)
     pub fn remove_blob(&self, sha256: &str) -> io::Result<bool> {
         let path = self.blob_path(sha256);

@@ -323,16 +323,22 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         ensure_init(&cli.root, &cli.prefix)?;
     }
 
-    let mut installer = create_installer(&cli.root, &cli.prefix, cli.concurrency)?;
+    let mut installer = create_installer(&cli.root, &cli.prefix, cli.concurrency).await?;
 
     match cli.command {
         Commands::Init => unreachable!(), // Handled above
         Commands::Install { formula, no_link } => {
             let start = Instant::now();
+            let backend_info = if installer.is_using_aria2() {
+                format!(" {}", style("(aria2c)").dim())
+            } else {
+                String::new()
+            };
             println!(
-                "{} Installing {}...",
+                "{} Installing {}...{}",
                 style("==>").cyan().bold(),
-                style(&formula).bold()
+                style(&formula).bold(),
+                backend_info
             );
 
             let plan = match installer.plan(&formula).await {

@@ -118,7 +118,21 @@ Concurrency caps (defaults; configurable):
 - `unpack_concurrency = 4`
 - `materialize_concurrency = 4`
 
-### 6.2 Locks (must prevent corruption)
+### 6.2 Download backends
+Zerobrew supports two download backends:
+
+**Built-in (reqwest-based)**
+- Default when aria2c is not available
+- HTTP/2 connection pooling
+- Bounded parallel downloads with deduplication
+
+**aria2c (optional, enabled by default when available)**
+- Multi-connection downloads (4 connections per file, 8 concurrent downloads)
+- Better handling of slow/unreliable connections
+- Resume support for interrupted downloads
+- Automatically detected in PATH; disable with `ZB_DISABLE_ARIA2=1`
+
+### 6.3 Locks (must prevent corruption)
 - Per-blob download lock keyed by expected sha256.
 - Per-store-entry lock keyed by `store_key` (unpack is single-writer).
 - Per-formula install lock keyed by formula name (avoid concurrent installs of same thing).

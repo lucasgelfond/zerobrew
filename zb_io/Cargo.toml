@@ -22,6 +22,8 @@ fs4.workspace = true
 walkdir.workspace = true
 xz2.workspace = true
 zstd.workspace = true
+async-trait.workspace = true
+rand.workspace = true
 zb_core = { path = "../zb_core" }
 
 [dev-dependencies]

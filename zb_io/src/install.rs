@@ -6,7 +6,7 @@ use crate::api::ApiClient;
 use crate::blob::BlobCache;
 use crate::db::Database;
 use crate::download::{
-    DownloadProgressCallback, DownloadRequest, DownloadResult, ParallelDownloader,
+    DownloadBackend, DownloadProgressCallback, DownloadRequest, DownloadResult, DownloaderBackend,
 };
 use crate::link::{LinkedFile, Linker};
 use crate::materialize::Cellar;
@@ -20,7 +20,7 @@ const MAX_CORRUPTION_RETRIES: usize = 3;
 
 pub struct Installer {
     api_client: ApiClient,
-    downloader: ParallelDownloader,
+    downloader: DownloaderBackend,
     store: Store,
     cellar: Cellar,
     linker: Linker,
@@ -48,21 +48,25 @@ struct ProcessedPackage {
 impl Installer {
     pub fn new(
         api_client: ApiClient,
-        blob_cache: BlobCache,
+        downloader: DownloaderBackend,
         store: Store,
         cellar: Cellar,
         linker: Linker,
         db: Database,
-        download_concurrency: usize,
     ) -> Self {
         Self {
             api_client,
-            downloader: ParallelDownloader::new(blob_cache, download_concurrency),
+            downloader,
             store,
             cellar,
             linker,
             db,
         }
+    }
+
+    /// Check if using aria2c download backend
+    pub fn is_using_aria2(&self) -> bool {
+        self.downloader.is_aria2()
     }
 
     /// Resolve dependencies and plan the install
@@ -434,7 +438,7 @@ impl Installer {
 }
 
 /// Create an Installer with standard paths
-pub fn create_installer(
+pub async fn create_installer(
     root: &Path,
     prefix: &Path,
     download_concurrency: usize,
@@ -471,6 +475,10 @@ pub fn create_installer(
     let blob_cache = BlobCache::new(&root.join("cache")).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create blob cache: {e}"),
     })?;
+
+    // Create downloader - automatically uses aria2c if available and enabled
+    let downloader = DownloaderBackend::create(blob_cache, download_concurrency).await;
+
     let store = Store::new(root).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create store: {e}"),
     })?;
@@ -484,19 +492,14 @@ pub fn create_installer(
     let db = Database::open(&root.join("db/zb.sqlite3"))?;
 
     Ok(Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        db,
-        download_concurrency,
+        api_client, downloader, store, cellar, linker, db,
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::download::ParallelDownloader;
     use std::fs;
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
@@ -592,7 +595,14 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(
+            api_client,
+            DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, 4)),
+            store,
+            cellar,
+            linker,
+            db,
+        );
 
         // Install
         installer.install("testpkg", true).await.unwrap();
@@ -666,7 +676,14 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(
+            api_client,
+            DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, 4)),
+            store,
+            cellar,
+            linker,
+            db,
+        );
 
         // Install
         installer.install("uninstallme", true).await.unwrap();
@@ -740,7 +757,14 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(
+            api_client,
+            DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, 4)),
+            store,
+            cellar,
+            linker,
+            db,
+        );
 
         // Install and uninstall
         installer.install("gctest", true).await.unwrap();
@@ -817,7 +841,14 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(
+            api_client,
+            DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, 4)),
+            store,
+            cellar,
+            linker,
+            db,
+        );
 
         // Install but don't uninstall
         installer.install("keepme", true).await.unwrap();
@@ -923,7 +954,14 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(
+            api_client,
+            DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, 4)),
+            store,
+            cellar,
+            linker,
+            db,
+        );
 
         // Install main package (should also install dependency)
         installer.install("mainpkg", true).await.unwrap();
@@ -1020,7 +1058,14 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(
+            api_client,
+            DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, 4)),
+            store,
+            cellar,
+            linker,
+            db,
+        );
 
         // Install root (should install all 5 packages)
         installer.install("root", true).await.unwrap();
@@ -1104,7 +1149,14 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(
+            api_client,
+            DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, 4)),
+            store,
+            cellar,
+            linker,
+            db,
+        );
 
         // Install slow package (which depends on fast)
         // With streaming, fast should be extracted while slow is still downloading
@@ -1202,7 +1254,14 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(
+            api_client,
+            DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, 4)),
+            store,
+            cellar,
+            linker,
+            db,
+        );
 
         // Install - should succeed (first download is valid in this test)
         installer.install("retrypkg", true).await.unwrap();

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use futures_util::StreamExt;
 use futures_util::future::select_all;
 use reqwest::StatusCode;
@@ -13,6 +14,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
 
+use crate::aria2::Aria2Downloader;
 use crate::blob::BlobCache;
 use crate::progress::InstallProgress;
 use zb_core::Error;
@@ -76,6 +78,179 @@ struct CachedToken {
 
 /// Token cache keyed by scope (e.g., "repository:homebrew/core/lz4:pull")
 type TokenCache = Arc<RwLock<HashMap<String, CachedToken>>>;
+
+// ============================================================================
+// GHCR Token Fetcher - Reusable for both built-in and aria2c downloaders
+// ============================================================================
+
+/// Handles GHCR (GitHub Container Registry) authentication token fetching and caching.
+/// This is used by both the built-in downloader and aria2c to get Bearer tokens.
+#[derive(Clone)]
+pub struct GhcrTokenFetcher {
+    client: reqwest::Client,
+    cache: TokenCache,
+}
+
+impl GhcrTokenFetcher {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .user_agent("zerobrew/0.1")
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Get a Bearer token for a GHCR URL, fetching from cache or requesting a new one.
+    /// Returns None if the URL is not a GHCR URL.
+    pub async fn get_token_for_url(&self, url: &str) -> Result<Option<String>, Error> {
+        // Only handle GHCR URLs
+        if !url.contains("ghcr.io") {
+            return Ok(None);
+        }
+
+        // Try cache first
+        if let Some(token) = self.get_cached_token(url).await {
+            return Ok(Some(token));
+        }
+
+        // Need to fetch a new token - make a request to get the WWW-Authenticate challenge
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })?;
+
+        if response.status() != StatusCode::UNAUTHORIZED {
+            // No auth needed or different error
+            return Ok(None);
+        }
+
+        let www_auth = response
+            .headers()
+            .get(WWW_AUTHENTICATE)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| Error::NetworkFailure {
+                message: "GHCR returned 401 without WWW-Authenticate header".to_string(),
+            })?;
+
+        let token = self.fetch_token(www_auth).await?;
+        Ok(Some(token))
+    }
+
+    async fn get_cached_token(&self, url: &str) -> Option<String> {
+        let scope_prefix = extract_scope_prefix(url)?;
+        let cache = self.cache.read().await;
+        let now = Instant::now();
+
+        for (scope, cached) in cache.iter() {
+            if scope.starts_with(&scope_prefix) && cached.expires_at > now {
+                return Some(cached.token.clone());
+            }
+        }
+        None
+    }
+
+    async fn fetch_token(&self, www_authenticate: &str) -> Result<String, Error> {
+        let (realm, service, scope) = parse_www_authenticate(www_authenticate)?;
+
+        // Check cache again (might have been fetched by another task)
+        {
+            let cache = self.cache.read().await;
+            if let Some(cached) = cache.get(&scope)
+                && cached.expires_at > Instant::now()
+            {
+                return Ok(cached.token.clone());
+            }
+        }
+
+        let token_url =
+            reqwest::Url::parse_with_params(&realm, &[("service", &service), ("scope", &scope)])
+                .map_err(|e| Error::NetworkFailure {
+                    message: format!("failed to construct token URL: {e}"),
+                })?;
+
+        // Anonymous token request (homebrew bottles are public)
+        let response =
+            self.client
+                .get(token_url)
+                .send()
+                .await
+                .map_err(|e| Error::NetworkFailure {
+                    message: format!("token request failed: {e}"),
+                })?;
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("token request returned HTTP {}", response.status()),
+            });
+        }
+
+        let token_response: TokenResponse =
+            response.json().await.map_err(|e| Error::NetworkFailure {
+                message: format!("failed to parse token response: {e}"),
+            })?;
+
+        // Cache the token
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(
+                scope,
+                CachedToken {
+                    token: token_response.token.clone(),
+                    expires_at: Instant::now() + Duration::from_secs(240),
+                },
+            );
+        }
+
+        Ok(token_response.token)
+    }
+}
+
+impl Default for GhcrTokenFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Download Backend Trait
+// ============================================================================
+
+pub struct DownloadRequest {
+    pub url: String,
+    pub sha256: String,
+    pub name: String,
+}
+
+/// Trait for download backends (built-in reqwest-based or aria2c)
+#[async_trait]
+pub trait DownloadBackend: Send + Sync {
+    /// Stream downloads as they complete, allowing concurrent extraction.
+    fn download_streaming(
+        &self,
+        requests: Vec<DownloadRequest>,
+        progress: Option<DownloadProgressCallback>,
+    ) -> mpsc::Receiver<Result<DownloadResult, Error>>;
+
+    /// Download a single file (used for retries after corruption)
+    async fn download_single(
+        &self,
+        request: DownloadRequest,
+        progress: Option<DownloadProgressCallback>,
+    ) -> Result<PathBuf, Error>;
+
+    /// Remove a blob from the cache (used when extraction fails due to corruption)
+    fn remove_blob(&self, sha256: &str) -> bool;
+}
+
+// ============================================================================
+// Built-in Downloader (reqwest-based)
+// ============================================================================
 
 pub struct Downloader {
     client: reqwest::Client,
@@ -569,11 +744,9 @@ fn parse_www_authenticate(header: &str) -> Result<(String, String, String), Erro
     Ok((realm, service, scope))
 }
 
-pub struct DownloadRequest {
-    pub url: String,
-    pub sha256: String,
-    pub name: String,
-}
+// ============================================================================
+// Parallel Downloader (built-in, reqwest-based)
+// ============================================================================
 
 type InflightMap = HashMap<String, Arc<tokio::sync::broadcast::Sender<Result<PathBuf, String>>>>;
 
@@ -581,36 +754,17 @@ pub struct ParallelDownloader {
     downloader: Arc<Downloader>,
     semaphore: Arc<Semaphore>,
     inflight: Arc<Mutex<InflightMap>>,
+    blob_cache: BlobCache,
 }
 
 impl ParallelDownloader {
     pub fn new(blob_cache: BlobCache, concurrency: usize) -> Self {
         Self {
-            downloader: Arc::new(Downloader::new(blob_cache)),
+            downloader: Arc::new(Downloader::new(blob_cache.clone())),
             semaphore: Arc::new(Semaphore::new(concurrency)),
             inflight: Arc::new(Mutex::new(HashMap::new())),
+            blob_cache,
         }
-    }
-
-    /// Remove a blob from the cache (used when extraction fails due to corruption)
-    pub fn remove_blob(&self, sha256: &str) -> bool {
-        self.downloader.remove_blob(sha256)
-    }
-
-    /// Download a single file (used for retries after corruption)
-    pub async fn download_single(
-        &self,
-        request: DownloadRequest,
-        progress: Option<DownloadProgressCallback>,
-    ) -> Result<PathBuf, Error> {
-        Self::download_with_dedup(
-            self.downloader.clone(),
-            self.semaphore.clone(),
-            self.inflight.clone(),
-            request,
-            progress,
-        )
-        .await
     }
 
     pub async fn download_all(
@@ -648,42 +802,6 @@ impl ParallelDownloader {
         }
 
         Ok(results)
-    }
-
-    /// Stream downloads as they complete, allowing concurrent extraction.
-    /// Returns a receiver that yields DownloadResult for each completed download.
-    /// The downloads are started immediately and results are sent as soon as each completes.
-    pub fn download_streaming(
-        &self,
-        requests: Vec<DownloadRequest>,
-        progress: Option<DownloadProgressCallback>,
-    ) -> mpsc::Receiver<Result<DownloadResult, Error>> {
-        let (tx, rx) = mpsc::channel(requests.len().max(1));
-
-        for (index, req) in requests.into_iter().enumerate() {
-            let downloader = self.downloader.clone();
-            let semaphore = self.semaphore.clone();
-            let inflight = self.inflight.clone();
-            let progress = progress.clone();
-            let tx = tx.clone();
-            let name = req.name.clone();
-            let sha256 = req.sha256.clone();
-
-            tokio::spawn(async move {
-                let result =
-                    Self::download_with_dedup(downloader, semaphore, inflight, req, progress).await;
-                let _ = tx
-                    .send(result.map(|blob_path| DownloadResult {
-                        name,
-                        sha256,
-                        blob_path,
-                        index,
-                    }))
-                    .await;
-            });
-        }
-
-        rx
     }
 
     async fn download_with_dedup(
@@ -742,6 +860,132 @@ impl ParallelDownloader {
         }
 
         result
+    }
+}
+
+#[async_trait]
+impl DownloadBackend for ParallelDownloader {
+    fn download_streaming(
+        &self,
+        requests: Vec<DownloadRequest>,
+        progress: Option<DownloadProgressCallback>,
+    ) -> mpsc::Receiver<Result<DownloadResult, Error>> {
+        let (tx, rx) = mpsc::channel(requests.len().max(1));
+
+        for (index, req) in requests.into_iter().enumerate() {
+            let downloader = self.downloader.clone();
+            let semaphore = self.semaphore.clone();
+            let inflight = self.inflight.clone();
+            let progress = progress.clone();
+            let tx = tx.clone();
+            let name = req.name.clone();
+            let sha256 = req.sha256.clone();
+
+            tokio::spawn(async move {
+                let result =
+                    Self::download_with_dedup(downloader, semaphore, inflight, req, progress).await;
+                let _ = tx
+                    .send(result.map(|blob_path| DownloadResult {
+                        name,
+                        sha256,
+                        blob_path,
+                        index,
+                    }))
+                    .await;
+            });
+        }
+
+        rx
+    }
+
+    async fn download_single(
+        &self,
+        request: DownloadRequest,
+        progress: Option<DownloadProgressCallback>,
+    ) -> Result<PathBuf, Error> {
+        Self::download_with_dedup(
+            self.downloader.clone(),
+            self.semaphore.clone(),
+            self.inflight.clone(),
+            request,
+            progress,
+        )
+        .await
+    }
+
+    fn remove_blob(&self, sha256: &str) -> bool {
+        self.blob_cache.remove_blob(sha256).unwrap_or(false)
+    }
+}
+
+// ============================================================================
+// Downloader Enum - Unified interface for both backends
+// ============================================================================
+
+/// Unified downloader that can use either built-in reqwest or aria2c
+pub enum DownloaderBackend {
+    Builtin(ParallelDownloader),
+    Aria2(Aria2Downloader),
+}
+
+impl DownloaderBackend {
+    /// Create appropriate downloader, with warning on aria2c failure
+    pub async fn create(blob_cache: BlobCache, concurrency: usize) -> Self {
+        use crate::aria2;
+
+        if !aria2::should_use_aria2() {
+            return DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, concurrency));
+        }
+
+        let Some(aria2c_path) = aria2::detect_aria2c() else {
+            return DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, concurrency));
+        };
+
+        match Aria2Downloader::new(aria2c_path, blob_cache.clone()).await {
+            Ok(dl) => DownloaderBackend::Aria2(dl),
+            Err(e) => {
+                eprintln!("warning: aria2c initialization failed: {e}");
+                eprintln!("         falling back to built-in downloader");
+                DownloaderBackend::Builtin(ParallelDownloader::new(blob_cache, concurrency))
+            }
+        }
+    }
+
+    /// Check if using aria2c backend
+    pub fn is_aria2(&self) -> bool {
+        matches!(self, DownloaderBackend::Aria2(_))
+    }
+}
+
+#[async_trait]
+impl DownloadBackend for DownloaderBackend {
+    fn download_streaming(
+        &self,
+        requests: Vec<DownloadRequest>,
+        progress: Option<DownloadProgressCallback>,
+    ) -> mpsc::Receiver<Result<DownloadResult, Error>> {
+        match self {
+            DownloaderBackend::Builtin(d) => d.download_streaming(requests, progress),
+            DownloaderBackend::Aria2(d) => d.download_streaming(requests, progress),
+        }
+    }
+
+    async fn download_single(
+        &self,
+        request: DownloadRequest,
+        progress: Option<DownloadProgressCallback>,
+    ) -> Result<PathBuf, Error> {
+        match self {
+            DownloaderBackend::Builtin(d) => d.download_single(request, progress).await,
+            DownloaderBackend::Aria2(d) => d.download_single(request, progress).await,
+        }
+    }
+
+    fn remove_blob(&self, sha256: &str) -> bool {
+        match self {
+            DownloaderBackend::Builtin(d) => d.remove_blob(sha256),
+            DownloaderBackend::Aria2(d) => d.remove_blob(sha256),
+        }
     }
 }
 
@@ -934,5 +1178,36 @@ mod tests {
             assert!(path.exists());
         }
         // Mock expectation of 1 call will verify deduplication worked
+    }
+
+    #[tokio::test]
+    async fn download_backend_trait_works_with_parallel_downloader() {
+        let mock_server = MockServer::start().await;
+        let content = b"backend test";
+        let sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        Mock::given(method("GET"))
+            .and(path("/backend.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(content.to_vec()))
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader: Box<dyn DownloadBackend> = Box::new(ParallelDownloader::new(blob_cache, 4));
+
+        let request = DownloadRequest {
+            url: format!("{}/backend.tar.gz", mock_server.uri()),
+            sha256: sha256.clone(),
+            name: "backend_test".to_string(),
+        };
+
+        let result = downloader.download_single(request, None).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().exists());
     }
 }

@@ -77,6 +77,16 @@ Tests:
 - Atomicity (no partial final blobs)
 - Checksum mismatch handling
 
+### D2) `zb_io/aria2.rs` — aria2c download backend
+Responsibilities:
+- Manage aria2c daemon lifecycle (spawn/shutdown)
+- JSON-RPC client for aria2c communication
+- Download with multi-connection support
+- Automatic fallback detection (`ZB_DISABLE_ARIA2=1` to disable)
+Tests:
+- Environment variable behavior
+- aria2c detection logic
+
 ### E) `zb_io/store.rs` — Unpacked store
 Responsibilities:
 - Unpack bottle into immutable store entry keyed by store_key

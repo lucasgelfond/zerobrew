@@ -45,6 +45,25 @@ zb reset         # uninstall everything
 zb gc                # garbage collect unused store entries
 ```
 
+### Accelerated downloads with aria2c
+
+zerobrew automatically uses aria2c for faster downloads if it's installed. aria2c provides:
+- Multi-connection downloads (4 connections per file)
+- Better handling of slow/unreliable connections
+- Resume support for interrupted downloads
+
+```bash
+brew install aria2   # or your preferred method
+zb install ffmpeg    # automatically uses aria2c if available
+```
+
+To disable aria2c and use the built-in downloader:
+
+```bash
+export ZB_DISABLE_ARIA2=1
+zb install ffmpeg    # uses built-in downloader
+```
+
 ## Why is it faster?
 
 - **Content-addressable store**: packages are stored by sha256 hash (at `/opt/zerobrew/store/{sha256}/`). Reinstalls are instant if the store entry exists.

@@ -43,6 +43,17 @@ zerobrew improvements todo
       - auth token caching with 4-minute TTL (GHCR tokens)
       - test: streaming_extraction_processes_as_downloads_complete
 
+[x] 8. aria2c download backend
+      - optional aria2c integration for faster multi-connection downloads
+      - automatically uses aria2c if detected in PATH (enabled by default)
+      - disable with ZB_DISABLE_ARIA2=1 environment variable
+      - aria2c daemon management via JSON-RPC
+      - 4 connections per file, 8 concurrent downloads
+      - DownloadBackend trait for pluggable backends
+      - DownloaderBackend enum for unified interface
+      - GhcrTokenFetcher extracted for reuse across backends
+      - tests: env var behavior, backend trait implementation
+
 remaining optimization ideas:
 - lazy signing (sign on first exec, not install)
 - prefetch dependency metadata during downloads
