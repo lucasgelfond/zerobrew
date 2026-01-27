@@ -1,14 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use futures_util::future::select_all;
 use reqwest::StatusCode;
-use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH, HeaderValue, WWW_AUTHENTICATE};
+use reqwest::header::{
+    ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, HeaderValue, WWW_AUTHENTICATE,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
@@ -23,6 +25,57 @@ const RACING_CONNECTIONS: usize = 1;
 
 /// Delay between starting each racing connection (ms)
 const RACING_STAGGER_MS: u64 = 200;
+
+/// Minimum file size to use chunked downloads (10MB)
+const CHUNKED_DOWNLOAD_THRESHOLD: u64 = 10 * 1024 * 1024;
+
+/// Global download concurrency limit
+/// Total number of concurrent connections across all downloads to avoid
+/// overwhelming servers and the local network. Based on industry best practices
+/// (npm uses 20-50, we use a conservative 20 for HTTP/1.1 compatibility).
+const GLOBAL_DOWNLOAD_CONCURRENCY: usize = 20;
+
+/// Maximum concurrent chunk downloads per file
+/// Chosen to divide GLOBAL_DOWNLOAD_CONCURRENCY among multiple large file downloads.
+/// With 20 global concurrency, we can have 3-4 large files downloading concurrently.
+const MAX_CONCURRENT_CHUNKS: usize = 6;
+
+/// Maximum retry attempts for failed chunk downloads
+const MAX_CHUNK_RETRIES: u32 = 3;
+
+fn calculate_chunk_size(file_size: u64) -> u64 {
+    const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
+    const MAX_CHUNK_SIZE: u64 = 20 * 1024 * 1024;
+
+    let target_chunks = MAX_CONCURRENT_CHUNKS as u64;
+    let chunk_size = file_size / target_chunks;
+
+    chunk_size.clamp(MIN_CHUNK_SIZE, MAX_CHUNK_SIZE)
+}
+
+/// Context for chunk download operations
+struct ChunkDownloadContext<'a> {
+    client: &'a reqwest::Client,
+    token_cache: &'a TokenCache,
+    url: &'a str,
+    progress: Option<DownloadProgressCallback>,
+    name: Option<String>,
+    file_size: u64,
+    total_downloaded: Arc<AtomicU64>,
+}
+
+/// Context for chunked download operations
+struct ChunkedDownloadContext<'a> {
+    blob_cache: &'a BlobCache,
+    client: &'a reqwest::Client,
+    token_cache: &'a TokenCache,
+    url: &'a str,
+    expected_sha256: &'a str,
+    name: Option<String>,
+    progress: Option<DownloadProgressCallback>,
+    file_size: u64,
+    global_semaphore: &'a Arc<Semaphore>,
+}
 
 /// Callback for download progress updates
 pub type DownloadProgressCallback = Arc<dyn Fn(InstallProgress) + Send + Sync>;
@@ -82,10 +135,15 @@ pub struct Downloader {
     client: reqwest::Client,
     blob_cache: BlobCache,
     token_cache: TokenCache,
+    global_semaphore: Option<Arc<Semaphore>>,
 }
 
 impl Downloader {
     pub fn new(blob_cache: BlobCache) -> Self {
+        Self::with_semaphore(blob_cache, None)
+    }
+
+    pub fn with_semaphore(blob_cache: BlobCache, semaphore: Option<Arc<Semaphore>>) -> Self {
         // Use HTTP/2 with connection pooling for better performance
         Self {
             client: reqwest::Client::builder()
@@ -102,6 +160,7 @@ impl Downloader {
                 .unwrap_or_else(|_| reqwest::Client::new()),
             blob_cache,
             token_cache: Arc::new(RwLock::new(HashMap::new())),
+            global_semaphore: semaphore,
         }
     }
 
@@ -152,6 +211,64 @@ impl Downloader {
         name: Option<String>,
         progress: Option<DownloadProgressCallback>,
     ) -> Result<PathBuf, Error> {
+        let (use_chunked, file_size) = {
+            let cached_token =
+                get_cached_token_for_url_internal(&self.token_cache, primary_url).await;
+
+            let mut request = self.client.head(primary_url);
+            if let Some(token) = &cached_token {
+                request = request.header(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+                );
+            }
+
+            match request.send().await {
+                Ok(response) if response.status().is_success() => {
+                    let content_length = response
+                        .headers()
+                        .get(CONTENT_LENGTH)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok());
+
+                    let supports_ranges = server_supports_ranges(&response);
+
+                    if let Some(size) = content_length {
+                        (
+                            supports_ranges && size >= CHUNKED_DOWNLOAD_THRESHOLD,
+                            Some(size),
+                        )
+                    } else {
+                        (false, None)
+                    }
+                }
+                _ => (false, None),
+            }
+        };
+
+        if use_chunked && let Some(size) = file_size {
+            // Use global semaphore if available, otherwise create a temporary one
+            let semaphore = self
+                .global_semaphore
+                .clone()
+                .unwrap_or_else(|| Arc::new(Semaphore::new(GLOBAL_DOWNLOAD_CONCURRENCY)));
+
+            let ctx = ChunkedDownloadContext {
+                blob_cache: &self.blob_cache,
+                client: &self.client,
+                token_cache: &self.token_cache,
+                url: primary_url,
+                expected_sha256,
+                name,
+                progress,
+                file_size: size,
+                global_semaphore: &semaphore,
+            };
+
+            return download_with_chunks(&ctx).await;
+        }
+
+        // Otherwise, use the existing racing logic
         let done = Arc::new(AtomicBool::new(false));
         let done_notify = Arc::new(Notify::new());
         let body_download_gate = Arc::new(Semaphore::new(1));
@@ -444,6 +561,347 @@ async fn fetch_bearer_token_internal(
     Ok(token_response.token)
 }
 
+struct ChunkRange {
+    offset: u64,
+    size: u64,
+}
+
+fn server_supports_ranges(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get(ACCEPT_RANGES)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == "bytes")
+        .unwrap_or(false)
+}
+
+fn calculate_chunk_ranges(file_size: u64) -> Vec<ChunkRange> {
+    let chunk_size = calculate_chunk_size(file_size);
+    let mut chunks = Vec::new();
+    let mut offset = 0;
+
+    while offset < file_size {
+        let remaining = file_size - offset;
+        let chunk_size = remaining.min(chunk_size);
+        chunks.push(ChunkRange {
+            offset,
+            size: chunk_size,
+        });
+        offset += chunk_size;
+    }
+
+    chunks
+}
+
+async fn download_chunk(
+    ctx: &ChunkDownloadContext<'_>,
+    chunk: &ChunkRange,
+) -> Result<Vec<u8>, Error> {
+    let range_header = format!("bytes={}-{}", chunk.offset, chunk.offset + chunk.size - 1);
+
+    let mut last_error = None;
+
+    for attempt in 0..=MAX_CHUNK_RETRIES {
+        let cached_token = get_cached_token_for_url_internal(ctx.token_cache, ctx.url).await;
+
+        let mut request = ctx
+            .client
+            .get(ctx.url)
+            .header("Range", range_header.clone());
+        if let Some(token) = &cached_token {
+            request = request.header(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+            );
+        }
+
+        match request.send().await {
+            Ok(response) => {
+                if response.status() == StatusCode::UNAUTHORIZED {
+                    let www_auth = match response.headers().get(WWW_AUTHENTICATE) {
+                        Some(value) => value.to_str().map_err(|_| Error::NetworkFailure {
+                            message: "WWW-Authenticate header contains invalid characters"
+                                .to_string(),
+                        })?,
+                        None => {
+                            return Err(Error::NetworkFailure {
+                                message: "server returned 401 without WWW-Authenticate header"
+                                    .to_string(),
+                            });
+                        }
+                    };
+
+                    match fetch_bearer_token_internal(ctx.client, ctx.token_cache, www_auth).await {
+                        Ok(_new_token) => {
+                            last_error = Some(Error::NetworkFailure {
+                                message: "token expired, retrying with new token".to_string(),
+                            });
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(Error::NetworkFailure {
+                                message: format!("failed to refresh token: {e}"),
+                            });
+                        }
+                    }
+                }
+
+                if let Some(content_range) = response.headers().get(CONTENT_RANGE) {
+                    let range_str = content_range.to_str().unwrap_or("");
+                    if !range_str.contains(&format!(
+                        "{}-{}",
+                        chunk.offset,
+                        chunk.offset + chunk.size - 1
+                    )) {
+                        return Err(Error::NetworkFailure {
+                            message: format!(
+                                "invalid content-range: expected bytes {}-{}, got: {}",
+                                chunk.offset,
+                                chunk.offset + chunk.size - 1,
+                                range_str
+                            ),
+                        });
+                    }
+                }
+
+                if !response.status().is_success() {
+                    last_error = Some(Error::NetworkFailure {
+                        message: format!("chunk download returned HTTP {}", response.status()),
+                    });
+
+                    if response.status().is_server_error() && attempt < MAX_CHUNK_RETRIES {
+                        tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+
+                let mut chunk_data = Vec::with_capacity(chunk.size as usize);
+                let mut stream = response.bytes_stream();
+
+                while let Some(item) = stream.next().await {
+                    let bytes = item.map_err(|e| Error::NetworkFailure {
+                        message: format!("failed to read chunk bytes: {e}"),
+                    })?;
+
+                    chunk_data.extend_from_slice(&bytes);
+
+                    if let (Some(cb), Some(n)) = (&ctx.progress, &ctx.name) {
+                        let downloaded = ctx
+                            .total_downloaded
+                            .fetch_add(bytes.len() as u64, Ordering::Release);
+                        cb(InstallProgress::DownloadProgress {
+                            name: n.clone(),
+                            downloaded: downloaded + bytes.len() as u64,
+                            total_bytes: Some(ctx.file_size),
+                        });
+                    }
+                }
+
+                if chunk_data.len() != chunk.size as usize {
+                    return Err(Error::NetworkFailure {
+                        message: format!(
+                            "chunk size mismatch: expected {} bytes, got {} bytes",
+                            chunk.size,
+                            chunk_data.len()
+                        ),
+                    });
+                }
+
+                return Ok(chunk_data);
+            }
+            Err(e) => {
+                last_error = Some(Error::NetworkFailure {
+                    message: format!("chunk download failed: {e}"),
+                });
+
+                // Retry on network errors
+                if attempt < MAX_CHUNK_RETRIES {
+                    tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
+                    continue;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| Error::NetworkFailure {
+        message: "chunk download failed after retries".to_string(),
+    }))
+}
+
+/// Download a file using parallel chunk requests
+async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBuf, Error> {
+    let chunks = calculate_chunk_ranges(ctx.file_size);
+
+    if let (Some(cb), Some(n)) = (&ctx.progress, &ctx.name) {
+        cb(InstallProgress::DownloadStarted {
+            name: n.clone(),
+            total_bytes: Some(ctx.file_size),
+        });
+    }
+
+    // Create output file early for streaming writes
+    let mut writer = ctx
+        .blob_cache
+        .start_write(ctx.expected_sha256)
+        .map_err(|e| Error::NetworkFailure {
+            message: format!("failed to create blob writer: {e}"),
+        })?;
+
+    // Track expected chunk sizes for validation
+    let expected_chunks: BTreeMap<u64, u64> = chunks.iter().map(|c| (c.offset, c.size)).collect();
+    let total_chunks = chunks.len();
+
+    // Channel to receive completed chunks
+    let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel::<(Vec<u8>, u64)>();
+
+    let total_downloaded = Arc::new(AtomicU64::new(0));
+
+    // Spawn download tasks and collect handles
+    let mut handles = Vec::new();
+    for chunk in chunks {
+        let client = ctx.client.clone();
+        let token_cache = ctx.token_cache.clone();
+        let url = ctx.url.to_string();
+        let global_semaphore = ctx.global_semaphore.clone();
+        let total_downloaded = total_downloaded.clone();
+        let progress = ctx.progress.clone();
+        let name = ctx.name.clone();
+        let chunk_tx = chunk_tx.clone();
+        let file_size = ctx.file_size;
+
+        let handle = tokio::spawn(async move {
+            // Acquire permit from global semaphore
+            let _permit = global_semaphore
+                .acquire()
+                .await
+                .map_err(|e| Error::NetworkFailure {
+                    message: format!("global semaphore error: {e}"),
+                })?;
+
+            let chunk_ctx = ChunkDownloadContext {
+                client: &client,
+                token_cache: &token_cache,
+                url: &url,
+                progress: progress.clone(),
+                name: name.clone(),
+                file_size,
+                total_downloaded: total_downloaded.clone(),
+            };
+
+            let chunk_data = download_chunk(&chunk_ctx, &chunk).await?;
+
+            chunk_tx
+                .send((chunk_data, chunk.offset))
+                .map_err(|e| Error::NetworkFailure {
+                    message: format!("failed to send chunk: {e}"),
+                })?;
+
+            Ok::<(), Error>(())
+        });
+
+        handles.push(handle);
+    }
+
+    // Drop our sender so the channel closes when all tasks complete
+    drop(chunk_tx);
+
+    // Track next expected offset for streaming writes
+    let mut next_expected_offset: u64 = 0;
+    let mut received_chunks = BTreeMap::new(); // Only buffer out-of-order chunks
+    let mut chunks_written = 0u64;
+    let mut hasher = Sha256::new();
+
+    while let Some((chunk_data, offset)) = chunk_rx.recv().await {
+        // Validate chunk size matches expected
+        let expected_size = expected_chunks
+            .get(&offset)
+            .ok_or_else(|| Error::NetworkFailure {
+                message: format!("received unexpected chunk at offset {}", offset),
+            })?;
+
+        if chunk_data.len() != *expected_size as usize {
+            return Err(Error::NetworkFailure {
+                message: format!(
+                    "chunk size mismatch at offset {}: expected {} bytes, got {} bytes",
+                    offset,
+                    expected_size,
+                    chunk_data.len()
+                ),
+            });
+        }
+
+        received_chunks.insert(offset, chunk_data);
+        chunks_written += 1;
+
+        while let Some((offset, _chunk_data)) = received_chunks.first_key_value() {
+            if *offset != next_expected_offset {
+                break;
+            }
+
+            let (_, chunk_data) = received_chunks.pop_first().unwrap();
+            hasher.update(&chunk_data);
+            writer
+                .write_all(&chunk_data)
+                .map_err(|e| Error::NetworkFailure {
+                    message: format!(
+                        "failed to write chunk at offset {}: {e}",
+                        next_expected_offset
+                    ),
+                })?;
+
+            next_expected_offset += chunk_data.len() as u64;
+        }
+    }
+
+    // Wait for all download tasks to complete and check for errors
+    for handle in handles {
+        handle.await.map_err(|e| Error::NetworkFailure {
+            message: format!("chunk download task failed: {e}"),
+        })??;
+    }
+
+    if chunks_written as usize != total_chunks {
+        return Err(Error::NetworkFailure {
+            message: format!(
+                "expected {} chunks, received {}",
+                total_chunks, chunks_written
+            ),
+        });
+    }
+
+    if next_expected_offset != ctx.file_size {
+        return Err(Error::NetworkFailure {
+            message: format!(
+                "incomplete write: expected {} bytes, wrote {} bytes",
+                ctx.file_size, next_expected_offset
+            ),
+        });
+    }
+
+    let actual_hash = format!("{:x}", hasher.finalize());
+
+    if actual_hash != ctx.expected_sha256 {
+        return Err(Error::ChecksumMismatch {
+            expected: ctx.expected_sha256.to_string(),
+            actual: actual_hash,
+        });
+    }
+
+    writer.flush().map_err(|e| Error::NetworkFailure {
+        message: format!("failed to flush download: {e}"),
+    })?;
+
+    if let (Some(cb), Some(n)) = (&ctx.progress, &ctx.name) {
+        cb(InstallProgress::DownloadCompleted {
+            name: n.clone(),
+            total_bytes: ctx.file_size,
+        });
+    }
+
+    writer.commit()
+}
+
 async fn download_response_internal(
     blob_cache: &BlobCache,
     response: reqwest::Response,
@@ -586,10 +1044,28 @@ pub struct ParallelDownloader {
 }
 
 impl ParallelDownloader {
-    pub fn new(blob_cache: BlobCache, concurrency: usize) -> Self {
+    pub fn new(blob_cache: BlobCache) -> Self {
+        let semaphore = Arc::new(Semaphore::new(GLOBAL_DOWNLOAD_CONCURRENCY));
         Self {
-            downloader: Arc::new(Downloader::new(blob_cache)),
-            semaphore: Arc::new(Semaphore::new(concurrency)),
+            downloader: Arc::new(Downloader::with_semaphore(
+                blob_cache,
+                Some(semaphore.clone()),
+            )),
+            semaphore,
+            inflight: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Create a new ParallelDownloader with custom concurrency limit
+    /// This allows for experimentation and tuning of the optimal concurrency level.
+    pub fn with_concurrency(blob_cache: BlobCache, concurrency: usize) -> Self {
+        let semaphore = Arc::new(Semaphore::new(concurrency));
+        Self {
+            downloader: Arc::new(Downloader::with_semaphore(
+                blob_cache,
+                Some(semaphore.clone()),
+            )),
+            semaphore,
             inflight: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -870,7 +1346,7 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let blob_cache = BlobCache::new(tmp.path()).unwrap();
-        let downloader = ParallelDownloader::new(blob_cache, 2); // Limit to 2 concurrent
+        let downloader = ParallelDownloader::new(blob_cache); // Uses global concurrency
 
         // Create 5 different download requests
         let requests: Vec<_> = (0..5)
@@ -918,7 +1394,7 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let blob_cache = BlobCache::new(tmp.path()).unwrap();
-        let downloader = ParallelDownloader::new(blob_cache, 4);
+        let downloader = ParallelDownloader::new(blob_cache);
 
         // Create 5 requests for the SAME blob
         let requests: Vec<_> = (0..5)
@@ -936,5 +1412,274 @@ mod tests {
             assert!(path.exists());
         }
         // Mock expectation of 1 call will verify deduplication worked
+    }
+
+    #[tokio::test]
+    async fn chunked_download_for_large_files() {
+        let mock_server = MockServer::start().await;
+
+        let large_content = vec![0xABu8; 15 * 1024 * 1024];
+        let actual_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(&large_content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        Mock::given(method("HEAD"))
+            .and(path("/large.tar.gz"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Accept-Ranges", "bytes")
+                    .append_header("Content-Length", large_content.len().to_string()),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let range_requests = Arc::new(AtomicUsize::new(0));
+        let range_requests_clone = range_requests.clone();
+        let large_content_for_closure = large_content.clone();
+
+        Mock::given(method("GET"))
+            .and(path("/large.tar.gz"))
+            .respond_with(move |req: &wiremock::Request| {
+                // Check if Range header is present
+                if let Some(range_header) = req.headers.get("Range") {
+                    range_requests_clone.fetch_add(1, Ordering::SeqCst);
+
+                    // Parse Range header (format: "bytes=start-end")
+                    let range_str = range_header.to_str().unwrap();
+                    let range_part = range_str.strip_prefix("bytes=").unwrap();
+                    let (start_str, end_str) = range_part.split_once('-').unwrap();
+                    let start: usize = start_str.parse().unwrap();
+                    let end: usize = end_str.parse().unwrap();
+
+                    let chunk = &large_content_for_closure[start..=end];
+                    ResponseTemplate::new(206) // 206 Partial Content
+                        .append_header("Content-Length", chunk.len().to_string())
+                        .append_header("Content-Range", format!("bytes {}-{}/{}", start, end, large_content_for_closure.len()))
+                        .set_body_bytes(chunk.to_vec())
+                } else {
+                    // Fallback to full content
+                    ResponseTemplate::new(200).set_body_bytes(large_content_for_closure.clone())
+                }
+            })
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader = Downloader::new(blob_cache);
+
+        let url = format!("{}/large.tar.gz", mock_server.uri());
+        let result = downloader.download(&url, &actual_sha256).await;
+
+        assert!(result.is_ok(), "Download failed: {:?}", result.err());
+        let blob_path = result.unwrap();
+        assert!(blob_path.exists());
+
+        let range_count = range_requests.load(Ordering::SeqCst);
+        assert!(
+            range_count > 0,
+            "Expected multiple Range requests, got {}",
+            range_count
+        );
+
+        let downloaded_content = std::fs::read(&blob_path).unwrap();
+        assert_eq!(downloaded_content.len(), large_content.len());
+        assert_eq!(downloaded_content, large_content);
+    }
+
+    #[tokio::test]
+    async fn fallback_to_normal_download_when_ranges_not_supported() {
+        let mock_server = MockServer::start().await;
+
+        let large_content = vec![0xCDu8; 15 * 1024 * 1024];
+        let actual_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(&large_content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        Mock::given(method("HEAD"))
+            .and(path("/large.tar.gz"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Content-Length", large_content.len().to_string()),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/large.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(large_content.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader = Downloader::new(blob_cache);
+
+        let url = format!("{}/large.tar.gz", mock_server.uri());
+        let result = downloader.download(&url, &actual_sha256).await;
+
+        assert!(result.is_ok());
+        let blob_path = result.unwrap();
+        assert!(blob_path.exists());
+
+        let downloaded_content = std::fs::read(&blob_path).unwrap();
+        assert_eq!(downloaded_content, large_content);
+    }
+
+    #[tokio::test]
+    async fn small_files_dont_use_chunked_download() {
+        let mock_server = MockServer::start().await;
+
+        let small_content = vec![0xEFu8; 1024 * 1024];
+        let actual_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(&small_content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        Mock::given(method("HEAD"))
+            .and(path("/small.tar.gz"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Accept-Ranges", "bytes")
+                    .append_header("Content-Length", small_content.len().to_string()),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let range_used = Arc::new(AtomicUsize::new(0));
+        let range_used_clone = range_used.clone();
+        let small_content_for_closure = small_content.clone();
+
+        Mock::given(method("GET"))
+            .and(path("/small.tar.gz"))
+            .respond_with(move |req: &wiremock::Request| {
+                if req.headers.get("Range").is_some() {
+                    range_used_clone.fetch_add(1, Ordering::SeqCst);
+                }
+                ResponseTemplate::new(200).set_body_bytes(small_content_for_closure.clone())
+            })
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader = Downloader::new(blob_cache);
+
+        let url = format!("{}/small.tar.gz", mock_server.uri());
+        let result = downloader.download(&url, &actual_sha256).await;
+
+        assert!(result.is_ok());
+        let blob_path = result.unwrap();
+        assert!(blob_path.exists());
+
+        let range_count = range_used.load(Ordering::SeqCst);
+        assert_eq!(
+            range_count, 0,
+            "Small files should not use chunked download"
+        );
+
+        let downloaded_content = std::fs::read(&blob_path).unwrap();
+        assert_eq!(downloaded_content, small_content);
+    }
+
+    #[tokio::test]
+    async fn chunked_download_respects_concurrency_limit() {
+        let mock_server = MockServer::start().await;
+
+        // Create a 40MB file (8 chunks of 5MB each)
+        let large_content = vec![0xABu8; 40 * 1024 * 1024];
+        let actual_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(&large_content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        // Mock HEAD request
+        Mock::given(method("HEAD"))
+            .and(path("/large.tar.gz"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Accept-Ranges", "bytes")
+                    .append_header("Content-Length", large_content.len().to_string()),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // Track concurrent connections
+        let concurrent_count = Arc::new(AtomicUsize::new(0));
+        let max_concurrent = Arc::new(AtomicUsize::new(0));
+        let concurrent_clone = concurrent_count.clone();
+        let max_clone = max_concurrent.clone();
+        let large_content_for_closure = large_content.clone();
+
+        Mock::given(method("GET"))
+            .and(path("/large.tar.gz"))
+            .respond_with(move |req: &wiremock::Request| {
+                if let Some(range_header) = req.headers.get("Range") {
+                    // Track concurrent connections
+                    let current = concurrent_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_clone.fetch_max(current, Ordering::SeqCst);
+
+                    // Parse Range header
+                    let range_str = range_header.to_str().unwrap();
+                    let range_part = range_str.strip_prefix("bytes=").unwrap();
+                    let (start_str, end_str) = range_part.split_once('-').unwrap();
+                    let start: usize = start_str.parse().unwrap();
+                    let end: usize = end_str.parse().unwrap();
+
+                    // Simulate some delay to ensure concurrent requests overlap
+                    std::thread::sleep(Duration::from_millis(50));
+
+                    let chunk = &large_content_for_closure[start..=end];
+
+                    // Release after getting chunk
+                    concurrent_clone.fetch_sub(1, Ordering::SeqCst);
+
+                    ResponseTemplate::new(206)
+                        .append_header("Content-Length", chunk.len().to_string())
+                        .append_header(
+                            "Content-Range",
+                            format!(
+                                "bytes {}-{}/{}",
+                                start,
+                                end,
+                                large_content_for_closure.len()
+                            ),
+                        )
+                        .set_body_bytes(chunk.to_vec())
+                } else {
+                    ResponseTemplate::new(200).set_body_bytes(large_content_for_closure.clone())
+                }
+            })
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader = Downloader::new(blob_cache);
+
+        let url = format!("{}/large.tar.gz", mock_server.uri());
+        let result = downloader.download(&url, &actual_sha256).await;
+
+        assert!(result.is_ok(), "Download failed: {:?}", result.err());
+        let blob_path = result.unwrap();
+        assert!(blob_path.exists());
+
+        // Verify that concurrency was limited
+        let peak = max_concurrent.load(Ordering::SeqCst);
+        assert!(
+            peak <= MAX_CONCURRENT_CHUNKS,
+            "Peak concurrent downloads was {peak}, expected <= {MAX_CONCURRENT_CHUNKS}"
+        );
+
+        // Verify content matches
+        let downloaded_content = std::fs::read(&blob_path).unwrap();
+        assert_eq!(downloaded_content.len(), large_content.len());
+        assert_eq!(downloaded_content, large_content);
     }
 }

@@ -53,11 +53,10 @@ impl Installer {
         cellar: Cellar,
         linker: Linker,
         db: Database,
-        download_concurrency: usize,
     ) -> Self {
         Self {
             api_client,
-            downloader: ParallelDownloader::new(blob_cache, download_concurrency),
+            downloader: ParallelDownloader::new(blob_cache),
             store,
             cellar,
             linker,
@@ -437,7 +436,7 @@ impl Installer {
 pub fn create_installer(
     root: &Path,
     prefix: &Path,
-    download_concurrency: usize,
+    concurrency: usize,
 ) -> Result<Installer, Error> {
     use std::fs;
 
@@ -483,15 +482,18 @@ pub fn create_installer(
     })?;
     let db = Database::open(&root.join("db/zb.sqlite3"))?;
 
-    Ok(Installer::new(
+    // Create ParallelDownloader with custom concurrency
+    use crate::download::ParallelDownloader;
+    let parallel_downloader = ParallelDownloader::with_concurrency(blob_cache, concurrency);
+
+    Ok(Installer {
         api_client,
-        blob_cache,
+        downloader: parallel_downloader,
         store,
         cellar,
         linker,
         db,
-        download_concurrency,
-    ))
+    })
 }
 
 #[cfg(test)]
@@ -606,7 +608,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install
         installer.install("testpkg", true).await.unwrap();
@@ -684,7 +686,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install
         installer.install("uninstallme", true).await.unwrap();
@@ -761,7 +763,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install and uninstall
         installer.install("gctest", true).await.unwrap();
@@ -841,7 +843,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install but don't uninstall
         installer.install("keepme", true).await.unwrap();
@@ -955,7 +957,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install main package (should also install dependency)
         installer.install("mainpkg", true).await.unwrap();
@@ -1058,7 +1060,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install root (should install all 5 packages)
         installer.install("root", true).await.unwrap();
@@ -1145,7 +1147,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install slow package (which depends on fast)
         // With streaming, fast should be extracted while slow is still downloading
@@ -1249,7 +1251,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install - should succeed (first download is valid in this test)
         installer.install("retrypkg", true).await.unwrap();

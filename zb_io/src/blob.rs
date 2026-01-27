@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use zb_core::Error;
@@ -68,6 +68,10 @@ pub struct BlobWriter {
 }
 
 impl BlobWriter {
+    pub fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.file.seek(pos)
+    }
+
     pub fn commit(mut self) -> Result<PathBuf, Error> {
         self.file.flush().map_err(|e| Error::NetworkFailure {
             message: format!("failed to flush blob: {e}"),
