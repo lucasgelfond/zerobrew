@@ -5,6 +5,11 @@ edition = "2024"
 rust-version.workspace = true
 
 [dependencies]
+zb_core = { path = "../zb_core" }
+zb_io = { path = "../zb_io" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "1.0"
+
+[dev-dependencies]
+tempfile.workspace = true
