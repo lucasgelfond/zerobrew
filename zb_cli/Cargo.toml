@@ -9,13 +9,13 @@ name = "zb"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
-indicatif = "0.17"
-console = "0.15"
+clap.workspace = true
+tokio = { workspace = true, features = ["full"] }
+indicatif.workspace = true
+console.workspace = true
 
 zb_core = { path = "../zb_core" }
 zb_io = { path = "../zb_io" }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
