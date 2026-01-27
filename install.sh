@@ -69,6 +69,11 @@ case "$SHELL" in
         ;;
 esac
 
+if [[ ! -w $SHELL_CONFIG ]]; then
+    echo "Error, config not writable: $SHELL_CONFIG" >&2
+    exit 1
+fi
+
 # Add to PATH in shell config if not already there
 PATHS_TO_ADD=("$ZEROBREW_BIN" "/opt/zerobrew/prefix/bin")
 if ! grep -q "^# zerobrew$" "$SHELL_CONFIG" 2>/dev/null; then
