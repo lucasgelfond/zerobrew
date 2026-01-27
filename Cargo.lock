@@ -2326,6 +2326,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
  "zb_core",
  "zb_io",
 ]
