@@ -985,6 +985,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_from_explicit_tap() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let bottle = create_bottle_tarball("tappkg");
+        let bottle_sha = sha256_hex(&bottle);
+
+        let formula_json = format!(
+            r#"{{
+                "name": "tappkg",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "arm64_sonoma": {{
+                                "url": "{}/bottles/tappkg-1.0.0.arm64_sonoma.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            mock_server.uri(),
+            bottle_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/user/tools/tappkg.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/bottles/tappkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        installer.install("user/tools/tappkg", true).await.unwrap();
+
+        assert!(installer.db.get_installed("tappkg").is_some());
+    }
+
+    #[tokio::test]
     async fn parallel_api_fetching_with_deep_deps() {
         // Tests that parallel API fetching works with a deeper dependency tree:
         // root -> mid1 -> leaf1
