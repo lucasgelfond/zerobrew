@@ -1,6 +1,9 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+use crate::Error;
+use crate::validation::{validate_dependency_name, validate_formula_name, validate_version};
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Formula {
     pub name: String,
@@ -10,6 +13,22 @@ pub struct Formula {
 }
 
 impl Formula {
+    /// Validate formula after deserialization
+    pub fn validate(&self) -> Result<(), Error> {
+        // Validate formula name
+        validate_formula_name(&self.name)?;
+
+        // Validate version
+        validate_version(&self.versions.stable)?;
+
+        // Validate all dependencies
+        for dep in &self.dependencies {
+            validate_dependency_name(dep)?;
+        }
+
+        Ok(())
+    }
+
     /// Returns the effective version including rebuild suffix if applicable.
     /// Homebrew bottles with rebuild > 0 have paths like `{version}_{rebuild}`.
     pub fn effective_version(&self) -> String {

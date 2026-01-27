@@ -1,0 +1,15 @@
+[package]
+name = "zb_migrate"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+zb_core = { path = "../zb_core" }
+zb_io = { path = "../zb_io" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3"

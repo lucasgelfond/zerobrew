@@ -7,8 +7,11 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use zb_brewfile::{BrewfileParser, Exporter, Importer};
 use zb_io::install::create_installer;
-use zb_io::{InstallProgress, ProgressCallback};
+use zb_io::{Database, InstallProgress, ProgressCallback};
+use zb_migrate::{IncompatibleReason, MigrationPlan, Migrator};
+use zb_services::{ServiceManager, ServiceState};
 
 #[derive(Parser)]
 #[command(name = "zb")]
@@ -70,6 +73,96 @@ enum Commands {
 
     /// Initialize zerobrew directories with correct permissions
     Init,
+
+    /// Migrate packages from Homebrew to Zerobrew
+    Migrate {
+        /// Specific formulas to migrate (default: all user-requested)
+        formulas: Vec<String>,
+
+        /// Only show what would be migrated (don't actually install)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Homebrew prefix path (default: /opt/homebrew)
+        #[arg(long, default_value = "/opt/homebrew")]
+        homebrew_prefix: PathBuf,
+    },
+
+    /// Manage services
+    #[command(subcommand)]
+    Services(ServicesCommands),
+
+    /// Import packages from a Brewfile
+    Import {
+        /// Path to Brewfile (default: ./Brewfile)
+        #[arg(default_value = "./Brewfile")]
+        brewfile: PathBuf,
+
+        /// Show what would be installed without installing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Enable services with restart_service hints
+        #[arg(long)]
+        with_services: bool,
+    },
+
+    /// Export installed packages to Brewfile format
+    Export {
+        /// Output path (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServicesCommands {
+    /// Start a service
+    Start {
+        /// Formula name
+        formula: String,
+    },
+
+    /// Stop a service
+    Stop {
+        /// Formula name
+        formula: String,
+    },
+
+    /// Restart a service
+    Restart {
+        /// Formula name
+        formula: String,
+    },
+
+    /// Show service status
+    Status {
+        /// Formula name
+        formula: String,
+
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// List all services
+    List {
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Enable auto-start at login
+    Enable {
+        /// Formula name
+        formula: String,
+    },
+
+    /// Disable auto-start
+    Disable {
+        /// Formula name
+        formula: String,
+    },
 }
 
 #[tokio::main]
@@ -196,15 +289,7 @@ fn add_to_path(prefix: &Path) -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
 
     let config_file = if shell.contains("zsh") {
-        let zdotdir = std::env::var("ZDOTDIR").unwrap_or_else(|_| home.clone());
-        let zshenv = format!("{}/.zshenv", zdotdir);
-
-        // Prefer .zshenv (sourced for all shells), fall back to .zshrc
-        if std::path::Path::new(&zshenv).exists() {
-            zshenv
-        } else {
-            format!("{}/.zshrc", zdotdir)
-        }
+        format!("{}/.zshrc", home)
     } else if shell.contains("bash") {
         let bash_profile = format!("{}/.bash_profile", home);
         if std::path::Path::new(&bash_profile).exists() {
@@ -306,6 +391,82 @@ fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
         style(format!("brew install {}", formula)).cyan()
     );
     eprintln!();
+}
+
+fn print_migration_plan(plan: &MigrationPlan) {
+    println!();
+    println!("{} Migration Plan", style("==>").cyan().bold());
+    println!();
+
+    if !plan.to_install.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("Packages to install").green().bold(),
+            plan.to_install.len()
+        );
+        for name in &plan.to_install {
+            println!("    {} {}", style("•").dim(), name);
+        }
+        println!();
+    }
+
+    if !plan.dependencies.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("Dependencies (auto-installed)").dim(),
+            plan.dependencies.len()
+        );
+        for name in &plan.dependencies {
+            println!("    {} {}", style("•").dim(), style(name).dim());
+        }
+        println!();
+    }
+
+    if !plan.already_installed.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("Already installed in Zerobrew").yellow(),
+            plan.already_installed.len()
+        );
+        for name in &plan.already_installed {
+            println!("    {} {}", style("✓").green(), name);
+        }
+        println!();
+    }
+
+    if !plan.incompatible.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("Cannot migrate").red(),
+            plan.incompatible.len()
+        );
+        for item in &plan.incompatible {
+            let reason = match &item.reason {
+                IncompatibleReason::RequiresTap(tap) => format!("requires tap: {}", tap),
+                IncompatibleReason::AlreadyInstalled => "already installed".to_string(),
+                IncompatibleReason::ApiError(e) => format!("API error: {}", e),
+            };
+            println!(
+                "    {} {} ({})",
+                style("✗").red(),
+                item.name,
+                style(reason).dim()
+            );
+        }
+        println!();
+    }
+
+    if !plan.services_warning.is_empty() {
+        println!(
+            "  {} ({}):",
+            style("⚠ Services running (manage separately)").yellow(),
+            plan.services_warning.len()
+        );
+        for name in &plan.services_warning {
+            println!("    {} {}", style("⚠").yellow(), name);
+        }
+        println!();
+    }
 }
 
 async fn run(cli: Cli) -> Result<(), zb_core::Error> {
@@ -434,7 +595,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     }
                     InstallProgress::UnpackCompleted { name } => {
                         if let Some(pb) = bars.get(&name) {
-                            pb.set_message("unpacked");
+                            pb.set_message("linking...");
                         }
                     }
                     InstallProgress::LinkStarted { name } => {
@@ -444,11 +605,6 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     }
                     InstallProgress::LinkCompleted { name } => {
                         if let Some(pb) = bars.get(&name) {
-                            pb.set_message("linked");
-                        }
-                    }
-                    InstallProgress::InstallCompleted { name } => {
-                        if let Some(pb) = bars.get(&name) {
                             pb.set_style(done_style_clone.clone());
                             pb.set_message(format!("{} installed", style("✓").green()));
                             pb.finish();
@@ -457,11 +613,18 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 }
             }));
 
-            let result_val = installer
+            let result = match installer
                 .execute_with_progress(plan, !no_link, Some(progress_callback))
-                .await;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    suggest_homebrew(&formula, &e);
+                    return Err(e);
+                }
+            };
 
-            // Cleanup progress bars BEFORE handling errors to avoid visual artifacts
+            // Finish any remaining bars
             {
                 let bars = bars.lock().unwrap();
                 for (_, pb) in bars.iter() {
@@ -470,15 +633,6 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     }
                 }
             }
-
-            // Now handle the result
-            let result = match result_val {
-                Ok(r) => r,
-                Err(e) => {
-                    suggest_homebrew(&formula, &e);
-                    return Err(e);
-                }
-            };
 
             let elapsed = start.elapsed();
             println!();
@@ -637,6 +791,730 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 "{} Reset complete. Ready for cold install.",
                 style("==>").cyan().bold()
             );
+        }
+
+        Commands::Migrate {
+            formulas,
+            dry_run,
+            homebrew_prefix,
+        } => {
+            let start = Instant::now();
+
+            println!(
+                "{} Scanning Homebrew at {}...",
+                style("==>").cyan().bold(),
+                homebrew_prefix.display()
+            );
+
+            let mut migrator = Migrator::with_prefix(&mut installer, &homebrew_prefix);
+
+            if !migrator.is_homebrew_installed() {
+                return Err(zb_core::Error::StoreCorruption {
+                    message: format!(
+                        "Homebrew not found at {}. Is Homebrew installed?",
+                        homebrew_prefix.display()
+                    ),
+                });
+            }
+
+            // Create migration plan
+            let specific = if formulas.is_empty() {
+                None
+            } else {
+                Some(formulas.as_slice())
+            };
+
+            let plan = migrator
+                .plan(specific)
+                .map_err(|e| zb_core::Error::StoreCorruption {
+                    message: format!("Failed to create migration plan: {}", e),
+                })?;
+
+            print_migration_plan(&plan);
+
+            if plan.is_empty() {
+                println!("{} Nothing to migrate.", style("==>").cyan().bold());
+                return Ok(());
+            }
+
+            if dry_run {
+                println!(
+                    "{} Dry run - no packages were installed.",
+                    style("==>").cyan().bold()
+                );
+                println!(
+                    "    Run {} to actually migrate {} packages.",
+                    style("zb migrate").cyan(),
+                    plan.to_install.len()
+                );
+                return Ok(());
+            }
+
+            // Execute migration
+            println!(
+                "{} Migrating {} packages from Homebrew...",
+                style("==>").cyan().bold(),
+                plan.to_install.len()
+            );
+
+            // Set up progress display (same as install)
+            let multi = MultiProgress::new();
+            let bars: Arc<Mutex<HashMap<String, ProgressBar>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+
+            let download_style = ProgressStyle::default_bar()
+                .template(
+                    "    {prefix:<16} {bar:25.cyan/dim} {bytes:>10}/{total_bytes:<10} {eta:>6}",
+                )
+                .unwrap()
+                .progress_chars("━━╸");
+
+            let spinner_style = ProgressStyle::default_spinner()
+                .template("    {prefix:<16} {spinner:.cyan} {msg}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+
+            let done_style = ProgressStyle::default_spinner()
+                .template("    {prefix:<16} {msg}")
+                .unwrap();
+
+            let bars_clone = bars.clone();
+            let multi_clone = multi.clone();
+            let download_style_clone = download_style.clone();
+            let spinner_style_clone = spinner_style.clone();
+            let done_style_clone = done_style.clone();
+
+            let progress_callback: Arc<ProgressCallback> = Arc::new(Box::new(move |event| {
+                let mut bars = bars_clone.lock().unwrap();
+                match event {
+                    InstallProgress::DownloadStarted { name, total_bytes } => {
+                        let pb = if let Some(total) = total_bytes {
+                            let pb = multi_clone.add(ProgressBar::new(total));
+                            pb.set_style(download_style_clone.clone());
+                            pb
+                        } else {
+                            let pb = multi_clone.add(ProgressBar::new_spinner());
+                            pb.set_style(spinner_style_clone.clone());
+                            pb.set_message("downloading...");
+                            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                            pb
+                        };
+                        pb.set_prefix(name.clone());
+                        bars.insert(name, pb);
+                    }
+                    InstallProgress::DownloadProgress {
+                        name,
+                        downloaded,
+                        total_bytes,
+                    } => {
+                        if let Some(pb) = bars.get(&name)
+                            && total_bytes.is_some()
+                        {
+                            pb.set_position(downloaded);
+                        }
+                    }
+                    InstallProgress::DownloadCompleted { name, total_bytes } => {
+                        if let Some(pb) = bars.get(&name) {
+                            if total_bytes > 0 {
+                                pb.set_position(total_bytes);
+                            }
+                            pb.set_style(spinner_style_clone.clone());
+                            pb.set_message("unpacking...");
+                            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                        }
+                    }
+                    InstallProgress::UnpackStarted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("unpacking...");
+                        }
+                    }
+                    InstallProgress::UnpackCompleted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("linking...");
+                        }
+                    }
+                    InstallProgress::LinkStarted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("linking...");
+                        }
+                    }
+                    InstallProgress::LinkCompleted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_style(done_style_clone.clone());
+                            pb.set_message(format!("{} installed", style("✓").green()));
+                            pb.finish();
+                        }
+                    }
+                }
+            }));
+
+            let result = migrator
+                .execute_with_progress(&plan, Some(progress_callback))
+                .await
+                .map_err(|e| zb_core::Error::StoreCorruption {
+                    message: format!("Migration failed: {}", e),
+                })?;
+
+            // Finish any remaining bars
+            {
+                let bars = bars.lock().unwrap();
+                for (_, pb) in bars.iter() {
+                    if !pb.is_finished() {
+                        pb.finish();
+                    }
+                }
+            }
+
+            let elapsed = start.elapsed();
+            println!();
+            println!("{} Migration complete!", style("==>").cyan().bold());
+            println!(
+                "    {} Installed: {} packages",
+                style("✓").green(),
+                style(result.installed.len()).green().bold()
+            );
+
+            if !result.failed.is_empty() {
+                println!(
+                    "    {} Failed: {} packages",
+                    style("✗").red(),
+                    style(result.failed.len()).red().bold()
+                );
+                for (name, err) in &result.failed {
+                    println!("      {} {}: {}", style("•").dim(), name, style(err).dim());
+                }
+            }
+
+            println!("    Time: {:.2}s", elapsed.as_secs_f64());
+            println!();
+            println!(
+                "    {} Your Homebrew packages are still installed.",
+                style("Note:").yellow()
+            );
+            println!(
+                "    To clean up: {}",
+                style("brew uninstall --force $(brew list --formula)").cyan()
+            );
+        }
+
+        Commands::Services(services_cmd) => {
+            let db_path = cli.root.join("db/zb.sqlite3");
+            let db = Database::open(&db_path)?;
+
+            let mut service_manager = ServiceManager::new(&cli.prefix, db).map_err(|e| {
+                zb_core::Error::StoreCorruption {
+                    message: format!("Failed to create service manager: {}", e),
+                }
+            })?;
+
+            match services_cmd {
+                ServicesCommands::Start { formula } => {
+                    println!(
+                        "{} Starting {}...",
+                        style("==>").cyan().bold(),
+                        style(&formula).bold()
+                    );
+
+                    service_manager.start(&formula).await.map_err(|e| {
+                        zb_core::Error::StoreCorruption {
+                            message: format!("Failed to start service: {}", e),
+                        }
+                    })?;
+
+                    println!(
+                        "{} Started {}",
+                        style("==>").cyan().bold(),
+                        style(&formula).green()
+                    );
+                }
+
+                ServicesCommands::Stop { formula } => {
+                    println!(
+                        "{} Stopping {}...",
+                        style("==>").cyan().bold(),
+                        style(&formula).bold()
+                    );
+
+                    service_manager.stop(&formula).map_err(|e| {
+                        zb_core::Error::StoreCorruption {
+                            message: format!("Failed to stop service: {}", e),
+                        }
+                    })?;
+
+                    println!(
+                        "{} Stopped {}",
+                        style("==>").cyan().bold(),
+                        style(&formula).green()
+                    );
+                }
+
+                ServicesCommands::Restart { formula } => {
+                    println!(
+                        "{} Restarting {}...",
+                        style("==>").cyan().bold(),
+                        style(&formula).bold()
+                    );
+
+                    service_manager.restart(&formula).await.map_err(|e| {
+                        zb_core::Error::StoreCorruption {
+                            message: format!("Failed to restart service: {}", e),
+                        }
+                    })?;
+
+                    println!(
+                        "{} Restarted {}",
+                        style("==>").cyan().bold(),
+                        style(&formula).green()
+                    );
+                }
+
+                ServicesCommands::Status { formula, json } => {
+                    let status = service_manager.status(&formula).map_err(|e| {
+                        zb_core::Error::StoreCorruption {
+                            message: format!("Failed to get status: {}", e),
+                        }
+                    })?;
+
+                    if json {
+                        let json_output = serde_json::json!({
+                            "name": status.name,
+                            "state": format!("{:?}", status.state),
+                            "pid": status.pid,
+                            "exit_code": status.exit_code,
+                            "enabled": status.enabled,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
+                    } else {
+                        println!("{} {}", style("Name:").dim(), style(&status.name).bold());
+
+                        let state_str = match status.state {
+                            ServiceState::Running => style("running").green(),
+                            ServiceState::Stopped => style("stopped").dim(),
+                            ServiceState::Failed => style("failed").red(),
+                            ServiceState::Scheduled => style("scheduled").yellow(),
+                            ServiceState::Unknown => style("unknown").dim(),
+                        };
+                        println!("{} {}", style("State:").dim(), state_str);
+
+                        if let Some(pid) = status.pid {
+                            println!("{} {}", style("PID:").dim(), pid);
+                        }
+
+                        if let Some(exit_code) = status.exit_code {
+                            println!("{} {}", style("Exit code:").dim(), exit_code);
+                        }
+
+                        let enabled_str = if status.enabled {
+                            style("yes").green()
+                        } else {
+                            style("no").dim()
+                        };
+                        println!("{} {}", style("Enabled:").dim(), enabled_str);
+                    }
+                }
+
+                ServicesCommands::List { json } => {
+                    let services =
+                        service_manager
+                            .list()
+                            .map_err(|e| zb_core::Error::StoreCorruption {
+                                message: format!("Failed to list services: {}", e),
+                            })?;
+
+                    if services.is_empty() {
+                        println!("No services found.");
+                        return Ok(());
+                    }
+
+                    if json {
+                        let json_output: Vec<_> = services
+                            .iter()
+                            .map(|s| {
+                                serde_json::json!({
+                                    "name": s.name,
+                                    "state": format!("{:?}", s.state),
+                                    "pid": s.pid,
+                                    "enabled": s.enabled,
+                                })
+                            })
+                            .collect();
+                        println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
+                    } else {
+                        println!(
+                            "{:<20} {:<12} {:<8} {:<8}",
+                            style("Name").bold(),
+                            style("State").bold(),
+                            style("PID").bold(),
+                            style("Enabled").bold()
+                        );
+
+                        for svc in services {
+                            let state_str = match svc.state {
+                                ServiceState::Running => style("running").green().to_string(),
+                                ServiceState::Stopped => style("stopped").dim().to_string(),
+                                ServiceState::Failed => style("failed").red().to_string(),
+                                ServiceState::Scheduled => style("scheduled").yellow().to_string(),
+                                ServiceState::Unknown => style("unknown").dim().to_string(),
+                            };
+
+                            let pid_str = svc
+                                .pid
+                                .map(|p| p.to_string())
+                                .unwrap_or_else(|| "-".to_string());
+
+                            let enabled_str = if svc.enabled {
+                                style("yes").green().to_string()
+                            } else {
+                                style("no").dim().to_string()
+                            };
+
+                            println!(
+                                "{:<20} {:<12} {:<8} {:<8}",
+                                svc.name, state_str, pid_str, enabled_str
+                            );
+                        }
+                    }
+                }
+
+                ServicesCommands::Enable { formula } => {
+                    println!(
+                        "{} Enabling {}...",
+                        style("==>").cyan().bold(),
+                        style(&formula).bold()
+                    );
+
+                    service_manager.enable(&formula).await.map_err(|e| {
+                        zb_core::Error::StoreCorruption {
+                            message: format!("Failed to enable service: {}", e),
+                        }
+                    })?;
+
+                    println!(
+                        "{} Enabled {} (will start at login)",
+                        style("==>").cyan().bold(),
+                        style(&formula).green()
+                    );
+                }
+
+                ServicesCommands::Disable { formula } => {
+                    println!(
+                        "{} Disabling {}...",
+                        style("==>").cyan().bold(),
+                        style(&formula).bold()
+                    );
+
+                    service_manager.disable(&formula).map_err(|e| {
+                        zb_core::Error::StoreCorruption {
+                            message: format!("Failed to disable service: {}", e),
+                        }
+                    })?;
+
+                    println!(
+                        "{} Disabled {} (will not start at login)",
+                        style("==>").cyan().bold(),
+                        style(&formula).green()
+                    );
+                }
+            }
+        }
+
+        Commands::Import {
+            brewfile,
+            dry_run,
+            with_services,
+        } => {
+            println!(
+                "{} Parsing Brewfile: {}...",
+                style("==>").cyan().bold(),
+                brewfile.display()
+            );
+
+            let content = std::fs::read_to_string(&brewfile).map_err(|e| {
+                zb_core::Error::StoreCorruption {
+                    message: format!("Failed to read Brewfile: {}", e),
+                }
+            })?;
+
+            let parsed =
+                BrewfileParser::parse(&content).map_err(|e| zb_core::Error::StoreCorruption {
+                    message: format!("Failed to parse Brewfile: {}", e),
+                })?;
+
+            println!("    Found {} entries", parsed.entries.len());
+            println!();
+
+            // Create service manager if with_services flag is set
+            let mut service_manager_opt = if with_services {
+                let db_path = cli.root.join("db/zb.sqlite3");
+                let db = Database::open(&db_path)?;
+                Some(ServiceManager::new(&cli.prefix, db).map_err(|e| {
+                    zb_core::Error::StoreCorruption {
+                        message: format!("Failed to create service manager: {}", e),
+                    }
+                })?)
+            } else {
+                None
+            };
+
+            let mut importer = if let Some(ref mut sm) = service_manager_opt {
+                Importer::with_services(&mut installer, sm)
+            } else {
+                Importer::new(&mut installer)
+            };
+
+            let plan = importer.plan(&parsed);
+
+            // Print plan
+            println!("{} Import Plan", style("==>").cyan().bold());
+            println!();
+
+            if !plan.to_install.is_empty() {
+                println!(
+                    "  {} ({}):",
+                    style("Packages to install").green().bold(),
+                    plan.to_install.len()
+                );
+                for entry in &plan.to_install {
+                    let mut line = format!("    {} {}", style("•").dim(), entry.name);
+                    if let Some(restart) = entry.restart_service {
+                        line.push_str(&format!(
+                            " {}",
+                            style(format!("(service: {:?})", restart)).dim()
+                        ));
+                    }
+                    println!("{}", line);
+                }
+                println!();
+            }
+
+            if !plan.already_installed.is_empty() {
+                println!(
+                    "  {} ({}):",
+                    style("Already installed").yellow(),
+                    plan.already_installed.len()
+                );
+                for name in &plan.already_installed {
+                    println!("    {} {}", style("✓").green(), name);
+                }
+                println!();
+            }
+
+            if !plan.unsupported.is_empty() {
+                println!(
+                    "  {} ({}):",
+                    style("Unsupported (will skip)").red(),
+                    plan.unsupported.len()
+                );
+                for entry in &plan.unsupported {
+                    println!("    {} {}", style("✗").red(), entry);
+                }
+                println!();
+            }
+
+            if plan.is_empty() {
+                println!("{} Nothing to install.", style("==>").cyan().bold());
+                return Ok(());
+            }
+
+            if dry_run {
+                println!(
+                    "{} Dry run - no packages were installed.",
+                    style("==>").cyan().bold()
+                );
+                println!(
+                    "    Run {} to install {} packages.",
+                    style(format!("zb import {}", brewfile.display())).cyan(),
+                    plan.total_to_install()
+                );
+                return Ok(());
+            }
+
+            // Execute import
+            let start = Instant::now();
+            println!(
+                "{} Installing {} packages from Brewfile...",
+                style("==>").cyan().bold(),
+                plan.total_to_install()
+            );
+
+            // Set up progress display
+            let multi = MultiProgress::new();
+            let bars: Arc<Mutex<HashMap<String, ProgressBar>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+
+            let download_style = ProgressStyle::default_bar()
+                .template(
+                    "    {prefix:<16} {bar:25.cyan/dim} {bytes:>10}/{total_bytes:<10} {eta:>6}",
+                )
+                .unwrap()
+                .progress_chars("━━╸");
+
+            let spinner_style = ProgressStyle::default_spinner()
+                .template("    {prefix:<16} {spinner:.cyan} {msg}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+
+            let done_style = ProgressStyle::default_spinner()
+                .template("    {prefix:<16} {msg}")
+                .unwrap();
+
+            let bars_clone = bars.clone();
+            let multi_clone = multi.clone();
+            let download_style_clone = download_style.clone();
+            let spinner_style_clone = spinner_style.clone();
+            let done_style_clone = done_style.clone();
+
+            let progress_callback: Arc<ProgressCallback> = Arc::new(Box::new(move |event| {
+                let mut bars = bars_clone.lock().unwrap();
+                match event {
+                    InstallProgress::DownloadStarted { name, total_bytes } => {
+                        let pb = if let Some(total) = total_bytes {
+                            let pb = multi_clone.add(ProgressBar::new(total));
+                            pb.set_style(download_style_clone.clone());
+                            pb
+                        } else {
+                            let pb = multi_clone.add(ProgressBar::new_spinner());
+                            pb.set_style(spinner_style_clone.clone());
+                            pb.set_message("downloading...");
+                            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                            pb
+                        };
+                        pb.set_prefix(name.clone());
+                        bars.insert(name, pb);
+                    }
+                    InstallProgress::DownloadProgress {
+                        name,
+                        downloaded,
+                        total_bytes,
+                    } => {
+                        if let Some(pb) = bars.get(&name)
+                            && total_bytes.is_some()
+                        {
+                            pb.set_position(downloaded);
+                        }
+                    }
+                    InstallProgress::DownloadCompleted { name, total_bytes } => {
+                        if let Some(pb) = bars.get(&name) {
+                            if total_bytes > 0 {
+                                pb.set_position(total_bytes);
+                            }
+                            pb.set_style(spinner_style_clone.clone());
+                            pb.set_message("unpacking...");
+                            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                        }
+                    }
+                    InstallProgress::UnpackStarted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("unpacking...");
+                        }
+                    }
+                    InstallProgress::UnpackCompleted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("linking...");
+                        }
+                    }
+                    InstallProgress::LinkStarted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_message("linking...");
+                        }
+                    }
+                    InstallProgress::LinkCompleted { name } => {
+                        if let Some(pb) = bars.get(&name) {
+                            pb.set_style(done_style_clone.clone());
+                            pb.set_message(format!("{} installed", style("✓").green()));
+                            pb.finish();
+                        }
+                    }
+                }
+            }));
+
+            let result = importer
+                .execute_with_progress(plan, Some(progress_callback))
+                .await
+                .map_err(|e| zb_core::Error::StoreCorruption {
+                    message: format!("Import failed: {}", e),
+                })?;
+
+            // Finish any remaining bars
+            {
+                let bars = bars.lock().unwrap();
+                for (_, pb) in bars.iter() {
+                    if !pb.is_finished() {
+                        pb.finish();
+                    }
+                }
+            }
+
+            let elapsed = start.elapsed();
+            println!();
+            println!("{} Import complete!", style("==>").cyan().bold());
+            println!(
+                "    {} Installed: {} packages",
+                style("✓").green(),
+                style(result.installed.len()).green().bold()
+            );
+
+            if !result.services_enabled.is_empty() {
+                println!(
+                    "    {} Services enabled: {}",
+                    style("✓").green(),
+                    result.services_enabled.len()
+                );
+                for svc in &result.services_enabled {
+                    println!("      {} {}", style("•").dim(), svc);
+                }
+            }
+
+            if !result.failed.is_empty() {
+                println!(
+                    "    {} Failed: {} packages",
+                    style("✗").red(),
+                    result.failed.len()
+                );
+                for (name, err) in &result.failed {
+                    println!("      {} {}: {}", style("•").dim(), name, style(err).dim());
+                }
+            }
+
+            println!("    Time: {:.2}s", elapsed.as_secs_f64());
+        }
+
+        Commands::Export { output } => {
+            println!(
+                "{} Exporting packages to Brewfile...",
+                style("==>").cyan().bold()
+            );
+
+            let exporter = Exporter::new(&installer);
+            let brewfile_content =
+                exporter
+                    .to_string()
+                    .map_err(|e| zb_core::Error::StoreCorruption {
+                        message: format!("Failed to export Brewfile: {}", e),
+                    })?;
+
+            if let Some(output_path) = output {
+                std::fs::write(&output_path, &brewfile_content).map_err(|e| {
+                    zb_core::Error::StoreCorruption {
+                        message: format!("Failed to write Brewfile: {}", e),
+                    }
+                })?;
+
+                let brew_count = brewfile_content
+                    .lines()
+                    .filter(|l| l.starts_with("brew "))
+                    .count();
+                println!(
+                    "{} Exported {} packages to {}",
+                    style("==>").cyan().bold(),
+                    style(brew_count).green().bold(),
+                    output_path.display()
+                );
+            } else {
+                // Write to stdout
+                println!();
+                print!("{}", brewfile_content);
+            }
         }
     }
 

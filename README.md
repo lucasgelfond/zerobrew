@@ -1,12 +1,3 @@
-<div align="center">
-
-# zerobrew
-
-[![Lint](https://github.com/lucasgelfond/zerobrew/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasgelfond/zerobrew/actions/workflows/ci.yml)
-[![Test](https://github.com/lucasgelfond/zerobrew/actions/workflows/test.yml/badge.svg)](https://github.com/lucasgelfond/zerobrew/actions/workflows/test.yml)
-
-</div>
-
 ## Install
 
 ```bash
@@ -15,9 +6,7 @@ curl -sSL https://raw.githubusercontent.com/lucasgelfond/zerobrew/main/install.s
 
 After install, run the export command it prints, or restart your terminal.
 
-Join the [Discord](https://discord.gg/UxAAvZ93) for support / discussion.
-
-## About
+# zerobrew
 
 A faster, modern Mac package manager.
 
@@ -71,7 +60,36 @@ I spent a lot of time thinking through this architecture, testing, and debugging
 └── locks/          # per-entry file locks
 ```
 
-## Build from source 
+## Development
+
+If you're building zerobrew from source for development, use the local installer script:
+
+```bash
+./install-local.sh
+```
+
+This script will:
+- Build the release binary with `cargo build --release`
+- Install `zb` to `~/.local/bin`
+- Set up `/opt/zerobrew` directories with correct permissions
+- Add paths to your shell config if needed
+- Run `zb init` to finalize setup
+
+### Git Hooks
+
+To maintain code quality, install the pre-commit hooks:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+This installs a pre-commit hook that automatically runs:
+- `cargo fmt --all --check` - ensures code is formatted
+- `cargo clippy --all-targets --all-features -- -D warnings` - catches common mistakes
+
+The hook prevents commits with formatting issues or clippy warnings. If you need to skip the hook temporarily, use `git commit --no-verify`.
+
+## Build from source
 
 ```bash
 cargo build --release

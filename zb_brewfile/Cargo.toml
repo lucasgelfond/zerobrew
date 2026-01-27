@@ -1,0 +1,15 @@
+[package]
+name = "zb_brewfile"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+zb_core = { path = "../zb_core" }
+zb_io = { path = "../zb_io" }
+zb_services = { path = "../zb_services" }
+regex = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3"

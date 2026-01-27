@@ -329,11 +329,6 @@ impl Installer {
                         Vec::new()
                     };
 
-                    // Report installation completed for this package
-                    report(InstallProgress::InstallCompleted {
-                        name: formula.name.clone(),
-                    });
-
                     completed[idx] = Some(ProcessedPackage {
                         name: formula.name.clone(),
                         version: formula.effective_version(),

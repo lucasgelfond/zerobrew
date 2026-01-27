@@ -32,7 +32,7 @@ if [[ -d "$ZEROBREW_DIR" ]]; then
     git pull
 else
     echo "Cloning zerobrew..."
-    git clone --depth 1 "$ZEROBREW_REPO" "$ZEROBREW_DIR"
+    git clone "$ZEROBREW_REPO" "$ZEROBREW_DIR"
     cd "$ZEROBREW_DIR"
 fi
 
@@ -49,12 +49,7 @@ echo "Installed zb to $ZEROBREW_BIN/zb"
 # Detect shell config file
 case "$SHELL" in
     */zsh)
-        ZDOTDIR="${ZDOTDIR:-$HOME}"
-        if [[ -f "$ZDOTDIR/.zshenv" ]]; then
-            SHELL_CONFIG="$ZDOTDIR/.zshenv"
-        else
-            SHELL_CONFIG="$ZDOTDIR/.zshrc"
-        fi
+        SHELL_CONFIG="$HOME/.zshrc"
         ;;
     */bash)
         if [[ -f "$HOME/.bash_profile" ]]; then

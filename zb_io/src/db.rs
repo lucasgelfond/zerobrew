@@ -59,6 +59,12 @@ impl Database {
                 target_path TEXT NOT NULL,
                 PRIMARY KEY (name, linked_path)
             );
+
+            CREATE TABLE IF NOT EXISTS services (
+                name TEXT PRIMARY KEY,
+                enabled BOOLEAN NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
             ",
         )
         .map_err(|e| Error::StoreCorruption {
@@ -155,6 +161,39 @@ impl Database {
             })?;
 
         Ok(keys)
+    }
+
+    pub fn is_service_enabled(&self, name: &str) -> Result<bool, Error> {
+        match self.conn.query_row(
+            "SELECT enabled FROM services WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        ) {
+            Ok(enabled) => Ok(enabled),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(Error::StoreCorruption {
+                message: format!("failed to query service state: {e}"),
+            }),
+        }
+    }
+
+    pub fn set_service_enabled(&self, name: &str, enabled: bool) -> Result<(), Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        self.conn
+            .execute(
+                "INSERT INTO services (name, enabled, created_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(name) DO UPDATE SET enabled = ?2",
+                params![name, enabled, now],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to update service state: {e}"),
+            })?;
+
+        Ok(())
     }
 }
 
@@ -374,5 +413,21 @@ mod tests {
         }
 
         assert!(db.get_installed("foo").is_none());
+    }
+
+    #[test]
+    fn service_enabled_state() {
+        let db = Database::in_memory().unwrap();
+
+        // Service not registered should return false
+        assert!(!db.is_service_enabled("foo").unwrap());
+
+        // Enable service
+        db.set_service_enabled("foo", true).unwrap();
+        assert!(db.is_service_enabled("foo").unwrap());
+
+        // Disable service
+        db.set_service_enabled("foo", false).unwrap();
+        assert!(!db.is_service_enabled("foo").unwrap());
     }
 }

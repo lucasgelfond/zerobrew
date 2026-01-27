@@ -59,6 +59,9 @@ impl ApiClient {
                 serde_json::from_str(&entry.body).map_err(|e| Error::NetworkFailure {
                     message: format!("failed to parse cached formula JSON: {e}"),
                 })?;
+
+            formula.validate()?;
+
             return Ok(formula);
         }
 
@@ -103,7 +106,90 @@ impl ApiClient {
             message: format!("failed to parse formula JSON: {e}"),
         })?;
 
+        formula.validate()?;
+
         Ok(formula)
+    }
+
+    /// Fetch the raw Homebrew formula JSON as `serde_json::Value`.
+    ///
+    /// This mirrors the behavior of `get_formula`, including caching and
+    /// error handling, but does not deserialize into `Formula` so that
+    /// callers can access fields not represented in the `Formula` struct
+    /// (such as the `service` definition).
+    pub async fn get_formula_raw(&self, name: &str) -> Result<serde_json::Value, Error> {
+        let url = format!("{}/{}.json", self.base_url, name);
+
+        let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
+
+        let mut request = self.client.get(&url);
+
+        if let Some(ref entry) = cached_entry {
+            if let Some(ref etag) = entry.etag {
+                request = request.header("If-None-Match", etag.as_str());
+            }
+            if let Some(ref last_modified) = entry.last_modified {
+                request = request.header("If-Modified-Since", last_modified.as_str());
+            }
+        }
+
+        let response = request.send().await.map_err(|e| Error::NetworkFailure {
+            message: e.to_string(),
+        })?;
+
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED
+            && let Some(entry) = cached_entry
+        {
+            let value: serde_json::Value =
+                serde_json::from_str(&entry.body).map_err(|e| Error::NetworkFailure {
+                    message: format!("failed to parse cached formula JSON: {e}"),
+                })?;
+            return Ok(value);
+        }
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(Error::MissingFormula {
+                name: name.to_string(),
+            });
+        }
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("HTTP {}", response.status()),
+            });
+        }
+
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let last_modified = response
+            .headers()
+            .get("last-modified")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let body = response.text().await.map_err(|e| Error::NetworkFailure {
+            message: format!("failed to read response body: {e}"),
+        })?;
+
+        if let Some(ref cache) = self.cache {
+            let entry = CacheEntry {
+                etag,
+                last_modified,
+                body: body.clone(),
+            };
+            let _ = cache.put(&url, &entry);
+        }
+
+        let value: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
+                message: format!("failed to parse formula JSON: {e}"),
+            })?;
+
+        Ok(value)
     }
 }
 

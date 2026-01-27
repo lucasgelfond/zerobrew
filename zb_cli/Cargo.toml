@@ -2,7 +2,6 @@
 name = "zb_cli"
 version = "0.1.0"
 edition = "2024"
-rust-version.workspace = true
 
 [[bin]]
 name = "zb"
@@ -13,9 +12,13 @@ clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 indicatif = "0.17"
 console = "0.15"
+serde_json = "1.0"
 
 zb_core = { path = "../zb_core" }
 zb_io = { path = "../zb_io" }
+zb_migrate = { path = "../zb_migrate" }
+zb_services = { path = "../zb_services" }
+zb_brewfile = { path = "../zb_brewfile" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

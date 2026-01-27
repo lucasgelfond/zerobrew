@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -11,7 +10,7 @@ use reqwest::StatusCode;
 use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH, HeaderValue, WWW_AUTHENTICATE};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
+use tokio::sync::{Mutex, RwLock, Semaphore, mpsc};
 
 use crate::blob::BlobCache;
 use crate::progress::InstallProgress;
@@ -91,11 +90,6 @@ impl Downloader {
             client: reqwest::Client::builder()
                 .user_agent("zerobrew/0.1")
                 .pool_max_idle_per_host(10)
-                .tcp_nodelay(true)
-                .tcp_keepalive(Duration::from_secs(60))
-                .http2_adaptive_window(true)
-                .http2_initial_stream_window_size(Some(2 * 1024 * 1024))
-                .http2_initial_connection_window_size(Some(4 * 1024 * 1024))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
             blob_cache,
@@ -150,9 +144,11 @@ impl Downloader {
         name: Option<String>,
         progress: Option<DownloadProgressCallback>,
     ) -> Result<PathBuf, Error> {
-        let done = Arc::new(AtomicBool::new(false));
-        let done_notify = Arc::new(Notify::new());
-        let body_download_gate = Arc::new(Semaphore::new(1));
+        use tokio::sync::oneshot;
+
+        // Create a channel to signal completion
+        let (done_tx, _done_rx) = oneshot::channel::<()>();
+        let done_tx = Arc::new(Mutex::new(Some(done_tx)));
 
         // Build list of URLs to race:
         // - Multiple connections to primary URL (hits different CDN edges)
@@ -175,10 +171,9 @@ impl Downloader {
             let token_cache = self.token_cache.clone();
             let expected_sha256 = expected_sha256.to_string();
             let name = name.clone();
-            let progress = progress.clone();
-            let done = done.clone();
-            let done_notify = done_notify.clone();
-            let body_download_gate = body_download_gate.clone();
+            // Only first connection reports progress to avoid duplicate updates
+            let progress = if idx == 0 { progress.clone() } else { None };
+            let done_tx = done_tx.clone();
 
             // Stagger starts to give earlier connections a head start
             let delay = Duration::from_millis(idx as u64 * RACING_STAGGER_MS);
@@ -186,73 +181,33 @@ impl Downloader {
             let handle = tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
 
-                if done.load(Ordering::Acquire) {
-                    return Err(Error::NetworkFailure {
-                        message: "cancelled: another download finished first".to_string(),
-                    });
-                }
-
-                // Another racing task may have already created the final blob.
-                if blob_cache.has_blob(&expected_sha256) {
-                    if let (Some(cb), Some(n)) = (&progress, &name) {
-                        cb(InstallProgress::DownloadCompleted {
-                            name: n.clone(),
-                            total_bytes: 0,
-                        });
-                    }
-
-                    done.store(true, Ordering::Release);
-                    done_notify.notify_waiters();
-                    return Ok(blob_cache.blob_path(&expected_sha256));
-                }
-
-                let response =
-                    fetch_download_response_internal(&downloader_client, &token_cache, &url)
-                        .await?;
-
-                let _permit = tokio::select! {
-                    permit = body_download_gate.acquire_owned() => permit.map_err(|_| Error::NetworkFailure {
-                        message: "download permit closed unexpectedly".to_string(),
-                    })?,
-                    _ = done_notify.notified() => {
+                // Check if another download already finished
+                {
+                    let guard = done_tx.lock().await;
+                    if guard.is_none() {
                         return Err(Error::NetworkFailure {
                             message: "cancelled: another download finished first".to_string(),
                         });
                     }
-                };
-
-                if done.load(Ordering::Acquire) {
-                    return Err(Error::NetworkFailure {
-                        message: "cancelled: another download finished first".to_string(),
-                    });
                 }
 
-                // Another racing task may have created the blob while we waited for the permit.
-                if blob_cache.has_blob(&expected_sha256) {
-                    if let (Some(cb), Some(n)) = (&progress, &name) {
-                        cb(InstallProgress::DownloadCompleted {
-                            name: n.clone(),
-                            total_bytes: 0,
-                        });
-                    }
-
-                    done.store(true, Ordering::Release);
-                    done_notify.notify_waiters();
-                    return Ok(blob_cache.blob_path(&expected_sha256));
-                }
-
-                let result = download_response_internal(
+                let result = download_single_internal(
+                    &downloader_client,
                     &blob_cache,
-                    response,
+                    &token_cache,
+                    &url,
                     &expected_sha256,
                     name,
                     progress,
                 )
                 .await;
 
+                // Signal completion if successful
                 if result.is_ok() {
-                    done.store(true, Ordering::Release);
-                    done_notify.notify_waiters();
+                    let mut guard = done_tx.lock().await;
+                    if let Some(tx) = guard.take() {
+                        let _ = tx.send(());
+                    }
                 }
 
                 result
@@ -271,9 +226,8 @@ impl Downloader {
 
             match result {
                 Ok(Ok(path)) => {
-                    for handle in &pending {
-                        handle.abort();
-                    }
+                    // Cancel remaining downloads by dropping their handles
+                    drop(pending);
                     return Ok(path);
                 }
                 Ok(Err(e)) => last_error = Some(e),
@@ -291,12 +245,27 @@ impl Downloader {
     }
 }
 
-/// Fetch a successful download response with GHCR auth handling.
-async fn fetch_download_response_internal(
+/// Internal download function that can be called from racing context
+async fn download_single_internal(
     client: &reqwest::Client,
+    blob_cache: &BlobCache,
     token_cache: &TokenCache,
     url: &str,
-) -> Result<reqwest::Response, Error> {
+    expected_sha256: &str,
+    name: Option<String>,
+    progress: Option<DownloadProgressCallback>,
+) -> Result<PathBuf, Error> {
+    // Check cache first
+    if blob_cache.has_blob(expected_sha256) {
+        if let (Some(cb), Some(n)) = (&progress, &name) {
+            cb(InstallProgress::DownloadCompleted {
+                name: n.clone(),
+                total_bytes: 0,
+            });
+        }
+        return Ok(blob_cache.blob_path(expected_sha256));
+    }
+
     // Try with cached token first (for GHCR URLs)
     let cached_token = get_cached_token_for_url_internal(token_cache, url).await;
 
@@ -324,7 +293,7 @@ async fn fetch_download_response_internal(
         });
     }
 
-    Ok(response)
+    download_response_internal(blob_cache, response, expected_sha256, name, progress).await
 }
 
 async fn get_cached_token_for_url_internal(token_cache: &TokenCache, url: &str) -> Option<String> {

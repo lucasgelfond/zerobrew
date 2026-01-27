@@ -22,8 +22,6 @@ pub enum InstallProgress {
     LinkStarted { name: String },
     /// Linking completed for a package
     LinkCompleted { name: String },
-    /// Installation completed for a package (final state)
-    InstallCompleted { name: String },
 }
 
 /// Callback type for progress reporting
