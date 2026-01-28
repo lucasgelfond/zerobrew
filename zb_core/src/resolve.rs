@@ -145,13 +145,82 @@ mod tests {
     }
 
     #[test]
-    fn detects_cycles() {
+    fn detects_three_node_cycle() {
         let mut formulas = BTreeMap::new();
         formulas.insert("alpha".to_string(), formula("alpha", &["beta"]));
         formulas.insert("beta".to_string(), formula("beta", &["gamma"]));
         formulas.insert("gamma".to_string(), formula("gamma", &["alpha"]));
 
         let err = resolve_closure("alpha", &formulas).unwrap_err();
+        match err {
+            Error::DependencyCycle { cycle } => {
+                assert_eq!(cycle.len(), 3);
+                assert!(cycle.contains(&"alpha".to_string()));
+                assert!(cycle.contains(&"beta".to_string()));
+                assert!(cycle.contains(&"gamma".to_string()));
+            }
+            _ => panic!("Expected DependencyCycle error"),
+        }
+    }
+
+    #[test]
+    fn detects_simple_two_node_cycle() {
+        let mut formulas = BTreeMap::new();
+        formulas.insert("a".to_string(), formula("a", &["b"]));
+        formulas.insert("b".to_string(), formula("b", &["a"]));
+
+        let err = resolve_closure("a", &formulas).unwrap_err();
         assert!(matches!(err, Error::DependencyCycle { .. }));
+    }
+
+    #[test]
+    fn detects_self_cycle() {
+        let mut formulas = BTreeMap::new();
+        formulas.insert("loop".to_string(), formula("loop", &["loop"]));
+
+        let err = resolve_closure("loop", &formulas).unwrap_err();
+        assert!(matches!(err, Error::DependencyCycle { .. }));
+    }
+
+    #[test]
+    fn missing_formula_error() {
+        let mut formulas = BTreeMap::new();
+        formulas.insert("root".to_string(), formula("root", &["missing"]));
+
+        let err = resolve_closure("root", &formulas).unwrap_err();
+        match err {
+            Error::MissingFormula { name } => {
+                assert_eq!(name, "missing");
+            }
+            _ => panic!("Expected MissingFormula error"),
+        }
+    }
+
+    #[test]
+    fn diamond_dependency_convergence() {
+        // Diamond: root -> [a, b] -> c
+        let mut formulas = BTreeMap::new();
+        formulas.insert("root".to_string(), formula("root", &["a", "b"]));
+        formulas.insert("a".to_string(), formula("a", &["c"]));
+        formulas.insert("b".to_string(), formula("b", &["c"]));
+        formulas.insert("c".to_string(), formula("c", &[]));
+
+        let order = resolve_closure("root", &formulas).unwrap();
+        assert_eq!(order.len(), 4);
+        // c should come first (no deps), root should be last
+        assert_eq!(order[0], "c");
+        assert_eq!(order[3], "root");
+        // a and b should be in the middle (order between them is deterministic)
+        assert!(order[1] == "a" || order[1] == "b");
+        assert!(order[2] == "a" || order[2] == "b");
+    }
+
+    #[test]
+    fn empty_dependencies() {
+        let mut formulas = BTreeMap::new();
+        formulas.insert("standalone".to_string(), formula("standalone", &[]));
+
+        let order = resolve_closure("standalone", &formulas).unwrap();
+        assert_eq!(order, vec!["standalone"]);
     }
 }
