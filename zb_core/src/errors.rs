@@ -36,8 +36,14 @@ impl fmt::Display for Error {
                 )
             }
             Error::DependencyCycle { cycle } => {
-                let rendered = cycle.join(" -> ");
-                write!(f, "dependency cycle detected: {rendered}")
+                write!(f, "dependency cycle detected: ")?;
+                for (i, item) in cycle.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " -> ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                Ok(())
             }
             Error::NotInstalled { name } => write!(f, "formula '{name}' is not installed"),
         }
@@ -57,5 +63,13 @@ mod tests {
         };
 
         assert!(err.to_string().contains("libheif"));
+    }
+
+    #[test]
+    fn dependency_cycle_display_format() {
+        let err = Error::DependencyCycle {
+            cycle: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        };
+        assert_eq!(err.to_string(), "dependency cycle detected: a -> b -> c");
     }
 }
