@@ -18,6 +18,7 @@ use crate::progress::InstallProgress;
 use zb_core::Error;
 
 /// Number of parallel connections to race when downloading (hits different CDN edges)
+/// Number of parallel connections to race when downloading (hits different CDN edges)
 const RACING_CONNECTIONS: usize = 4;
 
 /// Delay between starting each racing connection (ms)
