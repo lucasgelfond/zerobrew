@@ -36,6 +36,25 @@ pub struct ExecuteResult {
     pub installed: usize,
 }
 
+fn normalize_formula_name(name: &str) -> Result<String, Error> {
+    let trimmed = name.trim();
+    if let Some((tap, formula)) = trimmed.rsplit_once('/') {
+        if tap == "homebrew/core" {
+            if formula.is_empty() {
+                return Err(Error::MissingFormula {
+                    name: trimmed.to_string(),
+                });
+            }
+            return Ok(formula.to_string());
+        }
+        return Err(Error::UnsupportedTap {
+            name: trimmed.to_string(),
+        });
+    }
+
+    Ok(trimmed.to_string())
+}
+
 /// Internal struct for tracking processed packages during streaming install
 #[derive(Clone)]
 struct ProcessedPackage {
@@ -67,11 +86,12 @@ impl Installer {
 
     /// Resolve dependencies and plan the install
     pub async fn plan(&self, name: &str) -> Result<InstallPlan, Error> {
+        let name = normalize_formula_name(name)?;
         // Recursively fetch all formulas we need
-        let formulas = self.fetch_all_formulas(name).await?;
+        let formulas = self.fetch_all_formulas(&name).await?;
 
         // Resolve in topological order
-        let ordered = resolve_closure(name, &formulas)?;
+        let ordered = resolve_closure(&name, &formulas)?;
 
         // Build list of formulas in order
         let all_formulas: Vec<Formula> = ordered
@@ -534,6 +554,21 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(data);
         format!("{:x}", hasher.finalize())
+    }
+
+    #[test]
+    fn normalize_formula_name_allows_homebrew_core() {
+        let name = normalize_formula_name("homebrew/core/openssl@3").unwrap();
+        assert_eq!(name, "openssl@3");
+    }
+
+    #[test]
+    fn normalize_formula_name_rejects_other_taps() {
+        let err = normalize_formula_name("charmbracelet/tap/crush").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::UnsupportedTap { name } if name == "charmbracelet/tap/crush"
+        ));
     }
 
     #[tokio::test]

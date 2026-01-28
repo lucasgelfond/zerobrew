@@ -9,6 +9,7 @@ pub enum Error {
     StoreCorruption { message: String },
     NetworkFailure { message: String },
     MissingFormula { name: String },
+    UnsupportedTap { name: String },
     DependencyCycle { cycle: Vec<String> },
     NotInstalled { name: String },
 }
@@ -28,6 +29,12 @@ impl fmt::Display for Error {
             Error::StoreCorruption { message } => write!(f, "store corruption: {message}"),
             Error::NetworkFailure { message } => write!(f, "network failure: {message}"),
             Error::MissingFormula { name } => write!(f, "missing formula '{name}'"),
+            Error::UnsupportedTap { name } => {
+                write!(
+                    f,
+                    "tap formula '{name}' is not supported (only homebrew/core)"
+                )
+            }
             Error::DependencyCycle { cycle } => {
                 let rendered = cycle.join(" -> ");
                 write!(f, "dependency cycle detected: {rendered}")
