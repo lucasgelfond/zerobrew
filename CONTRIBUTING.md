@@ -44,6 +44,20 @@ out in the Discord to give us a heads up or open an issue first to discuss your 
 > [!NOTE] 
 > These will run in CI but it's best you clean up your code _before_ opening a PR to ensure a quick 
 > turnaround!
+
+### Using Just
+
+This project includes a `Justfile`, Install [just](https://github.com/casey/just) and use these commands instead of `cargo` (for ease of development):
+
+- `just build` Format, lint, then build the binary (Builds debug binary)
+- `just install` Build and install zb to $HOME/.local/bin (Customizable with `$ZEROBREW_BIN`)
+- `just uninstall` Remove all zerobrew installations and configurations
+- `just fmt` Check code formatting
+- `just lint` Run clippy with strict warnings
+- `just test` Run all workspace tests
+
+Before creating a PR make sure you `build` your changes and `test` them.
+
 3. Write tests for new functionality. Each module should have accompanying tests.
 4. Commit your changes with clear, descriptive commit messages (see below)
 5. Push to your fork and submit a pull request.
