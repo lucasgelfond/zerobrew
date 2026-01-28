@@ -45,6 +45,14 @@ jobs:
         with:
           shared-key: ${{ matrix.os }}-${{ matrix.rust }}
       
+      - name: setup pkg-config path
+        run: |
+          if [ "$(uname)" = "Darwin" ] && [ -d "/opt/homebrew/lib/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+          elif [ "$(uname)" = "Linux" ] && [ -d "/usr/lib/x86_64-linux-gnu/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+          fi
+      
       - name: build (debug)
         run: cargo build --workspace --all-targets
       
