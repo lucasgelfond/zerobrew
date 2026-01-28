@@ -95,6 +95,7 @@ mod tests {
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
+            revision: 0,
         };
 
         let selected = select_bottle(&formula).unwrap();
@@ -123,6 +124,7 @@ mod tests {
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
+            revision: 0,
         };
 
         let err = select_bottle(&formula).unwrap_err();
