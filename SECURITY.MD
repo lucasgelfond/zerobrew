@@ -6,7 +6,7 @@ We take security seriously and provide security updates for the latest version z
 We strongly recommend keeping your zerobrew dependencies up to date.
 
 ## Reporting a Vulnerability
-
+#romash
 **Please do not report security vulnerabilities through public GitHub issues.**
 
 If you discover a security vulnerability in nmrs or any of the related crates, please report it privately by emailing
