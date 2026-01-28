@@ -1,8 +1,10 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-
 use zb_core::Error;
+
+#[cfg(target_os = "linux")]
+use crate::linux_patch::patch_placeholders;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyStrategy {
@@ -62,6 +64,22 @@ impl Cellar {
         // Patch Homebrew placeholders in Mach-O binaries
         #[cfg(target_os = "macos")]
         patch_homebrew_placeholders(&keg_path, &self.cellar_dir, name, version)?;
+
+        // Patch Homebrew placeholders in ELF binaries
+        #[cfg(target_os = "linux")]
+        {
+            // Derive prefix from cellar_dir directly without hardcoded fallback
+            let prefix = self
+                .cellar_dir
+                .parent()
+                .ok_or_else(|| Error::StoreCorruption {
+                    message: format!(
+                        "Invalid cellar directory (no parent): {}",
+                        self.cellar_dir.display()
+                    ),
+                })?;
+            patch_placeholders(&keg_path, prefix, name, version)?;
+        }
 
         // Strip quarantine xattrs and ad-hoc sign Mach-O binaries
         #[cfg(target_os = "macos")]
