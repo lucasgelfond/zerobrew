@@ -39,6 +39,12 @@ fi
 
 # Build
 echo "Building zerobrew..."
+if [[ -d "/opt/zerobrew/prefix/lib/pkgconfig" ]]; then
+    export PKG_CONFIG_PATH="/opt/zerobrew/prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+fi
+if [[ -d "/opt/homebrew/lib/pkgconfig" ]] && [[ ! "$PKG_CONFIG_PATH" =~ "/opt/homebrew/lib/pkgconfig" ]]; then
+    export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+fi
 cargo build --release
 
 # Create bin directory and install binary
@@ -81,6 +87,7 @@ if ! grep -q "^# zerobrew$" "$SHELL_CONFIG" 2>/dev/null; then
 # zerobrew
 export ZEROBREW_DIR=$ZEROBREW_DIR
 export ZEROBREW_BIN=$ZEROBREW_BIN
+export PKG_CONFIG_PATH="/opt/zerobrew/prefix/lib/pkgconfig:\${PKG_CONFIG_PATH:-}"
 _zb_path_append() {
     local argpath="\$1"
     case ":\${PATH}:" in

@@ -2,6 +2,13 @@
 set -e
 
 # Build release binary
+if [[ -d "/opt/zerobrew/prefix/lib/pkgconfig" ]]; then
+    export PKG_CONFIG_PATH="/opt/zerobrew/prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+fi
+if [[ -d "/opt/homebrew/lib/pkgconfig" ]] && [[ ! "$PKG_CONFIG_PATH" =~ "/opt/homebrew/lib/pkgconfig" ]]; then
+    export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+fi
+
 cargo build --release -p zb_cli
 
 # Install to ~/.local/bin (create if needed)
