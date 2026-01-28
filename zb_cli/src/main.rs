@@ -307,6 +307,25 @@ fn ensure_init(root: &Path, prefix: &Path) -> Result<(), zb_core::Error> {
     run_init(root, prefix).map_err(|e| zb_core::Error::StoreCorruption { message: e })
 }
 
+fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
+    let trimmed = name.trim();
+    if let Some((tap, formula)) = trimmed.rsplit_once('/') {
+        if tap == "homebrew/core" {
+            if formula.is_empty() {
+                return Err(zb_core::Error::MissingFormula {
+                    name: trimmed.to_string(),
+                });
+            }
+            return Ok(formula.to_string());
+        }
+        return Err(zb_core::Error::UnsupportedTap {
+            name: trimmed.to_string(),
+        });
+    }
+
+    Ok(trimmed.to_string())
+}
+
 fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!();
     eprintln!(
@@ -350,7 +369,15 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 style(&formula).bold()
             );
 
-            let plan = match installer.plan(&formula).await {
+            let normalized = match normalize_formula_name(&formula) {
+                Ok(name) => name,
+                Err(e) => {
+                    suggest_homebrew(&formula, &e);
+                    return Err(e);
+                }
+            };
+
+            let plan = match installer.plan(&normalized).await {
                 Ok(p) => p,
                 Err(e) => {
                     suggest_homebrew(&formula, &e);
