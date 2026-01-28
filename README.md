@@ -88,6 +88,11 @@ cargo install --path zb_cli
 ./benchmark.sh -h                             # show help
 ```
 
+## Uninstall
+```bash
+~/.zerobrew/remove-zerobrew
+```
+
 ## Status
 
 Experimental. works for most core homebrew packages. Some formulas may need more work - please submit issues / PRs! 
