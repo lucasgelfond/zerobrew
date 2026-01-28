@@ -364,6 +364,7 @@ fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
 /// Represents a Homebrew package that can be migrated
 struct HomebrewPackage {
     name: String,
+    #[allow(dead_code)]
     tap: String,
     is_cask: bool,
 }
@@ -382,9 +383,8 @@ fn get_homebrew_packages() -> Result<Vec<HomebrewPackage>, String> {
         ));
     }
 
-    let formulas_json: serde_json::Value =
-        serde_json::from_slice(&formulas_output.stdout)
-            .map_err(|e| format!("Failed to parse brew info JSON: {}", e))?;
+    let formulas_json: serde_json::Value = serde_json::from_slice(&formulas_output.stdout)
+        .map_err(|e| format!("Failed to parse brew info JSON: {}", e))?;
 
     let mut packages = Vec::new();
 
@@ -411,18 +411,17 @@ fn get_homebrew_packages() -> Result<Vec<HomebrewPackage>, String> {
         .output()
         .map_err(|e| format!("Failed to run 'brew list --cask': {}", e))?;
 
-    if casks_output.status.success() {
-        if let Ok(casks_json) = serde_json::from_slice::<serde_json::Value>(&casks_output.stdout) {
-            if let Some(casks) = casks_json.as_array() {
-                for cask in casks {
-                    if let Some(token) = cask.get("token").and_then(|t| t.as_str()) {
-                        packages.push(HomebrewPackage {
-                            name: token.to_string(),
-                            tap: "homebrew/cask".to_string(),
-                            is_cask: true,
-                        });
-                    }
-                }
+    if casks_output.status.success()
+        && let Ok(casks_json) = serde_json::from_slice::<serde_json::Value>(&casks_output.stdout)
+        && let Some(casks) = casks_json.as_array()
+    {
+        for cask in casks {
+            if let Some(token) = cask.get("token").and_then(|t| t.as_str()) {
+                packages.push(HomebrewPackage {
+                    name: token.to_string(),
+                    tap: "homebrew/cask".to_string(),
+                    is_cask: true,
+                });
             }
         }
     }
@@ -776,7 +775,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
 
                 println!("{} Uninstalled all packages", style("==>").cyan().bold());
             }
-        }
+        },
 
         Commands::Migrate { yes } => {
             println!(
@@ -825,7 +824,10 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 return Ok(());
             }
 
-            println!("The following {} formulas will be migrated:", formulas.len());
+            println!(
+                "The following {} formulas will be migrated:",
+                formulas.len()
+            );
             for pkg in &formulas {
                 println!("    • {}", pkg.name);
             }
@@ -908,7 +910,9 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             }
 
             if success_count == 0 {
-                println!("No formulas were successfully migrated. Skipping uninstall from Homebrew.");
+                println!(
+                    "No formulas were successfully migrated. Skipping uninstall from Homebrew."
+                );
                 return Ok(());
             }
 
