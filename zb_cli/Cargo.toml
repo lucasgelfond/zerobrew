@@ -14,6 +14,7 @@ clap_complete = { workspace = true, features = ["unstable-dynamic"] }
 tokio = { workspace = true, features = ["full"] }
 indicatif.workspace = true
 console.workspace = true
+serde_json.workspace = true
 
 zb_core = { path = "../zb_core" }
 zb_io = { path = "../zb_io" }
