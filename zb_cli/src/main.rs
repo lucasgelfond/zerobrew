@@ -18,12 +18,12 @@ use zb_io::{InstallProgress, ProgressCallback};
 #[command(version)]
 struct Cli {
     /// Root directory for zerobrew data
-    #[arg(long, default_value = "/opt/zerobrew")]
-    root: PathBuf,
+    #[arg(long, env = "ZEROBREW_ROOT")]
+    root: Option<PathBuf>,
 
     /// Prefix directory for linked binaries
-    #[arg(long, default_value = "/opt/zerobrew/prefix")]
-    prefix: PathBuf,
+    #[arg(long, env = "ZEROBREW_PREFIX")]
+    prefix: Option<PathBuf>,
 
     /// Number of parallel downloads
     #[arg(long, default_value = "48")]
@@ -359,9 +359,26 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         return Ok(());
     }
 
+    let root = cli.root.unwrap_or_else(|| {
+        let legacy_root = PathBuf::from("/opt/zerobrew");
+        if legacy_root.exists() {
+            return legacy_root;
+        }
+        // Default to ~/.zerobrew on linux
+        if cfg!(target_os = "linux") {
+            std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".zerobrew"))
+                .unwrap_or_else(|_| legacy_root)
+        } else {
+            legacy_root
+        }
+    });
+
+    let prefix = cli.prefix.unwrap_or_else(|| root.clone());
+
     // Handle init separately - it doesn't need the installer
     if matches!(cli.command, Commands::Init) {
-        return run_init(&cli.root, &cli.prefix)
+        return run_init(&root, &prefix)
             .map_err(|e| zb_core::Error::StoreCorruption { message: e });
     }
 
@@ -370,10 +387,10 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         // Skip init check for reset
     } else {
         // Ensure initialized before other commands
-        ensure_init(&cli.root, &cli.prefix)?;
+        ensure_init(&root, &prefix)?;
     }
 
-    let mut installer = create_installer(&cli.root, &cli.prefix, cli.concurrency)?;
+    let mut installer = create_installer(&root, &prefix, cli.concurrency)?;
 
     match cli.command {
         Commands::Init => unreachable!(),              // Handled above
@@ -635,7 +652,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         }
 
         Commands::Reset { yes } => {
-            if !cli.root.exists() && !cli.prefix.exists() {
+            if !root.exists() && !prefix.exists() {
                 println!("Nothing to reset - directories do not exist.");
                 return Ok(());
             }
@@ -645,8 +662,8 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     "{} This will delete all zerobrew data at:",
                     style("Warning:").yellow().bold()
                 );
-                println!("      • {}", cli.root.display());
-                println!("      • {}", cli.prefix.display());
+                println!("      • {}", root.display());
+                println!("      • {}", prefix.display());
                 print!("Continue? [y/N] ");
                 use std::io::{self, Write};
                 io::stdout().flush().unwrap();
@@ -660,7 +677,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             }
 
             // Remove directories - try without sudo first, then with
-            for dir in [&cli.root, &cli.prefix] {
+            for dir in [&root, &prefix] {
                 if !dir.exists() {
                     continue;
                 }
@@ -689,8 +706,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             }
 
             // Re-initialize with correct permissions
-            run_init(&cli.root, &cli.prefix)
-                .map_err(|e| zb_core::Error::StoreCorruption { message: e })?;
+            run_init(&root, &prefix).map_err(|e| zb_core::Error::StoreCorruption { message: e })?;
 
             println!(
                 "{} Reset complete. Ready for cold install.",
