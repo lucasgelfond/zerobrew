@@ -221,6 +221,21 @@ FAILED=0
 echo -e "${BLUE}Running benchmark suite (${#PACKAGES[@]} packages from $SOURCE list)...${NC}" >&2
 echo "" >&2
 
+# Configure zerobrew to use user-local directory (can be overridden)
+if [ -z "$ZEROBREW_ROOT" ]; then
+    export ZEROBREW_ROOT="$HOME/.zerobrew"
+    echo "Defaulting ZEROBREW_ROOT to $ZEROBREW_ROOT"
+    echo "To override, run: export ZEROBREW_ROOT=/path/to/root"
+fi
+
+if [ -z "$ZEROBREW_PREFIX" ]; then
+    export ZEROBREW_PREFIX="$ZEROBREW_ROOT/prefix"
+    echo "Defaulting ZEROBREW_PREFIX to $ZEROBREW_PREFIX"
+    echo "To override, run: export ZEROBREW_PREFIX=/path/to/prefix"
+fi
+
+echo "Using zerobrew root: $ZEROBREW_ROOT"
+
 for i in "${!PACKAGES[@]}"; do
     pkg="${PACKAGES[$i]}"
     idx=$((i + 1))
@@ -231,8 +246,9 @@ for i in "${!PACKAGES[@]}"; do
     brew uninstall --ignore-dependencies "$pkg" 2>/dev/null || true
     zb uninstall "$pkg" 2>/dev/null || true
 
-    # Clean zerobrew caches for cold test
-    rm -rf /opt/zerobrew/db /opt/zerobrew/cache /opt/zerobrew/store 2>/dev/null || true
+    # Clean zerobrew directories for cold test
+    rm -rf "$ZEROBREW_ROOT/db" "$ZEROBREW_ROOT/cache" "$ZEROBREW_ROOT/store" "$ZEROBREW_PREFIX" 2>/dev/null || true
+    mkdir -p "$ZEROBREW_PREFIX/bin" "$ZEROBREW_PREFIX/Cellar" 2>/dev/null || true
 
     # Time homebrew install
     echo "  Installing with homebrew..." >&2
@@ -299,7 +315,7 @@ for i in "${!PACKAGES[@]}"; do
     RESULT_ZB_COLD+=("$ZB_COLD_MS")
     RESULT_ZB_WARM+=("$ZB_WARM_MS")
     RESULT_SPEEDUP+=("$SPEEDUP")
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 
     echo "" >&2
 done
