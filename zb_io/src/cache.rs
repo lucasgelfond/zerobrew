@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::Path;
 
 pub struct ApiCache {
@@ -10,6 +10,13 @@ pub struct CacheEntry {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub body: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    pub entry_count: usize,
+    pub oldest_entry: Option<i64>,
+    pub newest_entry: Option<i64>,
 }
 
 impl ApiCache {
@@ -68,6 +75,33 @@ impl ApiCache {
         )?;
         Ok(())
     }
+
+    /// Clear all cached entries. Returns the number of entries removed.
+    pub fn clear(&self) -> Result<usize, rusqlite::Error> {
+        let removed = self.conn.execute("DELETE FROM api_cache", [])?;
+        Ok(removed)
+    }
+
+    /// Get cache statistics.
+    pub fn stats(&self) -> Result<CacheStats, rusqlite::Error> {
+        let entry_count: usize =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM api_cache", [], |row| row.get(0))?;
+
+        let oldest_entry: Option<i64> =
+            self.conn
+                .query_row("SELECT MIN(cached_at) FROM api_cache", [], |row| row.get(0))?;
+
+        let newest_entry: Option<i64> =
+            self.conn
+                .query_row("SELECT MAX(cached_at) FROM api_cache", [], |row| row.get(0))?;
+
+        Ok(CacheStats {
+            entry_count,
+            oldest_entry,
+            newest_entry,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -95,5 +129,61 @@ mod tests {
     fn returns_none_for_missing_entry() {
         let cache = ApiCache::in_memory().unwrap();
         assert!(cache.get("https://example.com/nonexistent.json").is_none());
+    }
+
+    fn make_entry() -> CacheEntry {
+        CacheEntry {
+            etag: Some("test".to_string()),
+            last_modified: None,
+            body: r#"{"test":true}"#.to_string(),
+        }
+    }
+
+    #[test]
+    fn clear_removes_all_entries() {
+        let cache = ApiCache::in_memory().unwrap();
+
+        cache
+            .put("https://example.com/a.json", &make_entry())
+            .unwrap();
+        cache
+            .put("https://example.com/b.json", &make_entry())
+            .unwrap();
+
+        let removed = cache.clear().unwrap();
+        assert_eq!(removed, 2);
+        assert!(cache.get("https://example.com/a.json").is_none());
+        assert!(cache.get("https://example.com/b.json").is_none());
+    }
+
+    #[test]
+    fn clear_returns_zero_on_empty_cache() {
+        let cache = ApiCache::in_memory().unwrap();
+        let removed = cache.clear().unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn stats_returns_correct_counts() {
+        let cache = ApiCache::in_memory().unwrap();
+
+        // Empty cache
+        let stats = cache.stats().unwrap();
+        assert_eq!(stats.entry_count, 0);
+        assert!(stats.oldest_entry.is_none());
+        assert!(stats.newest_entry.is_none());
+
+        // Add entries
+        cache
+            .put("https://example.com/a.json", &make_entry())
+            .unwrap();
+        cache
+            .put("https://example.com/b.json", &make_entry())
+            .unwrap();
+
+        let stats = cache.stats().unwrap();
+        assert_eq!(stats.entry_count, 2);
+        assert!(stats.oldest_entry.is_some());
+        assert!(stats.newest_entry.is_some());
     }
 }

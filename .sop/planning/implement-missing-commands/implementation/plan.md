@@ -2,7 +2,7 @@
 
 ## Checklist
 
-- [ ] Step 1: Add ApiCache management methods
+- [x] Step 1: Add ApiCache management methods
 - [ ] Step 2: Implement `update` command
 - [ ] Step 3: Add OutdatedPackage type and detection logic
 - [ ] Step 4: Implement `outdated` command (basic)
