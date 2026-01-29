@@ -4,6 +4,7 @@ pub mod cache;
 pub mod db;
 pub mod download;
 pub mod extract;
+pub mod homebrew;
 pub mod install;
 pub mod link;
 #[cfg(target_os = "linux")]
@@ -19,6 +20,7 @@ pub use cache::ApiCache;
 pub use db::{Database, InstalledKeg};
 pub use download::{DownloadProgressCallback, DownloadRequest, Downloader, ParallelDownloader};
 pub use extract::extract_tarball;
+pub use homebrew::{HomebrewMigrationPackages, HomebrewPackage, get_homebrew_packages};
 pub use install::Installer;
 pub use link::Linker;
 pub use materialize::Cellar;
