@@ -8,6 +8,8 @@ pub struct Formula {
     pub dependencies: Vec<String>,
     pub bottle: Bottle,
     #[serde(default)]
+    pub binary: Option<BinaryDownload>,
+    #[serde(default)]
     pub revision: u32,
 }
 
@@ -47,6 +49,14 @@ pub struct BottleStable {
 pub struct BottleFile {
     pub url: String,
     pub sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct BinaryDownload {
+    pub url: String,
+    pub sha256: String,
+    #[serde(default)]
+    pub bin: Option<String>,
 }
 
 #[cfg(test)]
