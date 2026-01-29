@@ -3,7 +3,17 @@ name: lint
 on:
   push:
     branches: [ main ]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
 
 permissions:
   contents: read
@@ -37,6 +47,14 @@ jobs:
       
       - name: cache rust dependencies
         uses: Swatinem/rust-cache@v2
+      
+      - name: setup pkg-config path
+        run: |
+          if [ "$(uname)" = "Darwin" ] && [ -d "/opt/homebrew/lib/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+          elif [ "$(uname)" = "Linux" ] && [ -d "/usr/lib/x86_64-linux-gnu/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+          fi
       
       - name: run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

@@ -7,15 +7,17 @@ pub struct Formula {
     pub versions: Versions,
     pub dependencies: Vec<String>,
     pub bottle: Bottle,
+    #[serde(default)]
+    pub revision: u32,
 }
 
 impl Formula {
-    /// Returns the effective version including rebuild suffix if applicable.
-    /// Homebrew bottles with rebuild > 0 have paths like `{version}_{rebuild}`.
+    /// Returns the effective version including revision suffix if applicable.
+    /// Homebrew formulas with revision > 0 have paths like `{version}_{revision}`.
+    /// Note: `rebuild` (in bottle) does NOT affect the installation directory, only the bottle filename.
     pub fn effective_version(&self) -> String {
-        let rebuild = self.bottle.stable.rebuild;
-        if rebuild > 0 {
-            format!("{}_{}", self.versions.stable, rebuild)
+        if self.revision > 0 {
+            format!("{}_{}", self.versions.stable, self.revision)
         } else {
             self.versions.stable.clone()
         }
@@ -67,30 +69,42 @@ mod tests {
     }
 
     #[test]
-    fn effective_version_without_rebuild() {
+    fn effective_version_without_revision() {
         let fixture = include_str!("../fixtures/formula_foo.json");
         let formula: Formula = serde_json::from_str(fixture).unwrap();
 
-        // Without rebuild, effective_version should equal stable version
-        assert_eq!(formula.bottle.stable.rebuild, 0);
+        // Without revision, effective_version should equal stable version
+        assert_eq!(formula.revision, 0);
         assert_eq!(formula.effective_version(), "1.2.3");
     }
 
     #[test]
-    fn effective_version_with_rebuild() {
-        let fixture = include_str!("../fixtures/formula_with_rebuild.json");
-        let formula: Formula = serde_json::from_str(fixture).unwrap();
+    fn effective_version_with_revision() {
+        // Manually construct formula with revision since we don't have a fixture for it yet
+        let mut formula: Formula =
+            serde_json::from_str(include_str!("../fixtures/formula_foo.json")).unwrap();
+        formula.revision = 1;
 
-        // With rebuild=1, effective_version should be "8.0.1_1"
-        assert_eq!(formula.bottle.stable.rebuild, 1);
-        assert_eq!(formula.effective_version(), "8.0.1_1");
+        // With revision=1, effective_version should be "1.2.3_1"
+        assert_eq!(formula.effective_version(), "1.2.3_1");
     }
 
     #[test]
-    fn rebuild_field_defaults_to_zero() {
-        // Formulas without rebuild field should default to 0
+    fn effective_version_ignores_rebuild_for_dir_name() {
+        let fixture = include_str!("../fixtures/formula_with_rebuild.json");
+        let formula: Formula = serde_json::from_str(fixture).unwrap();
+
+        // With rebuild=1 but revision=0, effective_version should NOT have suffix
+        assert_eq!(formula.bottle.stable.rebuild, 1);
+        assert_eq!(formula.revision, 0);
+        assert_eq!(formula.effective_version(), "8.0.1");
+    }
+
+    #[test]
+    fn revision_field_defaults_to_zero() {
+        // Formulas without revision field should default to 0
         let fixture = include_str!("../fixtures/formula_foo.json");
         let formula: Formula = serde_json::from_str(fixture).unwrap();
-        assert_eq!(formula.bottle.stable.rebuild, 0);
+        assert_eq!(formula.revision, 0);
     }
 }

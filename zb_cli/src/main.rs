@@ -1,7 +1,9 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::generate;
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -90,6 +92,13 @@ enum Commands {
 
     /// Initialize zerobrew directories with correct permissions
     Init,
+
+    /// Generate shell completion scripts
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::shells::Shell,
+    },
 }
 
 #[tokio::main]
@@ -249,22 +258,37 @@ fn add_to_path(prefix: &Path) -> Result<(), String> {
     if !already_added {
         // Append to config
         let addition = format!("\n# zerobrew\n{}\n", path_export);
-        std::fs::OpenOptions::new()
+
+        let write_result = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&config_file)
             .and_then(|mut f| {
                 use std::io::Write;
                 f.write_all(addition.as_bytes())
-            })
-            .map_err(|e| format!("Failed to update {}: {}", config_file, e))?;
+            });
 
-        println!(
-            "    {} Added {} to PATH in {}",
-            style("✓").green(),
-            bin_path.display(),
-            config_file
-        );
+        if let Err(e) = write_result {
+            println!(
+                "{} Could not write to {} due to error: {}",
+                style("Warning:").yellow().bold(),
+                config_file,
+                e
+            );
+            println!(
+                "{} Please add the following line to {}:",
+                style("Info:").cyan().bold(),
+                config_file
+            );
+            println!("{}", addition);
+        } else {
+            println!(
+                "    {} Added {} to PATH in {}",
+                style("✓").green(),
+                bin_path.display(),
+                config_file
+            );
+        }
     }
 
     // Always check if PATH is actually set in current shell
@@ -312,6 +336,25 @@ fn ensure_init(root: &Path, prefix: &Path) -> Result<(), zb_core::Error> {
     run_init(root, prefix).map_err(|e| zb_core::Error::StoreCorruption { message: e })
 }
 
+fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
+    let trimmed = name.trim();
+    if let Some((tap, formula)) = trimmed.rsplit_once('/') {
+        if tap == "homebrew/core" {
+            if formula.is_empty() {
+                return Err(zb_core::Error::MissingFormula {
+                    name: trimmed.to_string(),
+                });
+            }
+            return Ok(formula.to_string());
+        }
+        return Err(zb_core::Error::UnsupportedTap {
+            name: trimmed.to_string(),
+        });
+    }
+
+    Ok(trimmed.to_string())
+}
+
 fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!();
     eprintln!(
@@ -340,6 +383,13 @@ fn parse_tap_name(tap: &str) -> Result<(String, String), zb_core::Error> {
 }
 
 async fn run(cli: Cli) -> Result<(), zb_core::Error> {
+    // Handle completion first - it doesn't need the installer
+    if let Commands::Completion { shell } = cli.command {
+        let mut cmd = Cli::command();
+        generate(shell, &mut cmd, "zb", &mut io::stdout());
+        return Ok(());
+    }
+
     // Handle init separately - it doesn't need the installer
     if matches!(cli.command, Commands::Init) {
         return run_init(&cli.root, &cli.prefix)
@@ -431,7 +481,8 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     let mut installer = create_installer(&cli.root, &cli.prefix, cli.concurrency)?;
 
     match cli.command {
-        Commands::Init => unreachable!(), // Handled above
+        Commands::Init => unreachable!(),              // Handled above
+        Commands::Completion { .. } => unreachable!(), // Handled above
         Commands::Install { formula, no_link } => {
             let start = Instant::now();
             println!(
@@ -440,7 +491,15 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 style(&formula).bold()
             );
 
-            let plan = match installer.plan(&formula).await {
+            let normalized = match normalize_formula_name(&formula) {
+                Ok(name) => name,
+                Err(e) => {
+                    suggest_homebrew(&formula, &e);
+                    return Err(e);
+                }
+            };
+
+            let plan = match installer.plan(&normalized).await {
                 Ok(p) => p,
                 Err(e) => {
                     suggest_homebrew(&formula, &e);
