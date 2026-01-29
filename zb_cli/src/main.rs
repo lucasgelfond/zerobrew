@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use zb_io::install::create_installer;
-use zb_io::{InstallProgress, ProgressCallback};
+use zb_io::{ApiCache, InstallProgress, ProgressCallback};
 
 #[derive(Parser)]
 #[command(name = "zb")]
@@ -70,6 +70,9 @@ enum Commands {
 
     /// Initialize zerobrew directories with correct permissions
     Init,
+
+    /// Refresh package metadata cache
+    Update,
 }
 
 #[tokio::main]
@@ -349,6 +352,36 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             .map_err(|e| zb_core::Error::StoreCorruption { message: e });
     }
 
+    // Handle update separately - only needs the cache
+    if matches!(cli.command, Commands::Update) {
+        ensure_init(&cli.root, &cli.prefix)?;
+        let cache_path = cli.root.join("db/api_cache.sqlite3");
+        
+        if !cache_path.exists() {
+            println!(
+                "{} No cached entries to clear.",
+                style("==>").cyan().bold()
+            );
+            return Ok(());
+        }
+        
+        let cache = ApiCache::open(&cache_path).map_err(|e| zb_core::Error::StoreCorruption {
+            message: format!("failed to open API cache: {e}"),
+        })?;
+        
+        let removed = cache.clear().map_err(|e| zb_core::Error::StoreCorruption {
+            message: format!("failed to clear API cache: {e}"),
+        })?;
+        
+        println!(
+            "{} Cleared {} cached formula {}.",
+            style("==>").cyan().bold(),
+            style(removed).green().bold(),
+            if removed == 1 { "entry" } else { "entries" }
+        );
+        return Ok(());
+    }
+
     // For reset, handle specially since directories may not be writable
     if matches!(cli.command, Commands::Reset { .. }) {
         // Skip init check for reset
@@ -361,6 +394,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
 
     match cli.command {
         Commands::Init => unreachable!(), // Handled above
+        Commands::Update => unreachable!(), // Handled above
         Commands::Install { formula, no_link } => {
             let start = Instant::now();
             println!(
