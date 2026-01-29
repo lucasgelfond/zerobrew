@@ -32,7 +32,7 @@ impl ApiClient {
         self
     }
 
-    pub fn base_url(&self) -> &str {
+    pub(crate) fn base_url(&self) -> &str {
         &self.base_url
     }
 
@@ -40,7 +40,7 @@ impl ApiClient {
         self.get_formula_with_base_url(&self.base_url, name).await
     }
 
-    pub async fn get_formula_with_base_url(
+    pub(crate) async fn get_formula_with_base_url(
         &self,
         base_url: &str,
         name: &str,

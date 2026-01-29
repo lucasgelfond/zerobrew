@@ -563,6 +563,37 @@ mod tests {
         }
     }
 
+    struct EnvVarGuard {
+        key: String,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key.to_string(),
+                previous,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.previous.as_deref() {
+                Some(value) => unsafe {
+                    std::env::set_var(&self.key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(&self.key);
+                },
+            }
+        }
+    }
+
     #[tokio::test]
     async fn install_completes_successfully() {
         let mock_server = MockServer::start().await;
@@ -640,6 +671,67 @@ mod tests {
         let installed = installer.db.get_installed("testpkg");
         assert!(installed.is_some());
         assert_eq!(installed.unwrap().version, "1.0.0");
+    }
+
+    #[tokio::test]
+    async fn install_binary_formula_without_bottle() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let binary = b"#!/bin/sh\necho gpd\n";
+        let binary_sha = sha256_hex(binary);
+
+        let formula_json = format!(
+            r#"{{
+                "name": "gpd",
+                "versions": {{ "stable": "0.1.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{}}
+                    }}
+                }},
+                "binary": {{
+                    "url": "{}/binaries/gpd",
+                    "sha256": "{}",
+                    "bin": "gpd"
+                }}
+            }}"#,
+            mock_server.uri(),
+            binary_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/gpd.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/binaries/gpd"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(binary.to_vec()))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+
+        installer.install("gpd", true).await.unwrap();
+
+        let keg_path = root.join("cellar/gpd/0.1.0");
+        assert!(keg_path.exists());
+        assert!(keg_path.join("bin/gpd").exists());
+        assert!(prefix.join("bin/gpd").exists());
     }
 
     #[tokio::test]
@@ -989,6 +1081,9 @@ mod tests {
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
 
+        let _tap_base =
+            EnvVarGuard::set("ZB_TAP_BASE_URL", &mock_server.uri());
+
         let bottle = create_bottle_tarball("tappkg");
         let bottle_sha = sha256_hex(&bottle);
 
@@ -1013,7 +1108,7 @@ mod tests {
         );
 
         Mock::given(method("GET"))
-            .and(path("/user/tools/tappkg.json"))
+            .and(path("/user/tools/HEAD/Formula/tappkg.json"))
             .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
             .mount(&mock_server)
             .await;
