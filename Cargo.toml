@@ -10,6 +10,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs"] 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 console = "0.15"
 indicatif = "0.17"
 reqwest = { version = "0.12", features = ["json", "stream"] }

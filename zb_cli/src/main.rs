@@ -1,7 +1,9 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::generate;
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -70,6 +72,13 @@ enum Commands {
 
     /// Initialize zerobrew directories with correct permissions
     Init,
+
+    /// Generate shell completion scripts
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::shells::Shell,
+    },
 }
 
 #[tokio::main]
@@ -343,6 +352,13 @@ fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
 }
 
 async fn run(cli: Cli) -> Result<(), zb_core::Error> {
+    // Handle completion first - it doesn't need the installer
+    if let Commands::Completion { shell } = cli.command {
+        let mut cmd = Cli::command();
+        generate(shell, &mut cmd, "zb", &mut io::stdout());
+        return Ok(());
+    }
+
     // Handle init separately - it doesn't need the installer
     if matches!(cli.command, Commands::Init) {
         return run_init(&cli.root, &cli.prefix)
@@ -360,7 +376,8 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     let mut installer = create_installer(&cli.root, &cli.prefix, cli.concurrency)?;
 
     match cli.command {
-        Commands::Init => unreachable!(), // Handled above
+        Commands::Init => unreachable!(),              // Handled above
+        Commands::Completion { .. } => unreachable!(), // Handled above
         Commands::Install { formula, no_link } => {
             let start = Instant::now();
             println!(

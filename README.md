@@ -45,6 +45,62 @@ zb reset         # uninstall everything
 zb gc                # garbage collect unused store entries
 ```
 
+## Shell Completion
+
+Shell completions are available for `bash`, `zsh`, and `fish`. Completions provide intelligent suggestions for commands and options as you type.
+
+### Automatic Installation
+
+After installing `zb`, run the completion installer:
+
+```bash
+bash install-completions.sh
+```
+
+This script will:
+- Detect your shell (bash, zsh, or fish)
+- Generate and install completion scripts
+- Update your shell configuration
+- Prompt you to reload your shell
+
+### Manual Installation
+
+If you prefer to install completions manually, you can generate them using:
+
+```bash
+# For zsh
+zb completion zsh > ~/.zsh/completions/_zb
+
+# For bash
+zb completion bash > ~/.bash_completion.d/zb
+
+# For fish
+zb completion fish > ~/.config/fish/completions/zb.fish
+```
+
+After generating completions, reload your shell configuration:
+
+```bash
+# zsh
+source ~/.zshenv
+
+# bash
+source ~/.bashrc
+
+# fish
+# Completions load automatically
+```
+
+### Testing Completions
+
+Try typing and pressing Tab to see suggestions:
+
+```bash
+zb <TAB>           # suggests subcommands: install, uninstall, list, info, gc, reset, init
+zb install <TAB>   # suggests installed formulas
+zb uninstall <TAB> # suggests installed formulas
+```
+
 ## Why is it faster?
 
 - **Content-addressable store**: packages are stored by sha256 hash (at `/opt/zerobrew/store/{sha256}/`). Reinstalls are instant if the store entry exists.

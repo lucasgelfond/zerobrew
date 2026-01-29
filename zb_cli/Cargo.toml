@@ -9,7 +9,8 @@ name = "zb"
 path = "src/main.rs"
 
 [dependencies]
-clap.workspace = true
+clap = { workspace = true, features = ["derive"] }
+clap_complete = { workspace = true, features = ["unstable-dynamic"] }
 tokio = { workspace = true, features = ["full"] }
 indicatif.workspace = true
 console.workspace = true
