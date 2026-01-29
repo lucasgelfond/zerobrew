@@ -1,10 +1,13 @@
 use rusqlite::{params, Connection};
 use std::path::Path;
 
+/// SQLite-backed cache for Homebrew API responses.
+/// Stores formula JSON with ETag/Last-Modified for conditional requests.
 pub struct ApiCache {
     conn: Connection,
 }
 
+/// A cached API response entry.
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
     pub etag: Option<String>,
@@ -12,10 +15,14 @@ pub struct CacheEntry {
     pub body: String,
 }
 
+/// Statistics about the API cache.
 #[derive(Debug, Clone)]
 pub struct CacheStats {
+    /// Number of cached entries
     pub entry_count: usize,
+    /// Timestamp of oldest entry (Unix epoch seconds)
     pub oldest_entry: Option<i64>,
+    /// Timestamp of newest entry (Unix epoch seconds)
     pub newest_entry: Option<i64>,
 }
 

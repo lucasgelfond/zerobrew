@@ -36,13 +36,21 @@ pub struct ExecuteResult {
     pub installed: usize,
 }
 
-/// Information about an outdated package
+/// Information about an outdated package.
+/// 
+/// Returned by [`Installer::is_outdated`] and [`Installer::check_outdated`]
+/// when a package has a newer version available.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OutdatedPackage {
+    /// Package name
     pub name: String,
+    /// Currently installed version string
     pub installed_version: String,
+    /// SHA256 hash of the installed bottle
     pub installed_sha256: String,
+    /// Latest available version string
     pub current_version: String,
+    /// SHA256 hash of the latest bottle
     pub current_sha256: String,
 }
 
