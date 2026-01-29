@@ -10,8 +10,7 @@
 - [x] Step 6: Implement `upgrade` command (single package)
 - [x] Step 7: Implement `upgrade` command (all packages)
 - [x] Step 8: Add dry-run support for upgrade
-- [ ] Step 9: Integration tests and edge cases
-- [ ] Step 9: Integration tests and edge cases
+- [x] Step 9: Integration tests and edge cases
 - [ ] Step 10: Documentation and help text
 
 ---

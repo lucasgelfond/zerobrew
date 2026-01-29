@@ -1641,4 +1641,236 @@ mod tests {
         assert_eq!(outdated[0].installed_version, "1.0.0");
         assert_eq!(outdated[0].current_version, "2.0.0");
     }
+
+    #[tokio::test]
+    async fn check_outdated_continues_on_network_failure() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        // Create and install two packages
+        let bottle1 = create_bottle_tarball("pkg1");
+        let bottle1_sha = sha256_hex(&bottle1);
+        let bottle2 = create_bottle_tarball("pkg2");
+        let bottle2_sha = sha256_hex(&bottle2);
+
+        let formula1_json = format!(
+            r#"{{
+                "name": "pkg1",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "arm64_sonoma": {{
+                                "url": "{}/bottles/pkg1-1.0.0.arm64_sonoma.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            mock_server.uri(),
+            bottle1_sha
+        );
+
+        let formula2_json = format!(
+            r#"{{
+                "name": "pkg2",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "arm64_sonoma": {{
+                                "url": "{}/bottles/pkg2-1.0.0.arm64_sonoma.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            mock_server.uri(),
+            bottle2_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/pkg1.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula1_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/pkg2.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula2_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/bottles/pkg1-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle1.clone()))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/bottles/pkg2-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle2.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+
+        // Install both packages
+        installer.install("pkg1", true).await.unwrap();
+        installer.install("pkg2", true).await.unwrap();
+
+        // Reset mocks - pkg1 returns 500 error, pkg2 returns new version
+        mock_server.reset().await;
+
+        Mock::given(method("GET"))
+            .and(path("/pkg1.json"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock_server)
+            .await;
+
+        let bottle2_v2 = create_bottle_tarball("pkg2_v2");
+        let bottle2_v2_sha = sha256_hex(&bottle2_v2);
+
+        let formula2_v2_json = format!(
+            r#"{{
+                "name": "pkg2",
+                "versions": {{ "stable": "2.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "arm64_sonoma": {{
+                                "url": "{}/bottles/pkg2-2.0.0.arm64_sonoma.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            mock_server.uri(),
+            bottle2_v2_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/pkg2.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula2_v2_json))
+            .mount(&mock_server)
+            .await;
+
+        // check_outdated should continue despite pkg1 failure
+        let outdated = installer.check_outdated().await.unwrap();
+        
+        // Should still find pkg2 as outdated
+        assert_eq!(outdated.len(), 1);
+        assert_eq!(outdated[0].name, "pkg2");
+    }
+
+    #[tokio::test]
+    async fn check_outdated_handles_removed_formula() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let bottle = create_bottle_tarball("removedpkg");
+        let bottle_sha = sha256_hex(&bottle);
+
+        let formula_json = format!(
+            r#"{{
+                "name": "removedpkg",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "arm64_sonoma": {{
+                                "url": "{}/bottles/removedpkg-1.0.0.arm64_sonoma.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            mock_server.uri(),
+            bottle_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/removedpkg.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/bottles/removedpkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+
+        installer.install("removedpkg", true).await.unwrap();
+
+        // Reset mocks - formula now returns 404 (removed from Homebrew)
+        mock_server.reset().await;
+
+        Mock::given(method("GET"))
+            .and(path("/removedpkg.json"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        // check_outdated should handle 404 gracefully
+        let outdated = installer.check_outdated().await.unwrap();
+        
+        // Should return empty (package couldn't be checked, warning printed)
+        assert!(outdated.is_empty());
+    }
+
+    #[tokio::test]
+    async fn check_outdated_empty_when_nothing_installed() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+
+        // No packages installed
+        let outdated = installer.check_outdated().await.unwrap();
+        assert!(outdated.is_empty());
+    }
 }
