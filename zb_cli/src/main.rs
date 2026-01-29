@@ -75,7 +75,19 @@ enum Commands {
     Update,
 
     /// List outdated packages
-    Outdated,
+    Outdated {
+        /// Print only package names, one per line
+        #[arg(short, long)]
+        quiet: bool,
+
+        /// Show detailed version information including sha256
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -654,12 +666,38 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             }
         }
 
-        Commands::Outdated => {
+        Commands::Outdated { quiet, verbose, json } => {
             let outdated = installer.check_outdated().await?;
 
-            if outdated.is_empty() {
-                println!("All packages are up to date.");
+            if json {
+                // JSON output
+                let output = serde_json::json!({
+                    "formulae": outdated
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else if outdated.is_empty() {
+                if !quiet {
+                    println!("All packages are up to date.");
+                }
+            } else if quiet {
+                // Quiet: just package names
+                for pkg in &outdated {
+                    println!("{}", pkg.name);
+                }
+            } else if verbose {
+                // Verbose: include sha256 (truncated)
+                for pkg in &outdated {
+                    println!(
+                        "{} ({}) < {} [{}... -> {}...]",
+                        style(&pkg.name).bold(),
+                        style(&pkg.installed_version).dim(),
+                        style(&pkg.current_version).green(),
+                        &pkg.installed_sha256[..12],
+                        &pkg.current_sha256[..12]
+                    );
+                }
             } else {
+                // Default format
                 for pkg in &outdated {
                     println!(
                         "{} ({}) < {}",

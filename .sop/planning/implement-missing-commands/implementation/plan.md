@@ -6,7 +6,7 @@
 - [x] Step 2: Implement `update` command
 - [x] Step 3: Add OutdatedPackage type and detection logic
 - [x] Step 4: Implement `outdated` command (basic)
-- [ ] Step 5: Add `outdated` output formats (quiet, verbose, json)
+- [x] Step 5: Add `outdated` output formats (quiet, verbose, json)
 - [ ] Step 6: Implement `upgrade` command (single package)
 - [ ] Step 7: Implement `upgrade` command (all packages)
 - [ ] Step 8: Add dry-run support for upgrade

@@ -37,7 +37,7 @@ pub struct ExecuteResult {
 }
 
 /// Information about an outdated package
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct OutdatedPackage {
     pub name: String,
     pub installed_version: String,

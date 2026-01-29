@@ -2259,6 +2259,7 @@ dependencies = [
  "console",
  "indicatif",
  "libc",
+ "serde_json",
  "tokio",
  "zb_core",
  "zb_io",
