@@ -4,7 +4,7 @@
 
 - [x] Step 1: Add ApiCache management methods
 - [x] Step 2: Implement `update` command
-- [ ] Step 3: Add OutdatedPackage type and detection logic
+- [x] Step 3: Add OutdatedPackage type and detection logic
 - [ ] Step 4: Implement `outdated` command (basic)
 - [ ] Step 5: Add `outdated` output formats (quiet, verbose, json)
 - [ ] Step 6: Implement `upgrade` command (single package)
