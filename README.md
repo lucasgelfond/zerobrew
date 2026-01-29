@@ -78,6 +78,13 @@ cargo build --release
 cargo install --path zb_cli
 ```
 
+or the following if you want to install on termux on android:
+
+```bash
+ZB_ROOT="$PREFIX/opt/zerobrew" ZB_PREFIX="$PREFIX/opt/zerobrew/prefix" cargo build --release
+cargo install --path zb_cli
+```
+
 ## Benchmarking
 
 ```bash
