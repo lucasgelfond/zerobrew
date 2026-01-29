@@ -94,13 +94,16 @@ fn detect_zerobrew_glibc(prefix_dir: &Path) -> Option<PathBuf> {
 fn find_system_ld_so() -> Option<PathBuf> {
     // Common paths for system dynamic linkers on Linux
     let candidates = [
-        "/lib64/ld-linux-x86-64.so.2", // x86_64
-        "/lib/ld-linux-aarch64.so.1",  // aarch64/ARM64
-        "/lib/ld-linux-armhf.so.3",    // ARM hard float
-        "/lib/ld-linux.so.3",          // ARM
-        "/lib/ld-linux.so.2",          // old ARM
-        "/lib64/ld64.so.2",            // ppc64
-        "/lib64/ld64.so.1",            // s390x
+        "/lib64/ld-linux-x86-64.so.2",     // x86_64
+        "/usr/lib64/ld-linux-x86-64.so.2", // x86_64
+        "/lib/ld-linux-aarch64.so.1",      // aarch64/ARM64
+        "/usr/lib/ld-linux-aarch64.so.1",  // aarch64/ARM64
+        "/lib/ld-linux-armhf.so.3",        // ARM hard float
+        "/usr/lib/ld-linux-armhf.so.3",    // ARM hard float
+        "/lib/ld-linux.so.3",              // ARM
+        "/lib/ld-linux.so.2",              // old ARM
+        "/lib64/ld64.so.2",                // ppc64
+        "/lib64/ld64.so.1",                // s390x
     ];
 
     for candidate in &candidates {
