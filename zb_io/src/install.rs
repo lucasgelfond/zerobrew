@@ -37,7 +37,7 @@ pub struct ExecuteResult {
 }
 
 /// Information about an outdated package.
-/// 
+///
 /// Returned by [`Installer::is_outdated`] and [`Installer::check_outdated`]
 /// when a package has a newer version available.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -454,9 +454,12 @@ impl Installer {
     /// Returns None if the package is up-to-date, Some(OutdatedPackage) if outdated
     pub async fn is_outdated(&self, name: &str) -> Result<Option<OutdatedPackage>, Error> {
         // Get installed keg info
-        let installed = self.db.get_installed(name).ok_or_else(|| Error::MissingFormula {
-            name: format!("{} is not installed", name),
-        })?;
+        let installed = self
+            .db
+            .get_installed(name)
+            .ok_or_else(|| Error::MissingFormula {
+                name: format!("{} is not installed", name),
+            })?;
 
         // Fetch current formula from API
         let formula = self.api_client.get_formula(name).await?;
@@ -502,10 +505,7 @@ impl Installer {
                 Ok(Some(pkg)) => outdated.push(pkg),
                 Ok(None) => {} // Package is up-to-date
                 Err(e) => {
-                    eprintln!(
-                        "Warning: Could not check {}: {}",
-                        installed[i].name, e
-                    );
+                    eprintln!("Warning: Could not check {}: {}", installed[i].name, e);
                 }
             }
         }
@@ -1408,7 +1408,9 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/bottles/outdatedpkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .and(path(
+                "/bottles/outdatedpkg-1.0.0.arm64_sonoma.bottle.tar.gz",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle_v1.clone()))
             .mount(&mock_server)
             .await;
@@ -1782,7 +1784,7 @@ mod tests {
 
         // check_outdated should continue despite pkg1 failure
         let outdated = installer.check_outdated().await.unwrap();
-        
+
         // Should still find pkg2 as outdated
         assert_eq!(outdated.len(), 1);
         assert_eq!(outdated[0].name, "pkg2");
@@ -1854,7 +1856,7 @@ mod tests {
 
         // check_outdated should handle 404 gracefully
         let outdated = installer.check_outdated().await.unwrap();
-        
+
         // Should return empty (package couldn't be checked, warning printed)
         assert!(outdated.is_empty());
     }

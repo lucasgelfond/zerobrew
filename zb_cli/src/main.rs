@@ -381,23 +381,20 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     if matches!(cli.command, Commands::Update) {
         ensure_init(&cli.root, &cli.prefix)?;
         let cache_path = cli.root.join("db/api_cache.sqlite3");
-        
+
         if !cache_path.exists() {
-            println!(
-                "{} No cached entries to clear.",
-                style("==>").cyan().bold()
-            );
+            println!("{} No cached entries to clear.", style("==>").cyan().bold());
             return Ok(());
         }
-        
+
         let cache = ApiCache::open(&cache_path).map_err(|e| zb_core::Error::StoreCorruption {
             message: format!("failed to open API cache: {e}"),
         })?;
-        
+
         let removed = cache.clear().map_err(|e| zb_core::Error::StoreCorruption {
             message: format!("failed to clear API cache: {e}"),
         })?;
-        
+
         println!(
             "{} Cleared {} cached formula {}.",
             style("==>").cyan().bold(),
@@ -418,7 +415,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     let mut installer = create_installer(&cli.root, &cli.prefix, cli.concurrency)?;
 
     match cli.command {
-        Commands::Init => unreachable!(), // Handled above
+        Commands::Init => unreachable!(),   // Handled above
         Commands::Update => unreachable!(), // Handled above
         Commands::Install { formula, no_link } => {
             let start = Instant::now();
@@ -676,7 +673,11 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             }
         }
 
-        Commands::Outdated { quiet, verbose, json } => {
+        Commands::Outdated {
+            quiet,
+            verbose,
+            json,
+        } => {
             let outdated = installer.check_outdated().await?;
 
             if json {
@@ -788,90 +789,92 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
 
                 if outdated.is_empty() {
                     println!("All packages are up to date.");
-                } else {
-                    if dry_run {
-                        println!("Would upgrade:");
-                        for pkg in &outdated {
-                            println!(
-                                "    {} ({}) -> ({})",
-                                style(&pkg.name).bold(),
-                                style(&pkg.installed_version).dim(),
-                                style(&pkg.current_version).green()
-                            );
-                        }
-                    } else {
+                } else if dry_run {
+                    println!("Would upgrade:");
+                    for pkg in &outdated {
                         println!(
-                            "{} Upgrading {} {}...",
-                            style("==>").cyan().bold(),
-                            outdated.len(),
-                            if outdated.len() == 1 { "package" } else { "packages" }
+                            "    {} ({}) -> ({})",
+                            style(&pkg.name).bold(),
+                            style(&pkg.installed_version).dim(),
+                            style(&pkg.current_version).green()
+                        );
+                    }
+                } else {
+                    println!(
+                        "{} Upgrading {} {}...",
+                        style("==>").cyan().bold(),
+                        outdated.len(),
+                        if outdated.len() == 1 {
+                            "package"
+                        } else {
+                            "packages"
+                        }
+                    );
+
+                    let mut upgraded = 0;
+                    let mut failed = Vec::new();
+
+                    for pkg in &outdated {
+                        println!(
+                            "    {} {} ({}) -> ({})...",
+                            style("○").dim(),
+                            style(&pkg.name).bold(),
+                            style(&pkg.installed_version).dim(),
+                            style(&pkg.current_version).green()
                         );
 
-                        let mut upgraded = 0;
-                        let mut failed = Vec::new();
-
-                        for pkg in &outdated {
-                            println!(
-                                "    {} {} ({}) -> ({})...",
-                                style("○").dim(),
-                                style(&pkg.name).bold(),
-                                style(&pkg.installed_version).dim(),
-                                style(&pkg.current_version).green()
+                        // Uninstall old version
+                        if let Err(e) = installer.uninstall(&pkg.name) {
+                            eprintln!(
+                                "    {} Failed to uninstall {}: {}",
+                                style("✗").red(),
+                                pkg.name,
+                                e
                             );
-
-                            // Uninstall old version
-                            if let Err(e) = installer.uninstall(&pkg.name) {
-                                eprintln!(
-                                    "    {} Failed to uninstall {}: {}",
-                                    style("✗").red(),
-                                    pkg.name,
-                                    e
-                                );
-                                failed.push(pkg.name.clone());
-                                continue;
-                            }
-
-                            // Install new version
-                            if let Err(e) = installer.install(&pkg.name, true).await {
-                                eprintln!(
-                                    "    {} Failed to install {}: {}",
-                                    style("✗").red(),
-                                    pkg.name,
-                                    e
-                                );
-                                failed.push(pkg.name.clone());
-                                continue;
-                            }
-
-                            println!("    {} {}", style("✓").green(), pkg.name);
-                            upgraded += 1;
+                            failed.push(pkg.name.clone());
+                            continue;
                         }
 
-                        // Summary
-                        println!();
-                        if failed.is_empty() {
-                            println!(
-                                "{} Upgraded {} {}",
-                                style("==>").cyan().bold(),
-                                style(upgraded).green().bold(),
-                                if upgraded == 1 { "package" } else { "packages" }
+                        // Install new version
+                        if let Err(e) = installer.install(&pkg.name, true).await {
+                            eprintln!(
+                                "    {} Failed to install {}: {}",
+                                style("✗").red(),
+                                pkg.name,
+                                e
                             );
-                        } else {
-                            println!(
-                                "{} Upgraded {} {}, {} failed",
-                                style("==>").cyan().bold(),
-                                style(upgraded).green().bold(),
-                                if upgraded == 1 { "package" } else { "packages" },
-                                style(failed.len()).red().bold()
-                            );
-                            for name in &failed {
-                                eprintln!("    {} {}", style("✗").red(), name);
-                            }
-                            // Exit with error if any failed
-                            return Err(zb_core::Error::StoreCorruption {
-                                message: format!("{} package(s) failed to upgrade", failed.len()),
-                            });
+                            failed.push(pkg.name.clone());
+                            continue;
                         }
+
+                        println!("    {} {}", style("✓").green(), pkg.name);
+                        upgraded += 1;
+                    }
+
+                    // Summary
+                    println!();
+                    if failed.is_empty() {
+                        println!(
+                            "{} Upgraded {} {}",
+                            style("==>").cyan().bold(),
+                            style(upgraded).green().bold(),
+                            if upgraded == 1 { "package" } else { "packages" }
+                        );
+                    } else {
+                        println!(
+                            "{} Upgraded {} {}, {} failed",
+                            style("==>").cyan().bold(),
+                            style(upgraded).green().bold(),
+                            if upgraded == 1 { "package" } else { "packages" },
+                            style(failed.len()).red().bold()
+                        );
+                        for name in &failed {
+                            eprintln!("    {} {}", style("✗").red(), name);
+                        }
+                        // Exit with error if any failed
+                        return Err(zb_core::Error::StoreCorruption {
+                            message: format!("{} package(s) failed to upgrade", failed.len()),
+                        });
                     }
                 }
             }

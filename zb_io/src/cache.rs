@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::Path;
 
 /// SQLite-backed cache for Homebrew API responses.
