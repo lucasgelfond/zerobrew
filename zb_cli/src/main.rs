@@ -56,6 +56,9 @@ enum Commands {
         /// Skip confirmation prompt
         #[arg(long, short = 'y')]
         yes: bool,
+        /// Use --force when uninstalling from Homebrew (removes all versions)
+        #[arg(long)]
+        force: bool,
     },
 
     /// List installed formulas
@@ -338,74 +341,6 @@ fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
     Ok(trimmed.to_string())
 }
 
-/// Represents a Homebrew package that can be migrated
-struct HomebrewPackage {
-    name: String,
-    #[allow(dead_code)]
-    tap: String,
-    is_cask: bool,
-}
-
-fn get_homebrew_packages() -> Result<Vec<HomebrewPackage>, String> {
-    // Get installed formulas
-    let formulas_output = Command::new("brew")
-        .args(["info", "--json=v1", "--installed"])
-        .output()
-        .map_err(|e| format!("Failed to run 'brew info': {}", e))?;
-
-    if !formulas_output.status.success() {
-        return Err(format!(
-            "brew info failed: {}",
-            String::from_utf8_lossy(&formulas_output.stderr)
-        ));
-    }
-
-    let formulas_json: serde_json::Value = serde_json::from_slice(&formulas_output.stdout)
-        .map_err(|e| format!("Failed to parse brew info JSON: {}", e))?;
-
-    let mut packages = Vec::new();
-
-    if let Some(formulas) = formulas_json.as_array() {
-        for formula in formulas {
-            if let Some(name) = formula.get("name").and_then(|n| n.as_str()) {
-                let tap = formula
-                    .get("tap")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("homebrew/core")
-                    .to_string();
-                packages.push(HomebrewPackage {
-                    name: name.to_string(),
-                    tap,
-                    is_cask: false,
-                });
-            }
-        }
-    }
-
-    // Get installed casks
-    let casks_output = Command::new("brew")
-        .args(["list", "--cask", "--json=v1"])
-        .output()
-        .map_err(|e| format!("Failed to run 'brew list --cask': {}", e))?;
-
-    if casks_output.status.success()
-        && let Ok(casks_json) = serde_json::from_slice::<serde_json::Value>(&casks_output.stdout)
-        && let Some(casks) = casks_json.as_array()
-    {
-        for cask in casks {
-            if let Some(token) = cask.get("token").and_then(|t| t.as_str()) {
-                packages.push(HomebrewPackage {
-                    name: token.to_string(),
-                    tap: "homebrew/cask".to_string(),
-                    is_cask: true,
-                });
-            }
-        }
-    }
-
-    Ok(packages)
-}
-
 fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!();
     eprintln!(
@@ -657,13 +592,13 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             }
         },
 
-        Commands::Migrate { yes } => {
+        Commands::Migrate { yes, force } => {
             println!(
                 "{} Fetching installed Homebrew packages...",
                 style("==>").cyan().bold()
             );
 
-            let packages = match get_homebrew_packages() {
+            let packages = match zb_io::get_homebrew_packages() {
                 Ok(pkgs) => pkgs,
                 Err(e) => {
                     return Err(zb_core::Error::StoreCorruption {
@@ -672,43 +607,56 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 }
             };
 
-            if packages.is_empty() {
+            if packages.formulas.is_empty()
+                && packages.non_core_formulas.is_empty()
+                && packages.casks.is_empty()
+            {
                 println!("No Homebrew packages installed.");
                 return Ok(());
             }
 
-            let formulas: Vec<_> = packages.iter().filter(|p| !p.is_cask).collect();
-            let casks: Vec<_> = packages.iter().filter(|p| p.is_cask).collect();
-
             println!(
-                "    {} formulas, {} casks found",
-                style(formulas.len()).green(),
-                style(casks.len()).green()
+                "    {} core formulas, {} non-core formulas, {} casks found",
+                style(packages.formulas.len()).green(),
+                style(packages.non_core_formulas.len()).yellow(),
+                style(packages.casks.len()).green()
             );
             println!();
 
+            // Show non-core formulas that can't be migrated
+            if !packages.non_core_formulas.is_empty() {
+                println!(
+                    "{} Formulas from non-core taps cannot be migrated to zerobrew:",
+                    style("Note:").yellow().bold()
+                );
+                for pkg in &packages.non_core_formulas {
+                    println!("    • {} ({})", pkg.name, pkg.tap);
+                }
+                println!();
+            }
+
             // Show casks that can't be migrated
-            if !casks.is_empty() {
+            if !packages.casks.is_empty() {
                 println!(
                     "{} Casks cannot be migrated to zerobrew (only CLI formulas are supported):",
                     style("Note:").yellow().bold()
                 );
-                for cask in &casks {
+                for cask in &packages.casks {
                     println!("    • {}", cask.name);
                 }
                 println!();
             }
 
-            if formulas.is_empty() {
-                println!("No formulas to migrate.");
+            if packages.formulas.is_empty() {
+                println!("No core formulas to migrate.");
                 return Ok(());
             }
 
             println!(
                 "The following {} formulas will be migrated:",
-                formulas.len()
+                packages.formulas.len()
             );
-            for pkg in &formulas {
+            for pkg in &packages.formulas {
                 println!("    • {}", pkg.name);
             }
             println!();
@@ -729,13 +677,13 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             println!(
                 "{} Migrating {} formulas to zerobrew...",
                 style("==>").cyan().bold(),
-                style(formulas.len()).green().bold()
+                style(packages.formulas.len()).green().bold()
             );
 
             let mut success_count = 0;
             let mut failed: Vec<String> = Vec::new();
 
-            for pkg in &formulas {
+            for pkg in &packages.formulas {
                 print!("    {} {}...", style("○").dim(), pkg.name);
 
                 match installer.plan(&pkg.name).await {
@@ -774,7 +722,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 "{} Migrated {} of {} formulas to zerobrew",
                 style("==>").cyan().bold(),
                 style(success_count).green().bold(),
-                formulas.len()
+                packages.formulas.len()
             );
 
             if !failed.is_empty() {
@@ -822,7 +770,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             let mut uninstalled = 0;
             let mut uninstall_failed: Vec<String> = Vec::new();
 
-            for pkg in &formulas {
+            for pkg in &packages.formulas {
                 // Skip if it failed to install in zerobrew
                 if failed.contains(&pkg.name) {
                     continue;
@@ -830,8 +778,14 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
 
                 print!("    {} {}...", style("○").dim(), pkg.name);
 
+                let mut args = vec!["uninstall"];
+                if force {
+                    args.push("--force");
+                }
+                args.push(&pkg.name);
+
                 let status = Command::new("brew")
-                    .args(["uninstall", "--force", &pkg.name])
+                    .args(&args)
                     .status()
                     .map_err(|e| format!("Failed to run brew uninstall: {}", e));
 
