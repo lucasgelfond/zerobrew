@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::fs;
 use std::io::Read;
 #[cfg(unix)]
@@ -6,7 +5,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use elb::{DynamicTag, Elf, ElfPatcher};
 use rayon::prelude::*;
 use zb_core::Error;
 
@@ -116,12 +114,9 @@ fn find_system_ld_so() -> Option<PathBuf> {
 }
 
 /// Patch @@HOMEBREW_CELLAR@@ and @@HOMEBREW_PREFIX@@ placeholders in ELF binaries.
-/// Uses `elb` crate to natively update RPATH, RUNPATH, and optionally the ELF interpreter.
+/// Uses `arwen` crate to natively update RPATH, RUNPATH, and optionally the ELF interpreter.
 fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Error> {
     let lib_path = prefix_dir.join("lib").to_string_lossy().to_string();
-    let lib_path_c = CString::new(lib_path).map_err(|e| Error::StoreCorruption {
-        message: format!("Invalid lib path for CString: {e}"),
-    })?;
 
     // Detect if zerobrew has installed its own glibc
     let zerobrew_interpreter = detect_zerobrew_glibc(prefix_dir);
@@ -135,10 +130,6 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
         // Find system ld.so - common paths for Linux
         find_system_ld_so()
     };
-
-    let target_interpreter_c = target_interpreter
-        .as_ref()
-        .and_then(|path| CString::new(path.to_string_lossy().as_bytes()).ok());
 
     // Collect all ELF files
     let elf_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
@@ -162,12 +153,26 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
         .collect();
 
     let patch_failures = AtomicUsize::new(0);
+    // Use a dashmap or similar for thread-safe inode tracking if needed,
+    // but we can just collect and then process, or use a Mutex.
+    let processed_inodes = std::sync::Mutex::new(std::collections::HashSet::new());
 
     // Clone for use in parallel closure
-    let target_interpreter_c = target_interpreter_c.clone();
-    let has_zerobrew_glibc = zerobrew_interpreter.is_some();
+    let target_interpreter = target_interpreter.clone();
+    let old_prefix = "@@HOMEBREW_PREFIX@@";
+    let new_prefix = prefix_dir.to_string_lossy().to_string();
 
     elf_files.par_iter().for_each(|path| {
+        // Check hardlinks
+        if let Ok(meta) = fs::metadata(path) {
+            use std::os::unix::fs::MetadataExt;
+            let inode = (meta.dev(), meta.ino());
+            let mut inodes = processed_inodes.lock().unwrap();
+            if !inodes.insert(inode) {
+                return; // Already processed this inode
+            }
+        }
+
         // Get permissions and make writable if needed
         let metadata = match fs::metadata(path) {
             Ok(m) => m,
@@ -179,95 +184,90 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
         if is_readonly {
             let mut perms = metadata.permissions();
             perms.set_mode(original_mode | 0o200);
-            if fs::set_permissions(path, perms).is_err() {
-                eprintln!("Warning: Failed to make file writable: {}", path.display());
+            if let Err(e) = fs::set_permissions(path, perms) {
+                eprintln!(
+                    "Warning: Failed to make file writable: {}: {}",
+                    path.display(),
+                    e
+                );
                 patch_failures.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
 
-        // Apply patch
         let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            // Open for Read + Write
-            let mut file = fs::OpenOptions::new().read(true).write(true).open(path)?;
+            let content = fs::read(path)?;
+            let mut elf = arwen::elf::ElfContainer::parse(&content)?;
 
-            // Read ELF (page_size = 4096 is standard for Linux x86_64/aarch64)
-            let elf = Elf::read(&mut file, 0x1000)?;
+            // Check if it is a dynamic ELF
+            let has_dynamic_segment = elf
+                .inner
+                .builder()
+                .segments
+                .iter()
+                .any(|s| s.p_type == object::elf::PT_DYNAMIC);
+            if !has_dynamic_segment {
+                return Ok(());
+            }
 
-            let mut patcher = ElfPatcher::new(elf, file);
+            // Set page size for alignment
+            let page_size = elf.get_page_size();
+            let _ = elf.set_page_size(page_size);
 
-            // Set RUNPATH (modern RPATH)
-            patcher.set_dynamic_tag(DynamicTag::Runpath, &*lib_path_c)?;
+            // RPATH
+            let old_rpaths = elf.get_rpath();
+            let mut new_rpaths: Vec<String> = if old_rpaths.is_empty() {
+                Vec::new()
+            } else {
+                old_rpaths
+                    .iter()
+                    .map(|r| r.replace(old_prefix, &new_prefix))
+                    .filter(|r| r.starts_with(&new_prefix) || r.starts_with("$ORIGIN"))
+                    .collect()
+            };
 
-            // Set RPATH (legacy compatibility, but good practice)
-            patcher.set_dynamic_tag(DynamicTag::Rpath, &*lib_path_c)?;
+            if !new_rpaths.contains(&lib_path) {
+                new_rpaths.push(lib_path.clone());
+            }
 
-            // Only patch interpreter for executables, not shared libraries
-            // Shared libraries don't have interpreter segments
-            let is_executable = path.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| !n.contains(".so") && !n.ends_with(".so"))
-                .unwrap_or(false);
+            let new_rpath_str = new_rpaths.join(":");
+            if !new_rpath_str.is_empty() {
+                let _ = elf.set_runpath(&new_rpath_str);
+            }
 
-            if is_executable {
-                // Patch the interpreter if needed
-                // This handles both zerobrew's glibc and system fallback
-                if let Ok(Some(current_interp)) = patcher.read_interpreter() {
-                    let current_interp_str = current_interp.to_string_lossy();
+            // Interpreter
+            let is_executable = elf.inner.builder().header.e_type == object::elf::ET_EXEC
+                || (elf.inner.builder().header.e_type == object::elf::ET_DYN
+                    && elf.inner.elf_interpreter().is_some());
 
-                    // Determine the target interpreter path
-                    let target_interp_path = if current_interp_str.contains("@@HOMEBREW_PREFIX@@") {
-                        // Replace @@HOMEBREW_PREFIX@@ with actual prefix
-                        let expanded = current_interp_str.replace(
-                            "@@HOMEBREW_PREFIX@@",
-                            &prefix_dir.to_string_lossy()
-                        );
-                        let expanded_path = PathBuf::from(expanded.to_string());
+            if is_executable && let Some(current_interp_bytes) = elf.inner.elf_interpreter() {
+                let current_interp_str = String::from_utf8_lossy(current_interp_bytes);
 
-                        // Check if the expanded path exists
-                        // If it does (zerobrew has glibc), use it
-                        // If not, fall back to system ld.so
-                        if expanded_path.exists() {
-                            Some(expanded_path)
-                        } else {
-                            find_system_ld_so()
-                        }
-                    } else if has_zerobrew_glibc {
-                        // If we have zerobrew glibc and no placeholder, use it
-                        target_interpreter_c.as_ref().map(|c| PathBuf::from(c.to_string_lossy().to_string()))
+                let target_interp_path = if current_interp_str.contains(old_prefix) {
+                    let expanded = current_interp_str.replace(old_prefix, &new_prefix);
+                    let expanded_path = PathBuf::from(&expanded);
+                    if expanded_path.exists() {
+                        Some(expanded_path)
                     } else {
-                        None // No patching needed
-                    };
-
-                    if let Some(target_path) = target_interp_path
-                        && let Ok(target_c) = CString::new(target_path.to_string_lossy().as_bytes())
-                    {
-                        // Only patch if the new path is not longer than the old one
-                        let new_len = target_c.as_bytes().len();
-                        let old_len = current_interp.as_bytes().len();
-
-                        if new_len <= old_len {
-                            if let Err(e) = patcher.set_interpreter(&target_c) {
-                                eprintln!(
-                                    "Warning: Failed to set interpreter for {}: {}",
-                                    path.display(),
-                                    e
-                                );
-                            }
-                        } else {
-                            eprintln!(
-                                "Warning: Cannot patch interpreter for {} (new path too long: {} > {})",
-                                path.display(),
-                                new_len,
-                                old_len
-                            );
-                        }
+                        find_system_ld_so()
                     }
+                } else {
+                    target_interpreter.clone()
+                };
+
+                if let Some(target_path) = target_interp_path {
+                    let target_str = target_path.to_string_lossy();
+                    let _ = elf.set_interpreter(&target_str);
                 }
             }
 
-            // Finish writes changes back to the file
-            patcher.finish()?;
+            // Atomic write
+            let temp_path = path.with_extension("tmp_patch");
+            {
+                let mut temp_file = fs::File::create(&temp_path)?;
+                elf.write(&mut temp_file)?;
+            }
+            fs::rename(temp_path, path)?;
 
             Ok(())
         })();
@@ -287,7 +287,9 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
 
     let failures = patch_failures.load(Ordering::Relaxed);
     if failures > 0 {
-        eprintln!("Error: Failed to patch {} ELF files", failures);
+        eprintln!(
+            "Warning: Failed to patch {failures} ELF files. These packages may not work correctly until manually patched."
+        );
     }
 
     Ok(())
@@ -395,6 +397,7 @@ mod tests {
             .arg(&src_path)
             .arg("-o")
             .arg(&out_path)
+            .arg("-Wl,-rpath,@@HOMEBREW_PREFIX@@/lib")
             .status()
             .ok()?;
 
