@@ -8,7 +8,7 @@
 - [x] Step 4: Implement `outdated` command (basic)
 - [x] Step 5: Add `outdated` output formats (quiet, verbose, json)
 - [x] Step 6: Implement `upgrade` command (single package)
-- [ ] Step 7: Implement `upgrade` command (all packages)
+- [x] Step 7: Implement `upgrade` command (all packages)
 - [ ] Step 8: Add dry-run support for upgrade
 - [ ] Step 9: Integration tests and edge cases
 - [ ] Step 10: Documentation and help text
