@@ -45,6 +45,28 @@ zb reset         # uninstall everything
 zb gc                # garbage collect unused store entries
 ```
 
+## Taps
+
+Zerobrew supports Homebrew-style taps that provide bottle or binary-only formulas. Taps are fetched from
+GitHub raw URLs (no git clone), and the tap name can be either `owner/repo` or `owner/homebrew-repo`.
+
+```bash
+zb tap owner/repo
+zb install owner/repo/formula
+```
+
+Tap layout:
+
+- `Formula/<formula>.json` (preferred)
+- `Formula/<formula>.rb` (fallback)
+- `HomebrewFormula/<formula>.json` or `HomebrewFormula/<formula>.rb`
+
+Notes:
+
+- Bottle formulas require a `bottle` block with `root_url` and per-platform sha256s (e.g. `arm64_sonoma`).
+- Binary-only formulas must include `url` and `sha256`, and should install a binary via `bin.install`.
+- If multiple taps provide the same formula, zerobrew will surface a conflict error.
+
 ## Why is it faster?
 
 - **Content-addressable store**: packages are stored by sha256 hash (at `/opt/zerobrew/store/{sha256}/`). Reinstalls are instant if the store entry exists.

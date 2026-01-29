@@ -32,7 +32,7 @@ impl ApiClient {
         self
     }
 
-    pub fn base_url(&self) -> &str {
+    pub(crate) fn base_url(&self) -> &str {
         &self.base_url
     }
 
@@ -40,7 +40,7 @@ impl ApiClient {
         self.get_formula_with_base_url(&self.base_url, name).await
     }
 
-    pub async fn get_formula_with_base_url(
+    pub(crate) async fn get_formula_with_base_url(
         &self,
         base_url: &str,
         name: &str,
@@ -116,6 +116,33 @@ impl ApiClient {
         })?;
 
         Ok(formula)
+    }
+
+    pub(crate) async fn get_text_if_exists(&self, url: &str) -> Result<Option<String>, Error> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("HTTP {}", response.status()),
+            });
+        }
+
+        let body = response.text().await.map_err(|e| Error::NetworkFailure {
+            message: format!("failed to read response body: {e}"),
+        })?;
+
+        Ok(Some(body))
     }
 }
 
