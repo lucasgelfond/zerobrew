@@ -73,6 +73,9 @@ enum Commands {
 
     /// Refresh package metadata cache
     Update,
+
+    /// List outdated packages
+    Outdated,
 }
 
 #[tokio::main]
@@ -648,6 +651,23 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     style("==>").cyan().bold(),
                     style(removed.len()).green().bold()
                 );
+            }
+        }
+
+        Commands::Outdated => {
+            let outdated = installer.check_outdated().await?;
+
+            if outdated.is_empty() {
+                println!("All packages are up to date.");
+            } else {
+                for pkg in &outdated {
+                    println!(
+                        "{} ({}) < {}",
+                        style(&pkg.name).bold(),
+                        style(&pkg.installed_version).dim(),
+                        style(&pkg.current_version).green()
+                    );
+                }
             }
         }
 
