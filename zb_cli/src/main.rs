@@ -1,3 +1,4 @@
+use clap::builder::OsStr;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::generate;
 use console::style;
@@ -18,11 +19,11 @@ use zb_io::{InstallProgress, ProgressCallback};
 #[command(version)]
 struct Cli {
     /// Root directory for zerobrew data
-    #[arg(long, default_value = "/opt/zerobrew")]
+    #[arg(long, default_value = Cli::get_default_root())]
     root: PathBuf,
 
     /// Prefix directory for linked binaries
-    #[arg(long, default_value = "/opt/zerobrew/prefix")]
+    #[arg(long, default_value = Cli::get_default_prefix())]
     prefix: PathBuf,
 
     /// Number of parallel downloads
@@ -31,6 +32,27 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
+}
+
+impl Cli {
+    /// Get the default root directory for zerobrew data
+    /// using the `ZB_ROOT` env var.
+    ///
+    /// if `ZB_ROOT` is not set, `/opt/zerobrew` is used
+    fn get_default_root() -> OsStr {
+        // Looks for ZB_ROOT at compile time; defaults to /opt/zerobrew
+        option_env!("ZB_ROOT").unwrap_or("/opt/zerobrew").into()
+    }
+
+    /// Get the default prefix directory for linked binaries
+    /// using the `ZB_PREFIX` env var.
+    ///
+    /// if `ZB_PREFIX` is not set, `/opt/zerobrew/prefix` is used
+    fn get_default_prefix() -> OsStr {
+        option_env!("ZB_PREFIX")
+            .unwrap_or("/opt/zerobrew/prefix")
+            .into()
+    }
 }
 
 #[derive(Subcommand)]
