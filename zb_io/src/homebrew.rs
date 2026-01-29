@@ -43,23 +43,17 @@ pub fn parse_formulas_from_json(json: &serde_json::Value) -> Vec<HomebrewPackage
     packages
 }
 
-/// Parse Homebrew casks from JSON output of `brew list --cask --json=v1`
-pub fn parse_casks_from_json(json: &serde_json::Value) -> Vec<HomebrewPackage> {
-    let mut packages = Vec::new();
-
-    if let Some(casks) = json.as_array() {
-        for cask in casks {
-            if let Some(token) = cask.get("token").and_then(|t| t.as_str()) {
-                packages.push(HomebrewPackage {
-                    name: token.to_string(),
-                    tap: "homebrew/cask".to_string(),
-                    is_cask: true,
-                });
-            }
-        }
-    }
-
-    packages
+/// Parse Homebrew casks from plain text output of `brew list --cask`
+pub fn parse_casks_from_plain_text(output: &str) -> Vec<HomebrewPackage> {
+    output
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|name| HomebrewPackage {
+            name: name.to_string(),
+            tap: "homebrew/cask".to_string(),
+            is_cask: true,
+        })
+        .collect()
 }
 
 /// Categorize Homebrew packages for migration
@@ -113,16 +107,20 @@ pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, String> {
 
     let formulas = parse_formulas_from_json(&formulas_json);
 
-    // Get installed casks
+    // Get installed casks (plain text output, no JSON support)
     let casks_output = Command::new("brew")
-        .args(["list", "--cask", "--json=v1"])
+        .args(["list", "--cask"])
         .output()
         .map_err(|e| format!("Failed to run 'brew list --cask': {}", e))?;
 
-    let casks_json: serde_json::Value = serde_json::from_slice(&casks_output.stdout)
-        .map_err(|e| format!("Failed to parse brew list --cask JSON: {}", e))?;
+    if !casks_output.status.success() {
+        return Err(format!(
+            "brew list --cask failed: {}",
+            String::from_utf8_lossy(&casks_output.stderr)
+        ));
+    }
 
-    let casks = parse_casks_from_json(&casks_json);
+    let casks = parse_casks_from_plain_text(&String::from_utf8_lossy(&casks_output.stdout));
 
     // Combine and categorize all packages
     let all_packages: Vec<HomebrewPackage> = formulas.into_iter().chain(casks).collect();
@@ -173,22 +171,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_casks_from_json() {
-        let brew_output = r#"[
-            {
-                "token": "visual-studio-code",
-                "name": ["Visual Studio Code"],
-                "version": "1.78.0"
-            },
-            {
-                "token": "firefox",
-                "name": ["Firefox"],
-                "version": "112.0"
-            }
-        ]"#;
+    fn test_parse_casks_from_plain_text() {
+        // Simulate brew list --cask output
+        let brew_output = "visual-studio-code\nfirefox\n";
 
-        let casks_json: serde_json::Value = serde_json::from_str(brew_output).unwrap();
-        let packages = parse_casks_from_json(&casks_json);
+        let packages = parse_casks_from_plain_text(brew_output);
 
         assert_eq!(packages.len(), 2);
         assert_eq!(packages[0].name, "visual-studio-code");
@@ -196,6 +183,28 @@ mod tests {
         assert!(packages[0].is_cask);
         assert_eq!(packages[1].name, "firefox");
         assert!(packages[1].is_cask);
+    }
+
+    #[test]
+    fn test_parse_casks_handles_empty_output() {
+        let brew_output = "";
+
+        let packages = parse_casks_from_plain_text(brew_output);
+
+        assert!(packages.is_empty());
+    }
+
+    #[test]
+    fn test_parse_casks_handles_multiple_lines() {
+        let brew_output = "visual-studio-code\nfirefox\ndocker\niterm2\n";
+
+        let packages = parse_casks_from_plain_text(brew_output);
+
+        assert_eq!(packages.len(), 4);
+        assert_eq!(
+            packages.iter().map(|p| &p.name).collect::<Vec<_>>(),
+            vec!["visual-studio-code", "firefox", "docker", "iterm2"]
+        );
     }
 
     #[test]
