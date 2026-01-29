@@ -88,6 +88,16 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Upgrade outdated packages
+    Upgrade {
+        /// Specific formula(s) to upgrade (upgrades all if omitted)
+        formula: Vec<String>,
+
+        /// Show what would be upgraded without upgrading
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -706,6 +716,75 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                         style(&pkg.current_version).green()
                     );
                 }
+            }
+        }
+
+        Commands::Upgrade { formula, dry_run } => {
+            if !formula.is_empty() {
+                // Upgrade specific package(s)
+                for name in &formula {
+                    // Check if installed
+                    if !installer.is_installed(name) {
+                        eprintln!(
+                            "{} {} is not installed",
+                            style("Warning:").yellow().bold(),
+                            name
+                        );
+                        continue;
+                    }
+
+                    // Check if outdated
+                    match installer.is_outdated(name).await {
+                        Ok(Some(pkg)) => {
+                            if dry_run {
+                                println!(
+                                    "Would upgrade {} ({}) -> ({})",
+                                    style(&pkg.name).bold(),
+                                    style(&pkg.installed_version).dim(),
+                                    style(&pkg.current_version).green()
+                                );
+                            } else {
+                                println!(
+                                    "{} Upgrading {} ({}) -> ({})...",
+                                    style("==>").cyan().bold(),
+                                    style(&pkg.name).bold(),
+                                    style(&pkg.installed_version).dim(),
+                                    style(&pkg.current_version).green()
+                                );
+
+                                // Uninstall old version
+                                installer.uninstall(name)?;
+
+                                // Install new version
+                                installer.install(name, true).await?;
+
+                                println!(
+                                    "{} Upgraded {}",
+                                    style("==>").cyan().bold(),
+                                    style(name).green().bold()
+                                );
+                            }
+                        }
+                        Ok(None) => {
+                            println!(
+                                "{} {} is already up to date",
+                                style("==>").cyan().bold(),
+                                style(name).bold()
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "{} Could not check {}: {}",
+                                style("Warning:").yellow().bold(),
+                                name,
+                                e
+                            );
+                        }
+                    }
+                }
+            } else {
+                // Upgrade all - will be implemented in Step 7
+                println!("Upgrading all packages is not yet implemented. Specify package name(s).");
             }
         }
 
