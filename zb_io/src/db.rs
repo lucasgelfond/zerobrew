@@ -16,6 +16,14 @@ pub struct InstalledKeg {
     pub installed_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TapRecord {
+    pub owner: String,
+    pub repo: String,
+    pub added_at: i64,
+    pub priority: i64,
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let conn = Connection::open(path).map_err(|e| Error::StoreCorruption {
@@ -58,6 +66,14 @@ impl Database {
                 linked_path TEXT NOT NULL,
                 target_path TEXT NOT NULL,
                 PRIMARY KEY (name, linked_path)
+            );
+
+            CREATE TABLE IF NOT EXISTS taps (
+                owner TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                added_at INTEGER NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (owner, repo)
             );
             ",
         )
@@ -155,6 +171,69 @@ impl Database {
             })?;
 
         Ok(keys)
+    }
+
+    pub fn add_tap(&self, owner: &str, repo: &str) -> Result<bool, Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let rows = self
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO taps (owner, repo, added_at, priority) VALUES (?1, ?2, ?3, 0)",
+                params![owner, repo, now],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to add tap: {e}"),
+            })?;
+
+        Ok(rows > 0)
+    }
+
+    pub fn remove_tap(&self, owner: &str, repo: &str) -> Result<bool, Error> {
+        let rows = self
+            .conn
+            .execute(
+                "DELETE FROM taps WHERE owner = ?1 AND repo = ?2",
+                params![owner, repo],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to remove tap: {e}"),
+            })?;
+
+        Ok(rows > 0)
+    }
+
+    pub fn list_taps(&self) -> Result<Vec<TapRecord>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT owner, repo, added_at, priority FROM taps ORDER BY priority DESC, added_at ASC",
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to prepare tap list: {e}"),
+            })?;
+
+        let taps = stmt
+            .query_map([], |row| {
+                Ok(TapRecord {
+                    owner: row.get(0)?,
+                    repo: row.get(1)?,
+                    added_at: row.get(2)?,
+                    priority: row.get(3)?,
+                })
+            })
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to query taps: {e}"),
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to collect taps: {e}"),
+            })?;
+
+        Ok(taps)
     }
 }
 
@@ -374,5 +453,30 @@ mod tests {
         }
 
         assert!(db.get_installed("foo").is_none());
+    }
+
+    #[test]
+    fn taps_are_added_and_listed() {
+        let db = Database::in_memory().unwrap();
+
+        let added = db.add_tap("user", "tools").unwrap();
+        assert!(added);
+
+        let taps = db.list_taps().unwrap();
+        assert_eq!(taps.len(), 1);
+        assert_eq!(taps[0].owner, "user");
+        assert_eq!(taps[0].repo, "tools");
+    }
+
+    #[test]
+    fn taps_are_removed() {
+        let db = Database::in_memory().unwrap();
+
+        db.add_tap("user", "tools").unwrap();
+        let removed = db.remove_tap("user", "tools").unwrap();
+        assert!(removed);
+
+        let taps = db.list_taps().unwrap();
+        assert!(taps.is_empty());
     }
 }
