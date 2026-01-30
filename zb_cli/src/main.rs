@@ -89,6 +89,18 @@ enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::shells::Shell,
     },
+
+    /// Manage taps
+    Tap {
+        /// Tap name to add (e.g., homebrew/core)
+        name: Option<String>,
+    },
+
+    /// Remove a tap
+    Untap {
+        /// Tap name to remove
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -324,18 +336,17 @@ fn ensure_init(root: &Path, prefix: &Path) -> Result<(), zb_core::Error> {
 
 fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
     let trimmed = name.trim();
-    if let Some((tap, formula)) = trimmed.rsplit_once('/') {
-        if tap == "homebrew/core" {
-            if formula.is_empty() {
-                return Err(zb_core::Error::MissingFormula {
-                    name: trimmed.to_string(),
-                });
-            }
-            return Ok(formula.to_string());
+    if let Some((tap, formula)) = trimmed.split_once('/') {
+        if formula.contains('/') {
+            // Likely user/repo/formula
+            return Ok(trimmed.to_string());
         }
-        return Err(zb_core::Error::UnsupportedTap {
-            name: trimmed.to_string(),
-        });
+        if tap == "homebrew" && formula == "core" {
+            // homebrew/core -> just core
+             return Ok(trimmed.to_string());
+        }
+        // Might be a tap formula or just homebrew/core/name (handled by installer)
+        return Ok(trimmed.to_string());
     }
 
     Ok(trimmed.to_string())
@@ -415,6 +426,50 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     match cli.command {
         Commands::Init => unreachable!(),              // Handled above
         Commands::Completion { .. } => unreachable!(), // Handled above
+        
+        Commands::Tap { name } => {
+            if let Some(name) = name {
+                println!(
+                    "{} Tapping {}...",
+                    style("==>").cyan().bold(),
+                    style(&name).bold()
+                );
+                let (user, repo) = name.split_once('/').ok_or_else(|| zb_core::Error::ParseError {
+                    message: "Invalid tap name, expected user/repo".to_string(),
+                })?;
+                
+                // create_installer already has tap_manager
+                // But we can just use the installer's tap manager if we add a method
+                // Or use TapManager directly
+                let tap_manager = zb_io::tap::TapManager::new(root);
+                tap_manager.ensure_tap(user, repo)?;
+                println!("{} Tapped {}", style("✓").green(), name);
+            } else {
+                let tap_manager = zb_io::tap::TapManager::new(root);
+                let taps = tap_manager.list_taps();
+                if taps.is_empty() {
+                    println!("No taps installed.");
+                } else {
+                    for tap in taps {
+                        println!("{}", tap);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Commands::Untap { name } => {
+            println!(
+                "{} Untapping {}...",
+                style("==>").cyan().bold(),
+                style(&name).bold()
+            );
+            let tap_manager = zb_io::tap::TapManager::new(root);
+            tap_manager.untap(&name)?;
+            println!("{} Untapped {}", style("✓").green(), name);
+            return Ok(());
+        }
+
         Commands::Install { formula, no_link } => {
             let start = Instant::now();
             println!(
@@ -431,7 +486,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                 }
             };
 
-            let plan = match installer.plan(&normalized).await {
+            let plan = match installer.plan(&[normalized]).await {
                 Ok(p) => p,
                 Err(e) => {
                     suggest_homebrew(&formula, &e);
@@ -717,7 +772,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             for pkg in &packages.formulas {
                 print!("    {} {}...", style("○").dim(), pkg.name);
 
-                match installer.plan(&pkg.name).await {
+                match installer.plan(&[pkg.name.clone()]).await {
                     Ok(plan) => {
                         // Execute the plan without progress bars for batch migration
                         match installer.execute(plan, true).await {
