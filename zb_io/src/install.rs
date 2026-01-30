@@ -13,6 +13,7 @@ use crate::materialize::Cellar;
 use crate::progress::{InstallProgress, ProgressCallback};
 use crate::store::Store;
 
+use crate::tap::TapManager;
 use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
 
 /// Maximum number of retries for corrupted downloads
@@ -25,6 +26,7 @@ pub struct Installer {
     cellar: Cellar,
     linker: Linker,
     db: Database,
+    tap_manager: TapManager,
 }
 
 pub struct InstallPlan {
@@ -53,6 +55,7 @@ impl Installer {
         cellar: Cellar,
         linker: Linker,
         db: Database,
+        tap_manager: TapManager,
         download_concurrency: usize,
     ) -> Self {
         Self {
@@ -62,16 +65,17 @@ impl Installer {
             cellar,
             linker,
             db,
+            tap_manager,
         }
     }
 
     /// Resolve dependencies and plan the install
-    pub async fn plan(&self, name: &str) -> Result<InstallPlan, Error> {
+    pub async fn plan(&self, names: &[String]) -> Result<InstallPlan, Error> {
         // Recursively fetch all formulas we need
-        let formulas = self.fetch_all_formulas(name).await?;
+        let formulas = self.fetch_all_formulas(names).await?;
 
         // Resolve in topological order
-        let ordered = resolve_closure(name, &formulas)?;
+        let ordered = resolve_closure(names, &formulas)?;
 
         // Build list of formulas in order
         let all_formulas: Vec<Formula> = ordered
@@ -160,13 +164,16 @@ impl Installer {
         }))
     }
 
-    /// Recursively fetch a formula and all its dependencies in parallel batches
-    async fn fetch_all_formulas(&self, name: &str) -> Result<BTreeMap<String, Formula>, Error> {
+    /// Recursively fetch formulas and all their dependencies in parallel batches
+    async fn fetch_all_formulas(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, Formula>, Error> {
         use std::collections::HashSet;
 
         let mut formulas = BTreeMap::new();
         let mut fetched: HashSet<String> = HashSet::new();
-        let mut to_fetch: Vec<String> = vec![name.to_string()];
+        let mut to_fetch: Vec<String> = names.to_vec();
 
         while !to_fetch.is_empty() {
             // Fetch current batch in parallel
@@ -176,7 +183,7 @@ impl Installer {
                 .collect();
 
             if batch.is_empty() {
-                break;
+                continue;
             }
 
             // Mark as fetched before starting (to avoid re-queueing)
@@ -184,26 +191,48 @@ impl Installer {
                 fetched.insert(n.clone());
             }
 
-            // Fetch all in parallel
-            let futures: Vec<_> = batch
-                .iter()
-                .map(|n| self.api_client.get_formula(n))
-                .collect();
+            // Separate tap formulas from core formulas
+            let (tap_formulas, core_formulas): (Vec<_>, Vec<_>) =
+                batch.iter().partition(|n| n.contains('/'));
 
-            let results = futures::future::join_all(futures).await;
-
-            // Process results and queue new dependencies
-            for (i, result) in results.into_iter().enumerate() {
-                let formula = result?;
-
-                // Queue dependencies for next batch
-                for dep in &formula.dependencies {
-                    if !fetched.contains(dep) && !to_fetch.contains(dep) {
-                        to_fetch.push(dep.clone());
+            // Fetch tap formulas synchronously (they're local)
+            for name in tap_formulas {
+                match self.tap_manager.resolve_formula(name) {
+                    Ok(formula) => {
+                        // Queue dependencies for next batch
+                        for dep in &formula.dependencies {
+                            if !fetched.contains(dep) && !to_fetch.contains(dep) {
+                                to_fetch.push(dep.clone());
+                            }
+                        }
+                        formulas.insert(name.clone(), formula);
                     }
+                    Err(e) => return Err(e),
                 }
+            }
 
-                formulas.insert(batch[i].clone(), formula);
+            // Fetch core formulas from API in parallel
+            if !core_formulas.is_empty() {
+                let futures: Vec<_> = core_formulas
+                    .iter()
+                    .map(|n| self.api_client.get_formula(n))
+                    .collect();
+
+                let results = futures::future::join_all(futures).await;
+
+                // Process results and queue new dependencies
+                for (i, result) in results.into_iter().enumerate() {
+                    let formula = result?;
+
+                    // Queue dependencies for next batch
+                    for dep in &formula.dependencies {
+                        if !fetched.contains(dep) && !to_fetch.contains(dep) {
+                            to_fetch.push(dep.clone());
+                        }
+                    }
+
+                    formulas.insert(core_formulas[i].clone(), formula);
+                }
             }
         }
 
@@ -376,7 +405,11 @@ impl Installer {
 
     /// Convenience method to plan and execute in one call
     pub async fn install(&mut self, name: &str, link: bool) -> Result<ExecuteResult, Error> {
-        let plan = self.plan(name).await?;
+        self.install_many(&[name.to_string()], link).await
+    }
+
+    pub async fn install_many(&mut self, names: &[String], link: bool) -> Result<ExecuteResult, Error> {
+        let plan = self.plan(names).await?;
         self.execute(plan, link).await
     }
 
@@ -482,6 +515,7 @@ pub fn create_installer(
         message: format!("failed to create linker: {e}"),
     })?;
     let db = Database::open(&root.join("db/zb.sqlite3"))?;
+    let tap_manager = TapManager::new(root.to_path_buf());
 
     Ok(Installer::new(
         api_client,
@@ -490,6 +524,7 @@ pub fn create_installer(
         cellar,
         linker,
         db,
+        tap_manager,
         download_concurrency,
     ))
 }
@@ -606,7 +641,17 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let tap_manager = TapManager::new(root.clone());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            tap_manager,
+            4,
+        );
 
         // Install
         installer.install("testpkg", true).await.unwrap();
@@ -684,7 +729,17 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let tap_manager = TapManager::new(root.clone());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            tap_manager,
+            4,
+        );
 
         // Install
         installer.install("uninstallme", true).await.unwrap();
@@ -761,7 +816,17 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let tap_manager = TapManager::new(root.clone());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            tap_manager,
+            4,
+        );
 
         // Install and uninstall
         installer.install("gctest", true).await.unwrap();
@@ -841,7 +906,17 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let tap_manager = TapManager::new(root.clone());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            tap_manager,
+            4,
+        );
 
         // Install but don't uninstall
         installer.install("keepme", true).await.unwrap();
@@ -955,7 +1030,17 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let tap_manager = TapManager::new(root.clone());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            tap_manager,
+            4,
+        );
 
         // Install main package (should also install dependency)
         installer.install("mainpkg", true).await.unwrap();
@@ -1058,7 +1143,17 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let tap_manager = TapManager::new(root.clone());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            tap_manager,
+            4,
+        );
 
         // Install root (should install all 5 packages)
         installer.install("root", true).await.unwrap();
@@ -1145,7 +1240,17 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let tap_manager = TapManager::new(root.clone());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            tap_manager,
+            4,
+        );
 
         // Install slow package (which depends on fast)
         // With streaming, fast should be extracted while slow is still downloading
@@ -1249,7 +1354,8 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
+        let tap_manager = TapManager::new(root.clone());
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, tap_manager, 4);
 
         // Install - should succeed (first download is valid in this test)
         installer.install("retrypkg", true).await.unwrap();
