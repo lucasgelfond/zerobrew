@@ -200,8 +200,10 @@ fn process_conditional(node: Node, source: &str, data: &mut Formula, context: &m
         if kind == "if" || kind == "elsif" {
             if let Some(condition) = n.child_by_field_name("condition") {
                 if should_process_condition_node(&condition, source) {
+                    let mut new_ctx = context.clone();
+                    update_context_from_condition(&mut new_ctx, &condition, source);
                     if let Some(body) = n.child_by_field_name("consequence") {
-                        process_branch_body(body, source, data, context);
+                        process_branch_body(body, source, data, &mut new_ctx);
                     }
                     return; // Handled
                 }
@@ -209,9 +211,14 @@ fn process_conditional(node: Node, source: &str, data: &mut Formula, context: &m
             // Move to alternative
             current_node = n.child_by_field_name("alternative");
         } else if kind == "else" {
-            // If we reached else, it means no if/elsif matched
-            if let Some(body) = n.child_by_field_name("consequence") {
-               process_branch_body(body, source, data, context);
+            // Traverse all children of the else node.
+            // Some might have a 'consequence' field pointing to a 'then' node,
+            // others might have the calls directly as children.
+            for i in 0..n.child_count() {
+                let child = n.child(i).unwrap();
+                if child.kind() != "else" {
+                    visit_node(child, source, data, context);
+                }
             }
             return;
         } else {
@@ -221,12 +228,8 @@ fn process_conditional(node: Node, source: &str, data: &mut Formula, context: &m
 }
 
 fn process_branch_body(node: Node, source: &str, data: &mut Formula, context: &mut ParsingContext) {
-    // Use visit_node but avoid visiting the if structure again recursively from inside itself incorrectly
-    // Actually we just want to visit the children of the body
     for i in 0..node.child_count() {
         let child = node.child(i).unwrap();
-        // Skip some nodes that might cause infinite recursion or double processing if not careful
-        // In Ruby tree-sitter, the body might contain statements directly.
         visit_node(child, source, data, context);
     }
 }
@@ -265,8 +268,17 @@ fn should_process_conditional_text(text: &str) -> bool {
         if part.contains("OS.linux?") && !is_linux { return false; }
         if (part.contains("Hardware::CPU.intel?") || part.contains("Hardware::CPU.is_intel?")) && current_arch != CpuArch::X86_64 { return false; }
         if (part.contains("Hardware::CPU.arm?") || part.contains("Hardware::CPU.is_arm?")) && current_arch != CpuArch::ARM64 { return false; }
+        if part.contains("Hardware::CPU.is_64_bit?") { /* Always true on our target platforms */ }
     }
     true
+}
+
+fn update_context_from_condition(context: &mut ParsingContext, node: &Node, source: &str) {
+    let text = node.utf8_text(source.as_bytes()).unwrap_or("");
+    if text.contains("OS.mac?") { context.in_on_macos = true; }
+    if text.contains("OS.linux?") { context.in_on_linux = true; }
+    if text.contains("Hardware::CPU.intel?") || text.contains("Hardware::CPU.is_intel?") { context.in_on_intel = true; }
+    if text.contains("Hardware::CPU.arm?") || text.contains("Hardware::CPU.is_arm?") { context.in_on_arm = true; }
 }
 
 #[allow(dead_code)]

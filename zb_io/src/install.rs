@@ -191,29 +191,41 @@ impl Installer {
                 fetched.insert(n.clone());
             }
 
-            // Separate tap formulas from core formulas
-            let (tap_formulas, core_formulas): (Vec<_>, Vec<_>) =
-                batch.iter().partition(|n| n.contains('/'));
+            // Marks names that were not found in taps and need API fetching
+            let mut core_to_fetch = Vec::new();
 
-            // Fetch tap formulas synchronously (they're local)
-            for name in tap_formulas {
-                match self.tap_manager.resolve_formula(name) {
-                    Ok(formula) => {
-                        // Queue dependencies for next batch
+            for name in batch {
+                if name.contains('/') {
+                    // Fully qualified tap formula
+                    match self.tap_manager.resolve_formula(&name) {
+                        Ok(formula) => {
+                            for dep in &formula.dependencies {
+                                if !fetched.contains(dep) && !to_fetch.contains(dep) {
+                                    to_fetch.push(dep.clone());
+                                }
+                            }
+                            formulas.insert(name, formula);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    // Short name - try taps first, then fallback to API
+                    if let Some(formula) = self.tap_manager.find_formula(&name) {
                         for dep in &formula.dependencies {
                             if !fetched.contains(dep) && !to_fetch.contains(dep) {
                                 to_fetch.push(dep.clone());
                             }
                         }
-                        formulas.insert(name.clone(), formula);
+                        formulas.insert(name, formula);
+                    } else {
+                        core_to_fetch.push(name);
                     }
-                    Err(e) => return Err(e),
                 }
             }
 
             // Fetch core formulas from API in parallel
-            if !core_formulas.is_empty() {
-                let futures: Vec<_> = core_formulas
+            if !core_to_fetch.is_empty() {
+                let futures: Vec<_> = core_to_fetch
                     .iter()
                     .map(|n| self.api_client.get_formula(n))
                     .collect();
@@ -223,6 +235,7 @@ impl Installer {
                 // Process results and queue new dependencies
                 for (i, result) in results.into_iter().enumerate() {
                     let formula = result?;
+                    let name = &core_to_fetch[i];
 
                     // Queue dependencies for next batch
                     for dep in &formula.dependencies {
@@ -230,8 +243,7 @@ impl Installer {
                             to_fetch.push(dep.clone());
                         }
                     }
-
-                    formulas.insert(core_formulas[i].clone(), formula);
+                    formulas.insert(name.clone(), formula);
                 }
             }
         }
