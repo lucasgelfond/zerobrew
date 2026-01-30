@@ -3,7 +3,7 @@ use clap_complete::generate;
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -12,18 +12,59 @@ use std::time::Instant;
 use zb_io::install::create_installer;
 use zb_io::{InstallProgress, ProgressCallback};
 
+/// Expand tilde (~) in paths to the user's home directory
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        if let Some(stripped) = path.strip_prefix("~/") {
+            return home.join(stripped);
+        } else if path == "~" {
+            return home;
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// Get the default root directory, checking ZEROBREW_ROOT env var first
+fn default_root() -> PathBuf {
+    if let Ok(env_root) = std::env::var("ZEROBREW_ROOT") {
+        return expand_tilde(&env_root);
+    }
+
+    let legacy_root = PathBuf::from("/opt/zerobrew");
+    if legacy_root.exists() {
+        return legacy_root;
+    }
+
+    // Default to ~/.zerobrew on linux if /opt/zerobrew doesn't exist
+    if cfg!(target_os = "linux") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(".zerobrew");
+        }
+    }
+
+    legacy_root
+}
+
+/// Get the default prefix directory, checking ZEROBREW_PREFIX env var first
+fn default_prefix() -> PathBuf {
+    std::env::var("ZEROBREW_PREFIX")
+        .map(|s| expand_tilde(&s))
+        .unwrap_or_else(|_| default_root().join("prefix"))
+}
+
 #[derive(Parser)]
 #[command(name = "zb")]
 #[command(about = "Zerobrew - A fast Homebrew-compatible package installer")]
 #[command(version)]
 struct Cli {
-    /// Root directory for zerobrew data
-    #[arg(long, env = "ZEROBREW_ROOT")]
-    root: Option<PathBuf>,
+    /// Root directory for zerobrew data (env: ZEROBREW_ROOT)
+    #[arg(long, default_value_os_t = default_root())]
+    root: PathBuf,
 
-    /// Prefix directory for linked binaries
-    #[arg(long, env = "ZEROBREW_PREFIX")]
-    prefix: Option<PathBuf>,
+    /// Prefix directory for linked binaries (env: ZEROBREW_PREFIX)
+    #[arg(long, default_value_os_t = default_prefix())]
+    prefix: PathBuf,
 
     /// Number of parallel downloads
     #[arg(long, default_value = "48")]
@@ -114,6 +155,61 @@ fn is_writable(path: &Path) -> bool {
     }
 }
 
+/// Check if running in an interactive terminal
+fn is_interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+/// Prompt the user for custom installation paths
+/// Returns (root, prefix) paths
+fn prompt_for_paths(default_root: &Path, default_prefix: &Path) -> (PathBuf, PathBuf) {
+    use std::io::{self, Write};
+
+    println!();
+    println!("{}", style("Zerobrew Setup").bold().underlined());
+    println!();
+
+    // Prompt for root
+    print!(
+        "Where should zerobrew store data? [{}]: ",
+        style(default_root.display()).dim()
+    );
+    io::stdout().flush().unwrap();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+    let root = if input.trim().is_empty() {
+        default_root.to_path_buf()
+    } else {
+        expand_tilde(input.trim())
+    };
+
+    // Derive default prefix from chosen root
+    let derived_prefix = if default_prefix == default_root.join("prefix") {
+        root.join("prefix")
+    } else {
+        default_prefix.to_path_buf()
+    };
+
+    // Prompt for prefix
+    print!(
+        "Where should binaries be linked? [{}]: ",
+        style(derived_prefix.display()).dim()
+    );
+    io::stdout().flush().unwrap();
+
+    input.clear();
+    io::stdin().read_line(&mut input).unwrap();
+    let prefix = if input.trim().is_empty() {
+        derived_prefix
+    } else {
+        expand_tilde(input.trim())
+    };
+
+    println!();
+    (root, prefix)
+}
+
 /// Run initialization - create directories and set permissions
 fn run_init(root: &Path, prefix: &Path) -> Result<(), String> {
     println!("{} Initializing zerobrew...", style("==>").cyan().bold());
@@ -192,15 +288,15 @@ fn run_init(root: &Path, prefix: &Path) -> Result<(), String> {
         }
     }
 
-    // Add to shell config if not already there
-    add_to_path(prefix)?;
+    // Update shell config with env vars and PATH
+    update_shell_config(root, prefix)?;
 
     println!("{} Initialization complete!", style("==>").cyan().bold());
 
     Ok(())
 }
 
-fn add_to_path(prefix: &Path) -> Result<(), String> {
+fn update_shell_config(root: &Path, prefix: &Path) -> Result<(), String> {
     let shell = std::env::var("SHELL").unwrap_or_default();
     let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
 
@@ -225,55 +321,97 @@ fn add_to_path(prefix: &Path) -> Result<(), String> {
         format!("{}/.profile", home)
     };
 
-    let bin_path = prefix.join("bin");
-    let path_export = format!("export PATH=\"{}:$PATH\"", bin_path.display());
+    // Build the zerobrew config block
+    let zerobrew_block = format!(
+        r#"
+# zerobrew
+export ZEROBREW_ROOT="{}"
+export ZEROBREW_PREFIX="{}"
+export PKG_CONFIG_PATH="$ZEROBREW_PREFIX/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}"
+export PATH="$ZEROBREW_PREFIX/bin:$PATH"
+"#,
+        root.display(),
+        prefix.display()
+    );
 
-    // Check if already in config
-    let already_added = if let Ok(contents) = std::fs::read_to_string(&config_file) {
-        contents.contains(&bin_path.to_string_lossy().to_string())
-    } else {
-        false
-    };
+    // Check if already configured (look for ZEROBREW_ROOT or the old bin path)
+    let existing_content = std::fs::read_to_string(&config_file).unwrap_or_default();
+    let has_zerobrew_config = existing_content.contains("ZEROBREW_ROOT=")
+        || existing_content.contains(&prefix.join("bin").to_string_lossy().to_string());
 
-    if !already_added {
-        // Append to config
-        let addition = format!("\n# zerobrew\n{}\n", path_export);
+    if has_zerobrew_config {
+        // Check if the existing config matches our paths
+        let root_str = format!("ZEROBREW_ROOT=\"{}\"", root.display());
+        let prefix_str = format!("ZEROBREW_PREFIX=\"{}\"", prefix.display());
 
-        let write_result = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&config_file)
-            .and_then(|mut f| {
-                use std::io::Write;
-                f.write_all(addition.as_bytes())
-            });
-
-        if let Err(e) = write_result {
+        if existing_content.contains(&root_str) && existing_content.contains(&prefix_str) {
+            // Already configured correctly
             println!(
-                "{} Could not write to {} due to error: {}",
-                style("Warning:").yellow().bold(),
-                config_file,
-                e
-            );
-            println!(
-                "{} Please add the following line to {}:",
-                style("Info:").cyan().bold(),
+                "    {} Shell config already up to date in {}",
+                style("✓").green(),
                 config_file
             );
-            println!("{}", addition);
+            return Ok(());
         } else {
+            // Config exists but with different paths - we will append new config
             println!(
-                "    {} Added {} to PATH in {}",
-                style("✓").green(),
-                bin_path.display(),
+                "    {} Updating Zerobrew config in {}",
+                style("!").yellow(),
                 config_file
             );
         }
     }
 
+    // Append new block
+    let write_result = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&config_file)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(zerobrew_block.as_bytes())
+        });
+
+    if let Err(e) = write_result {
+        println!(
+            "{} Could not write to {} due to error: {}",
+            style("Warning:").yellow().bold(),
+            config_file,
+            e
+        );
+        println!(
+            "{} Please add the following to {}:",
+            style("Info:").cyan().bold(),
+            config_file
+        );
+        println!("{}", zerobrew_block);
+    } else {
+        println!(
+            "    {} Added ZEROBREW_ROOT to {}",
+            style("✓").green(),
+            config_file
+        );
+        println!(
+            "    {} Added ZEROBREW_PREFIX to {}",
+            style("✓").green(),
+            config_file
+        );
+        println!(
+            "    {} Added PKG_CONFIG_PATH to {}",
+            style("✓").green(),
+            config_file
+        );
+        println!(
+            "    {} Added $ZEROBREW_PREFIX/bin to PATH",
+            style("✓").green(),
+        );
+    }
+
     // Always check if PATH is actually set in current shell
+    let bin_path = prefix.join("bin");
     let current_path = std::env::var("PATH").unwrap_or_default();
     if !current_path.contains(&bin_path.to_string_lossy().to_string()) {
+        println!();
         println!(
             "    {} Run {} or restart your terminal",
             style("→").cyan(),
@@ -285,35 +423,75 @@ fn add_to_path(prefix: &Path) -> Result<(), String> {
 }
 
 /// Ensure zerobrew is initialized, prompting user if needed
-fn ensure_init(root: &Path, prefix: &Path) -> Result<(), zb_core::Error> {
-    if !needs_init(root, prefix) {
-        return Ok(());
+/// Returns the actual (root, prefix) paths to use (may be customized by user)
+fn ensure_init(cli_root: &Path, cli_prefix: &Path) -> Result<(PathBuf, PathBuf), zb_core::Error> {
+    // Already initialized at CLI-specified paths
+    if !needs_init(cli_root, cli_prefix) {
+        return Ok((cli_root.to_path_buf(), cli_prefix.to_path_buf()));
     }
+
+    use std::io::{self, Write};
 
     println!(
         "{} Zerobrew needs to be initialized first.",
         style("Note:").yellow().bold()
     );
-    println!("    This will create directories at:");
-    println!("      • {}", root.display());
-    println!("      • {}", prefix.display());
     println!();
 
-    print!("Initialize now? [Y/n] ");
-    use std::io::{self, Write};
-    io::stdout().flush().unwrap();
+    // Determine paths to use
+    let (root, prefix) = if is_interactive() {
+        println!("Current settings:");
+        println!("  Root:   {}", style(cli_root.display()).dim());
+        println!("  Prefix: {}", style(cli_prefix.display()).dim());
+        println!();
 
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    let input = input.trim();
+        print!("Use these paths? [Y/n/custom] ");
+        io::stdout().flush().unwrap();
 
-    if !input.is_empty() && !input.eq_ignore_ascii_case("y") && !input.eq_ignore_ascii_case("yes") {
-        return Err(zb_core::Error::StoreCorruption {
-            message: "Initialization required. Run 'zb init' first.".to_string(),
-        });
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim().to_lowercase();
+
+        if input == "n" || input == "no" {
+            return Err(zb_core::Error::StoreCorruption {
+                message: "Initialization cancelled. Run 'zb init' when ready.".to_string(),
+            });
+        } else if input == "c" || input == "custom" {
+            prompt_for_paths(cli_root, cli_prefix)
+        } else {
+            // Yes, empty, or any other input - use CLI paths
+            (cli_root.to_path_buf(), cli_prefix.to_path_buf())
+        }
+    } else {
+        // Non-interactive: use CLI paths without prompting
+        (cli_root.to_path_buf(), cli_prefix.to_path_buf())
+    };
+
+    println!("This will create directories at:");
+    println!("  • {}", root.display());
+    println!("  • {}", prefix.display());
+    println!();
+
+    if is_interactive() {
+        print!("Continue? [Y/n] ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim();
+
+        if !input.is_empty()
+            && !input.eq_ignore_ascii_case("y")
+            && !input.eq_ignore_ascii_case("yes")
+        {
+            return Err(zb_core::Error::StoreCorruption {
+                message: "Initialization cancelled.".to_string(),
+            });
+        }
     }
 
-    run_init(root, prefix).map_err(|e| zb_core::Error::StoreCorruption { message: e })
+    run_init(&root, &prefix).map_err(|e| zb_core::Error::StoreCorruption { message: e })?;
+    Ok((root, prefix))
 }
 
 fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
@@ -359,41 +537,156 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         return Ok(());
     }
 
-    let root = cli.root.unwrap_or_else(|| {
-        let legacy_root = PathBuf::from("/opt/zerobrew");
-        if legacy_root.exists() {
-            return legacy_root;
-        }
-        // Default to ~/.zerobrew on linux
-        if cfg!(target_os = "linux") {
-            std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".zerobrew"))
-                .unwrap_or_else(|_| legacy_root)
-        } else {
-            legacy_root
-        }
-    });
-
-    let prefix = cli.prefix.unwrap_or_else(|| root.clone());
-
-    // Handle init separately - it doesn't need the installer
+    // Handle init separately - it supports interactive path selection
     if matches!(cli.command, Commands::Init) {
+        let (root, prefix) = if is_interactive() {
+            // Check if already initialized at the CLI paths
+            if !needs_init(&cli.root, &cli.prefix) {
+                println!(
+                    "{} Zerobrew is already initialized at:",
+                    style("Note:").yellow().bold()
+                );
+                println!("  Root:   {}", cli.root.display());
+                println!("  Prefix: {}", cli.prefix.display());
+                println!();
+                println!("Run {} to start fresh.", style("zb reset").cyan());
+                println!();
+
+                print!("Do you want to configure different paths? [y/N] ");
+                use std::io::{self, Write};
+                io::stdout().flush().unwrap();
+                let mut input = String::new();
+                io::stdin().read_line(&mut input).unwrap();
+
+                if input.trim().eq_ignore_ascii_case("y")
+                    || input.trim().eq_ignore_ascii_case("yes")
+                {
+                    // If the user explicitly provided paths via args, respect them in the prompt.
+                    // Otherwise, revert to factory defaults (/opt/zerobrew) for the prompt,
+                    // so we don't get "stuck" on stale env vars after a reset.
+                    let args: Vec<String> = std::env::args().collect();
+                    let user_supplied_root = args.iter().any(|a| a.starts_with("--root"));
+                    let user_supplied_prefix = args.iter().any(|a| a.starts_with("--prefix"));
+
+                    let prompt_root = if user_supplied_root {
+                        &cli.root
+                    } else {
+                        Path::new("/opt/zerobrew")
+                    };
+
+                    let prompt_prefix = if user_supplied_prefix {
+                        &cli.prefix
+                    } else {
+                        Path::new("/opt/zerobrew/prefix")
+                    };
+
+                    prompt_for_paths(prompt_root, prompt_prefix)
+                } else {
+                    return Ok(());
+                }
+            } else {
+                let args: Vec<String> = std::env::args().collect();
+                let user_supplied_root = args.iter().any(|a| a.starts_with("--root"));
+                let user_supplied_prefix = args.iter().any(|a| a.starts_with("--prefix"));
+
+                let prompt_root = if user_supplied_root {
+                    &cli.root
+                } else {
+                    Path::new("/opt/zerobrew")
+                };
+
+                let prompt_prefix = if user_supplied_prefix {
+                    &cli.prefix
+                } else {
+                    Path::new("/opt/zerobrew/prefix")
+                };
+
+                prompt_for_paths(prompt_root, prompt_prefix)
+            }
+        } else {
+            (cli.root.clone(), cli.prefix.clone())
+        };
+
         return run_init(&root, &prefix)
             .map_err(|e| zb_core::Error::StoreCorruption { message: e });
     }
 
-    // For reset, handle specially since directories may not be writable
-    if matches!(cli.command, Commands::Reset { .. }) {
-        // Skip init check for reset
+    // Determine the actual root and prefix to use
+    let (root, prefix) = if matches!(cli.command, Commands::Reset { .. }) {
+        // Skip init check for reset - use CLI paths directly
+        (cli.root.clone(), cli.prefix.clone())
     } else {
-        // Ensure initialized before other commands
-        ensure_init(&root, &prefix)?;
+        // Ensure initialized before other commands, may prompt for custom paths
+        ensure_init(&cli.root, &cli.prefix)?
+    };
+
+    if let Commands::Reset { yes } = cli.command {
+        if !root.exists() && !prefix.exists() {
+            println!("Nothing to reset - directories do not exist.");
+            return Ok(());
+        }
+
+        if !yes {
+            println!(
+                "{} This will delete all zerobrew data at:",
+                style("Warning:").yellow().bold()
+            );
+            println!("      • {}", root.display());
+            println!("      • {}", prefix.display());
+            print!("Continue? [y/N] ");
+            use std::io::{self, Write};
+            io::stdout().flush().unwrap();
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).unwrap();
+            if !input.trim().eq_ignore_ascii_case("y") {
+                println!("Aborted.");
+                return Ok(());
+            }
+        }
+
+        // Remove directories - try without sudo first, then with
+        for dir in [&root, &prefix] {
+            if !dir.exists() {
+                continue;
+            }
+
+            println!(
+                "{} Removing {}...",
+                style("==>").cyan().bold(),
+                dir.display()
+            );
+
+            if std::fs::remove_dir_all(dir).is_err() {
+                // Try with sudo
+                let status = Command::new("sudo")
+                    .args(["rm", "-rf", &dir.to_string_lossy()])
+                    .status();
+
+                if status.is_err() || !status.unwrap().success() {
+                    eprintln!(
+                        "{} Failed to remove {}",
+                        style("error:").red().bold(),
+                        dir.display()
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        println!(
+            "{} Reset complete. Run {} to initialize again.",
+            style("==>").cyan().bold(),
+            style("zb init").bold()
+        );
+        return Ok(());
     }
 
     let mut installer = create_installer(&root, &prefix, cli.concurrency)?;
 
     match cli.command {
         Commands::Init => unreachable!(),              // Handled above
+        Commands::Reset { .. } => unreachable!(),      // Handled above
         Commands::Completion { .. } => unreachable!(), // Handled above
         Commands::Install { formula, no_link } => {
             let start = Instant::now();
@@ -649,69 +942,6 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
                     style(removed.len()).green().bold()
                 );
             }
-        }
-
-        Commands::Reset { yes } => {
-            if !root.exists() && !prefix.exists() {
-                println!("Nothing to reset - directories do not exist.");
-                return Ok(());
-            }
-
-            if !yes {
-                println!(
-                    "{} This will delete all zerobrew data at:",
-                    style("Warning:").yellow().bold()
-                );
-                println!("      • {}", root.display());
-                println!("      • {}", prefix.display());
-                print!("Continue? [y/N] ");
-                use std::io::{self, Write};
-                io::stdout().flush().unwrap();
-
-                let mut input = String::new();
-                io::stdin().read_line(&mut input).unwrap();
-                if !input.trim().eq_ignore_ascii_case("y") {
-                    println!("Aborted.");
-                    return Ok(());
-                }
-            }
-
-            // Remove directories - try without sudo first, then with
-            for dir in [&root, &prefix] {
-                if !dir.exists() {
-                    continue;
-                }
-
-                println!(
-                    "{} Removing {}...",
-                    style("==>").cyan().bold(),
-                    dir.display()
-                );
-
-                if std::fs::remove_dir_all(dir).is_err() {
-                    // Try with sudo
-                    let status = Command::new("sudo")
-                        .args(["rm", "-rf", &dir.to_string_lossy()])
-                        .status();
-
-                    if status.is_err() || !status.unwrap().success() {
-                        eprintln!(
-                            "{} Failed to remove {}",
-                            style("error:").red().bold(),
-                            dir.display()
-                        );
-                        std::process::exit(1);
-                    }
-                }
-            }
-
-            // Re-initialize with correct permissions
-            run_init(&root, &prefix).map_err(|e| zb_core::Error::StoreCorruption { message: e })?;
-
-            println!(
-                "{} Reset complete. Ready for cold install.",
-                style("==>").cyan().bold()
-            );
         }
     }
 
