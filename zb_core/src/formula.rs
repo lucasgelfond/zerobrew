@@ -1,7 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct Formula {
     pub name: String,
     pub versions: Versions,
@@ -24,17 +24,17 @@ impl Formula {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct Versions {
     pub stable: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct Bottle {
     pub stable: BottleStable,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct BottleStable {
     pub files: BTreeMap<String, BottleFile>,
     /// Rebuild number for the bottle. When > 0, the bottle's internal paths
@@ -43,7 +43,7 @@ pub struct BottleStable {
     pub rebuild: u32,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct BottleFile {
     pub url: String,
     pub sha256: String,
