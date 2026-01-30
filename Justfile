@@ -1,5 +1,3 @@
-# vim: set ft=make :
-
 set script-interpreter := ["bash", "-euo", "pipefail"]
 
 build: fmt lint
