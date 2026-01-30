@@ -18,6 +18,10 @@ use crate::progress::InstallProgress;
 use zb_core::Error;
 
 /// Number of parallel connections to race when downloading (hits different CDN edges)
+/// Note: Racing is disabled on Linux due to HTTP/2 stream contention issues with rustls
+#[cfg(target_os = "linux")]
+const RACING_CONNECTIONS: usize = 1;
+#[cfg(not(target_os = "linux"))]
 const RACING_CONNECTIONS: usize = 4;
 
 /// Delay between starting each racing connection (ms)
@@ -86,13 +90,14 @@ pub struct Downloader {
 impl Downloader {
     pub fn new(blob_cache: BlobCache) -> Self {
         // Use HTTP/2 with connection pooling for better performance
-        // Note: don't use http2_prior_knowledge() as some servers (like ghcr.io) need ALPN negotiation
         Self {
             client: reqwest::Client::builder()
                 .user_agent("zerobrew/0.1")
                 .pool_max_idle_per_host(10)
                 .tcp_nodelay(true)
                 .tcp_keepalive(Duration::from_secs(60))
+                .connect_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(300)) // 5 min total request timeout
                 .http2_adaptive_window(true)
                 .http2_initial_stream_window_size(Some(2 * 1024 * 1024))
                 .http2_initial_connection_window_size(Some(4 * 1024 * 1024))

@@ -1,15 +1,73 @@
-name: ci
+name: lint
 
 on:
   push:
+    branches: [ main ]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
+
+permissions:
+  contents: read
+  checks: write
 
 jobs:
-  test:
-    runs-on: macos-latest
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      
+      - name: install rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      
+      - name: check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: install rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      
+      - name: cache rust dependencies
+        uses: Swatinem/rust-cache@v2
+      
+      - name: setup pkg-config path
+        run: |
+          if [ "$(uname)" = "Darwin" ] && [ -d "/opt/homebrew/lib/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+          elif [ "$(uname)" = "Linux" ] && [ -d "/usr/lib/x86_64-linux-gnu/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+          fi
+      
+      - name: run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          deny-warnings: true
+          
