@@ -2,6 +2,10 @@
 
 Thanks for your interest in contributing to zerobrew! This document provides guidelines for contributing to the project.
 
+## Licensing
+
+By contributing to zerobrew, you agree your contributions will be dual-licensed under both [Apache](./LICENSE-APACHE.md) and [MIT](./LICENSE-MIT.md).
+
 ## Soft Prerequisites
 
 - Rust 1.90 or later

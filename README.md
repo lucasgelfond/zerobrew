@@ -92,3 +92,7 @@ cargo install --path zb_cli
 
 Experimental. works for most core homebrew packages. Some formulas may need more work - please submit issues / PRs! 
 
+
+## License
+
+zerobrew is dual-licensed, usable under both [Apache](./LICENSE-APACHE.md) and [MIT](./LICENSE-MIT.md)
