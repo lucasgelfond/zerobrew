@@ -18,11 +18,8 @@ use crate::progress::InstallProgress;
 use zb_core::Error;
 
 /// Number of parallel connections to race when downloading (hits different CDN edges)
-/// Note: Racing is disabled on Linux due to HTTP/2 stream contention issues with rustls
-#[cfg(target_os = "linux")]
+/// Note: Racing is disabled on Linux and macOS due to HTTP/2 stream contention issues with rustls
 const RACING_CONNECTIONS: usize = 1;
-#[cfg(not(target_os = "linux"))]
-const RACING_CONNECTIONS: usize = 4;
 
 /// Delay between starting each racing connection (ms)
 const RACING_STAGGER_MS: u64 = 200;
