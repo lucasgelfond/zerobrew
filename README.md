@@ -59,17 +59,29 @@ I spent a lot of time thinking through this architecture, testing, and debugging
 
 ## Storage layout
 
-```
-/opt/zerobrew/
-├── store/          # content-addressable (sha256 keys)
-├── prefix/
-│   ├── Cellar/     # materialized packages
-│   ├── bin/        # symlinked executables
-│   └── opt/        # symlinked package directories
-├── cache/          # downloaded bottle blobs
+```sh
+/opt/zerobrew/      # Data directory (default: $ZEROBREW_ROOT)
+├── store/          # sha256-addressable packages
 ├── db/             # sqlite database
-└── locks/          # per-entry file locks
+├── cache/          # downloaded bottle blobs
+├── locks/          # per-entry file locks
+└── prefix/         # $ZEROBREW_PREFIX (default: $ZEROBREW_ROOT/prefix)
+    ├── bin/        # symlinked executables
+    ├── Cellar/     # materialized packages
+    ├── lib/
+    ├── include/
+    ├── share/
+    └── opt/        # symlinked package directories
+~/.zerobrew/        # $ZEROBREW_DIR (source code, default: ~/.zerobrew)
+~/.local/bin/zb     # $ZEROBREW_BIN (binary, default: ~/.local/bin)
 ```
+
+All variables are respected by both the install script and `zb` CLI:
+
+- `ZEROBREW_ROOT`
+- `ZEROBREW_PREFIX`
+- `ZEROBREW_DIR`
+- `ZEROBREW_BIN`
 
 ## Build from source 
 
