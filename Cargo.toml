@@ -9,11 +9,11 @@ rust-version = "1.90"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 console = "0.15"
 indicatif = "0.17"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots", "http2"] }
 flate2 = "1.0"
 tar = "0.4"
 xz2 = "0.1"

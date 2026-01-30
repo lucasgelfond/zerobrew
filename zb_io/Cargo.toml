@@ -23,6 +23,8 @@ walkdir.workspace = true
 xz2.workspace = true
 zstd.workspace = true
 zb_core = { path = "../zb_core" }
+arwen = "0.0.5"
+object = "0.38"
 
 [dev-dependencies]
 tempfile.workspace = true

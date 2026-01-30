@@ -6,6 +6,8 @@ pub mod download;
 pub mod extract;
 pub mod install;
 pub mod link;
+#[cfg(target_os = "linux")]
+mod linux_patch;
 pub mod materialize;
 pub mod progress;
 pub mod store;
