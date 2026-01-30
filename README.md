@@ -95,4 +95,4 @@ Experimental. works for most core homebrew packages. Some formulas may need more
 
 ## License
 
-zerobrew is dual-licensed, usable under both [Apache](./LICENSE-APACHE.md) and [MIT](./LICENSE-MIT.md)
+zerobrew is dual-licensed, usable under both [Apache](./LICENSE-APACHE.md) and [MIT](./LICENSE-MIT.md), at your choice.
