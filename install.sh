@@ -8,6 +8,28 @@ ZEROBREW_REPO="https://github.com/lucasgelfond/zerobrew.git"
 : ${ZEROBREW_DIR:=$HOME/.zerobrew}
 : ${ZEROBREW_BIN:=$HOME/.local/bin}
 
+if [[ -d "/opt/zerobrew" ]]; then
+    ZEROBREW_ROOT="/opt/zerobrew"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+    ZEROBREW_ROOT="/opt/zerobrew"
+else
+    XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+    ZEROBREW_ROOT="$XDG_DATA_HOME/zerobrew"
+fi
+
+export ZEROBREW_ROOT
+
+# Allow custom prefix, default to $ZEROBREW_ROOT/prefix
+: ${ZEROBREW_PREFIX:=$ZEROBREW_ROOT/prefix}
+export ZEROBREW_PREFIX
+
+# Prevent running with sudo - the script handles its own privilege escalation
+if [[ $EUID -eq 0 ]]; then
+    echo "Error: Do not run this script with sudo or as root."
+    echo "The installer will automatically request privileges when needed."
+    exit 1
+fi
+
 echo "Installing zerobrew..."
 
 # Check for Rust/Cargo
@@ -39,8 +61,8 @@ fi
 
 # Build
 echo "Building zerobrew..."
-if [[ -d "/opt/zerobrew/prefix/lib/pkgconfig" ]]; then
-    export PKG_CONFIG_PATH="/opt/zerobrew/prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+if [[ -d "$ZEROBREW_PREFIX/lib/pkgconfig" ]]; then
+    export PKG_CONFIG_PATH="$ZEROBREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 fi
 if [[ -d "/opt/homebrew/lib/pkgconfig" ]] && [[ ! "$PKG_CONFIG_PATH" =~ "/opt/homebrew/lib/pkgconfig" ]]; then
     export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -81,13 +103,15 @@ if [[ ! -w $SHELL_CONFIG ]]; then
 fi
 
 # Add to PATH in shell config if not already there
-PATHS_TO_ADD=("$ZEROBREW_BIN" "/opt/zerobrew/prefix/bin")
+PATHS_TO_ADD=("$ZEROBREW_BIN" "$ZEROBREW_PREFIX/bin")
 if ! grep -q "^# zerobrew$" "$SHELL_CONFIG" 2>/dev/null; then
     cat >>"$SHELL_CONFIG" <<EOF
 # zerobrew
 export ZEROBREW_DIR=$ZEROBREW_DIR
 export ZEROBREW_BIN=$ZEROBREW_BIN
-export PKG_CONFIG_PATH="/opt/zerobrew/prefix/lib/pkgconfig:\${PKG_CONFIG_PATH:-}"
+export ZEROBREW_ROOT=$ZEROBREW_ROOT
+export ZEROBREW_PREFIX=$ZEROBREW_PREFIX
+export PKG_CONFIG_PATH="$ZEROBREW_PREFIX/lib/pkgconfig:\${PKG_CONFIG_PATH:-}"
 _zb_path_append() {
     local argpath="\$1"
     case ":\${PATH}:" in
@@ -105,18 +129,19 @@ EOF
 fi
 
 # Export for current session so zb init works
-export PATH="$ZEROBREW_BIN:/opt/zerobrew/prefix/bin:$PATH"
+export PATH="$ZEROBREW_BIN:$ZEROBREW_PREFIX/bin:$PATH"
 
-# Set up /opt/zerobrew directories with correct ownership
+# Set up zerobrew directories (zb init will handle the details)
 echo ""
-echo "Setting up zerobrew directories..."
-CURRENT_USER=$(whoami)
-if [[ ! -d "/opt/zerobrew" ]] || [[ ! -w "/opt/zerobrew" ]]; then
-    echo "Creating /opt/zerobrew (requires sudo)..."
-    sudo mkdir -p /opt/zerobrew/store /opt/zerobrew/db /opt/zerobrew/cache /opt/zerobrew/locks
-    sudo mkdir -p /opt/zerobrew/prefix/bin /opt/zerobrew/prefix/Cellar
-    sudo chown -R "$CURRENT_USER" /opt/zerobrew
-    sudo chown -R "$CURRENT_USER" /opt/zerobrew/prefix
+echo "Setting up zerobrew directories at $ZEROBREW_ROOT..."
+
+# Only need sudo for /opt paths on macOS
+if [[ "$ZEROBREW_ROOT" == /opt/* ]]; then
+    if [[ ! -d "$ZEROBREW_ROOT" ]] || [[ ! -w "$ZEROBREW_ROOT" ]]; then
+        echo "Creating $ZEROBREW_ROOT (requires sudo)..."
+        sudo mkdir -p "$ZEROBREW_ROOT"
+        sudo chown -R "$(whoami)" "$ZEROBREW_ROOT"
+    fi
 fi
 
 # Run zb init to finalize setup
@@ -131,7 +156,7 @@ echo "============================================"
 echo ""
 echo "Run this to start using zerobrew now:"
 echo ""
-echo "    export PATH=\"$ZEROBREW_BIN:/opt/zerobrew/prefix/bin:\$PATH\""
+echo "    export PATH=\"$ZEROBREW_BIN:$ZEROBREW_PREFIX/bin:\$PATH\""
 echo ""
 echo "Or restart your terminal, to source updated ${SHELL_CONFIG}."
 echo ""
