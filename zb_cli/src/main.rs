@@ -360,21 +360,35 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     }
 
     let root = cli.root.unwrap_or_else(|| {
+        // Check ZEROBREW_ROOT env var first
+        if let Ok(env_root) = std::env::var("ZEROBREW_ROOT") {
+            return PathBuf::from(env_root);
+        }
+
+        // Check for legacy /opt/zerobrew
         let legacy_root = PathBuf::from("/opt/zerobrew");
         if legacy_root.exists() {
             return legacy_root;
         }
-        // Default to ~/.zerobrew on linux
-        if cfg!(target_os = "linux") {
-            std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".zerobrew"))
-                .unwrap_or_else(|_| legacy_root)
-        } else {
+
+        // macOS: /opt/zerobrew
+        // Linux: ~/.local/share/zerobrew (XDG_DATA_HOME)
+        if cfg!(target_os = "macos") {
             legacy_root
+        } else {
+            let xdg_data_home = std::env::var("XDG_DATA_HOME")
+                .ok()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::var("HOME")
+                        .map(|h| PathBuf::from(h).join(".local").join("share"))
+                        .unwrap_or_else(|_| legacy_root.clone())
+                });
+            xdg_data_home.join("zerobrew")
         }
     });
 
-    let prefix = cli.prefix.unwrap_or_else(|| root.clone());
+    let prefix = cli.prefix.unwrap_or_else(|| root.join("prefix"));
 
     // Handle init separately - it doesn't need the installer
     if matches!(cli.command, Commands::Init) {
