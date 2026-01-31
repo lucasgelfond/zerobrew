@@ -9,28 +9,33 @@ use crate::utils::{normalize_formula_name, suggest_homebrew};
 
 pub async fn execute(
     installer: &mut zb_io::install::Installer,
-    formula: String,
+    formulas: Vec<String>,
     no_link: bool,
 ) -> Result<(), zb_core::Error> {
     let start = Instant::now();
     println!(
         "{} Installing {}...",
         style("==>").cyan().bold(),
-        style(&formula).bold()
+        style(formulas.join(", ")).bold()
     );
 
-    let normalized = match normalize_formula_name(&formula) {
-        Ok(name) => name,
-        Err(e) => {
-            suggest_homebrew(&formula, &e);
-            return Err(e);
+    let mut normalized_names = Vec::new();
+    for formula in &formulas {
+        match normalize_formula_name(formula) {
+            Ok(name) => normalized_names.push(name),
+            Err(e) => {
+                suggest_homebrew(formula, &e);
+                return Err(e);
+            }
         }
-    };
+    }
 
-    let plan = match installer.plan(&normalized).await {
+    let plan = match installer.plan(&normalized_names).await {
         Ok(p) => p,
         Err(e) => {
-            suggest_homebrew(&formula, &e);
+            if let Some(first) = formulas.first() {
+                suggest_homebrew(first, &e);
+            }
             return Err(e);
         }
     };
@@ -161,7 +166,9 @@ pub async fn execute(
     let result = match result_val {
         Ok(r) => r,
         Err(e) => {
-            suggest_homebrew(&formula, &e);
+            if let Some(first) = formulas.first() {
+                suggest_homebrew(first, &e);
+            }
             return Err(e);
         }
     };

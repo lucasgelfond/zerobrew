@@ -154,8 +154,7 @@ mod tests {
         formulas.insert("b".to_string(), formula("b", &["shared"]));
         formulas.insert("shared".to_string(), formula("shared", &[]));
 
-        let order =
-            resolve_closure(&["a".to_string(), "b".to_string()], &formulas).unwrap();
+        let order = resolve_closure(&["a".to_string(), "b".to_string()], &formulas).unwrap();
         // shared should come first, then a and b in stable order
         assert_eq!(order, vec!["shared", "a", "b"]);
     }

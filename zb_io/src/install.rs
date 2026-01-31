@@ -612,7 +612,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         // Install
-        installer.install(&["testpkg".to_string()], true).await.unwrap();
+        installer
+            .install(&["testpkg".to_string()], true)
+            .await
+            .unwrap();
 
         // Verify keg exists
         assert!(root.join("cellar/testpkg/1.0.0").exists());
@@ -690,7 +693,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         // Install
-        installer.install(&["uninstallme".to_string()], true).await.unwrap();
+        installer
+            .install(&["uninstallme".to_string()], true)
+            .await
+            .unwrap();
 
         // Verify installed
         assert!(installer.is_installed("uninstallme"));
@@ -767,7 +773,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         // Install and uninstall
-        installer.install(&["gctest".to_string()], true).await.unwrap();
+        installer
+            .install(&["gctest".to_string()], true)
+            .await
+            .unwrap();
 
         // Store entry should exist before GC
         assert!(root.join("store").join(&bottle_sha).exists());
@@ -847,7 +856,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         // Install but don't uninstall
-        installer.install(&["keepme".to_string()], true).await.unwrap();
+        installer
+            .install(&["keepme".to_string()], true)
+            .await
+            .unwrap();
 
         // Store entry should exist
         assert!(root.join("store").join(&bottle_sha).exists());
@@ -961,7 +973,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         // Install main package (should also install dependency)
-        installer.install(&["mainpkg".to_string()], true).await.unwrap();
+        installer
+            .install(&["mainpkg".to_string()], true)
+            .await
+            .unwrap();
 
         // Both packages should be installed
         assert!(installer.db.get_installed("mainpkg").is_some());
@@ -1064,7 +1079,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         // Install root (should install all 5 packages)
-        installer.install(&["root".to_string()], true).await.unwrap();
+        installer
+            .install(&["root".to_string()], true)
+            .await
+            .unwrap();
 
         // All packages should be installed
         assert!(installer.db.get_installed("root").is_some());
@@ -1152,7 +1170,10 @@ mod tests {
 
         // Install slow package (which depends on fast)
         // With streaming, fast should be extracted while slow is still downloading
-        installer.install(&["slowpkg".to_string()], true).await.unwrap();
+        installer
+            .install(&["slowpkg".to_string()], true)
+            .await
+            .unwrap();
 
         // Both packages should be installed
         assert!(installer.db.get_installed("fastpkg").is_some());
@@ -1255,7 +1276,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         // Install - should succeed (first download is valid in this test)
-        installer.install(&["retrypkg".to_string()], true).await.unwrap();
+        installer
+            .install(&["retrypkg".to_string()], true)
+            .await
+            .unwrap();
 
         // Verify installation succeeded
         assert!(installer.is_installed("retrypkg"));

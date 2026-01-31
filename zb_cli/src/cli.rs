@@ -22,7 +22,9 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     Install {
-        formula: String,
+        /// Formula names to install
+        #[arg(required = true, num_args = 1..)]
+        formulas: Vec<String>,
         #[arg(long)]
         no_link: bool,
     },
