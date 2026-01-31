@@ -11,7 +11,6 @@ libc.workspace = true
 futures-util.workspace = true
 rayon.workspace = true
 regex.workspace = true
-reqwest.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
 rusqlite.workspace = true
@@ -27,6 +26,12 @@ zstd.workspace = true
 zb_core = { path = "../zb_core" }
 arwen = "0.0.5"
 object = "0.38.1"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+reqwest = { workspace = true, features = ["rustls"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+reqwest = { workspace = true, features = ["native-tls"] }
 
 [dev-dependencies]
 tempfile.workspace = true

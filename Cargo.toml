@@ -13,7 +13,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 console = "0.16.2"
 indicatif = "0.18.3"
-reqwest = { version = "0.13.1", default-features = false, features = ["json", "stream", "rustls", "http2"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["json", "stream", "http2"] }
 rustls = { version = "0.23.26", features = ["aws-lc-rs"] }
 rustls-native-certs = "0.8.3"
 flate2 = "1.1.8"
