@@ -19,11 +19,7 @@ use crate::blob::BlobCache;
 use crate::progress::InstallProgress;
 use zb_core::Error;
 
-/// Number of parallel connections to race when downloading (hits different CDN edges)
-/// Note: Racing is disabled on Linux and macOS due to HTTP/2 stream contention issues with rustls
-const RACING_CONNECTIONS: usize = 1;
-
-/// Delay between starting each racing connection (ms)
+const RACING_CONNECTIONS: usize = 3;
 const RACING_STAGGER_MS: u64 = 200;
 
 /// Minimum file size to use chunked downloads (10MB)
@@ -76,6 +72,7 @@ struct ChunkedDownloadContext<'a> {
     file_size: u64,
     global_semaphore: &'a Arc<Semaphore>,
 }
+// FIXME: extract timeout and HTTP/2 window size constants to config file
 
 /// Callback for download progress updates
 pub type DownloadProgressCallback = Arc<dyn Fn(InstallProgress) + Send + Sync>;
@@ -128,14 +125,30 @@ struct CachedToken {
     expires_at: Instant,
 }
 
-/// Token cache keyed by scope (e.g., "repository:homebrew/core/lz4:pull")
 type TokenCache = Arc<RwLock<HashMap<String, CachedToken>>>;
+
+fn build_rustls_config() -> rustls::ClientConfig {
+    let provider = rustls::crypto::aws_lc_rs::default_provider();
+
+    let mut root_store = rustls::RootCertStore::empty();
+
+    for cert in rustls_native_certs::load_native_certs().expect("failed to load native certs") {
+        root_store.add(cert).ok();
+    }
+
+    rustls::ClientConfig::builder_with_provider(provider.into())
+        .with_safe_default_protocol_versions()
+        .expect("failed to set protocol versions")
+        .with_root_certificates(root_store)
+        .with_no_client_auth()
+}
 
 pub struct Downloader {
     client: reqwest::Client,
     blob_cache: BlobCache,
     token_cache: TokenCache,
     global_semaphore: Option<Arc<Semaphore>>,
+    tls_config: Arc<rustls::ClientConfig>,
 }
 
 impl Downloader {
@@ -145,6 +158,8 @@ impl Downloader {
 
     pub fn with_semaphore(blob_cache: BlobCache, semaphore: Option<Arc<Semaphore>>) -> Self {
         // Use HTTP/2 with connection pooling for better performance
+        let tls_config = Arc::new(build_rustls_config());
+
         Self {
             client: reqwest::Client::builder()
                 .user_agent("zerobrew/0.1")
@@ -152,7 +167,7 @@ impl Downloader {
                 .tcp_nodelay(true)
                 .tcp_keepalive(Duration::from_secs(60))
                 .connect_timeout(Duration::from_secs(30))
-                .timeout(Duration::from_secs(300)) // 5 min total request timeout
+                .timeout(Duration::from_secs(300))
                 .http2_adaptive_window(true)
                 .http2_initial_stream_window_size(Some(2 * 1024 * 1024))
                 .http2_initial_connection_window_size(Some(4 * 1024 * 1024))
@@ -161,7 +176,25 @@ impl Downloader {
             blob_cache,
             token_cache: Arc::new(RwLock::new(HashMap::new())),
             global_semaphore: semaphore,
+            tls_config,
         }
+    }
+
+    // FIXME: extract timeout and HTTP/2 window size constants to config file
+    fn create_isolated_client(&self) -> reqwest::Client {
+        reqwest::Client::builder()
+            .user_agent("zerobrew/0.1")
+            .use_preconfigured_tls(self.tls_config.clone())
+            .pool_max_idle_per_host(0)
+            .tcp_nodelay(true)
+            .tcp_keepalive(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(300))
+            .http2_adaptive_window(true)
+            .http2_initial_stream_window_size(Some(2 * 1024 * 1024))
+            .http2_initial_connection_window_size(Some(4 * 1024 * 1024))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
     }
 
     /// Remove a blob from the cache (used when extraction fails due to corruption)
@@ -286,10 +319,13 @@ impl Downloader {
         // Add alternate mirrors
         all_urls.extend(alternate_urls.iter().cloned());
 
-        // Spawn racing downloads
         let mut handles = Vec::new();
         for (idx, url) in all_urls.into_iter().enumerate() {
-            let downloader_client = self.client.clone();
+            let downloader_client = if idx < RACING_CONNECTIONS {
+                self.create_isolated_client()
+            } else {
+                self.client.clone()
+            };
             let blob_cache = self.blob_cache.clone();
             let token_cache = self.token_cache.clone();
             let expected_sha256 = expected_sha256.to_string();
@@ -299,7 +335,6 @@ impl Downloader {
             let done_notify = done_notify.clone();
             let body_download_gate = body_download_gate.clone();
 
-            // Stagger starts to give earlier connections a head start
             let delay = Duration::from_millis(idx as u64 * RACING_STAGGER_MS);
 
             let handle = tokio::spawn(async move {
