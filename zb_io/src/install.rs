@@ -430,6 +430,11 @@ impl Installer {
     pub fn list_installed(&self) -> Result<Vec<crate::db::InstalledKeg>, Error> {
         self.db.list_installed()
     }
+
+    /// Get the path to a keg in the cellar
+    pub fn keg_path(&self, name: &str, version: &str) -> std::path::PathBuf {
+        self.cellar.keg_path(name, version)
+    }
 }
 
 /// Create an Installer with standard paths
