@@ -129,7 +129,7 @@ uninstall:
     echo ''
     echo -e '{{BOLD}}{{GREEN}}✓{{NORMAL}} zerobrew uninstalled successfully!'
     echo ''
-    echo 'Restart your terminal or run: exec \$SHELL'
+    echo 'Restart your terminal or run: exec $SHELL'
 
 [doc('Reset zerobrew completely (removes data and re-initializes)')]
 [group('install')]
