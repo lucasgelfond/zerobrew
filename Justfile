@@ -37,7 +37,7 @@ default:
 [doc('Build the zb binary')]
 [group('build')]
 build: fmt lint
-    cargo build --bin zb
+    cargo build --bin zb --bin zbx
 
 [doc('Install zb to $ZEROBREW_BIN')]
 [group('install')]
@@ -52,7 +52,9 @@ install: build
 
     mkdir -p "$ZEROBREW_BIN"
     install -Dm755 target/debug/zb "$ZEROBREW_BIN/zb"
+    install -Dm755 target/debug/zbx "$ZEROBREW_BIN/zbx"
     echo "Installed zb to $ZEROBREW_BIN/zb"
+    echo "Installed zbx to $ZEROBREW_BIN/zbx"
 
     "$ZEROBREW_BIN/zb" init
 
