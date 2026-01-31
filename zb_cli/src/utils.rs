@@ -28,11 +28,29 @@ pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     );
     eprintln!("      Error: {}", error);
     eprintln!();
-    eprintln!("      Try installing with Homebrew instead:");
-    eprintln!(
-        "      {}",
-        style(format!("brew install {}", formula)).cyan()
-    );
+
+    // Return Error for termux on android since homebrew
+    // doesn't support bottles for this platform
+    if cfg!(target_os = "android") {
+        eprintln!(
+            "      {} {}",
+            style(formula).yellow().bold(),
+            style("is not compatible with termux on android")
+                .red()
+                .bold()
+        );
+        eprintln!(
+            "      {}",
+            style("and can not be installed on it.").red().bold()
+        );
+    } else {
+        eprintln!("      Try installing with Homebrew instead:");
+        eprintln!(
+            "      {}",
+            style(format!("brew install {}", formula)).cyan()
+        );
+    }
+
     eprintln!();
 }
 
