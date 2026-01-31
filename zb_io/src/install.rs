@@ -65,12 +65,12 @@ impl Installer {
     }
 
     /// Resolve dependencies and plan the install
-    pub async fn plan(&self, name: &str) -> Result<InstallPlan, Error> {
+    pub async fn plan(&self, names: &[String]) -> Result<InstallPlan, Error> {
         // Recursively fetch all formulas we need
-        let formulas = self.fetch_all_formulas(name).await?;
+        let formulas = self.fetch_all_formulas(names).await?;
 
         // Resolve in topological order
-        let ordered = resolve_closure(name, &formulas)?;
+        let ordered = resolve_closure(names, &formulas)?;
 
         // Build list of formulas in order
         let all_formulas: Vec<Formula> = ordered
@@ -160,12 +160,15 @@ impl Installer {
     }
 
     /// Recursively fetch a formula and all its dependencies in parallel batches
-    async fn fetch_all_formulas(&self, name: &str) -> Result<BTreeMap<String, Formula>, Error> {
+    async fn fetch_all_formulas(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, Formula>, Error> {
         use std::collections::HashSet;
 
         let mut formulas = BTreeMap::new();
         let mut fetched: HashSet<String> = HashSet::new();
-        let mut to_fetch: Vec<String> = vec![name.to_string()];
+        let mut to_fetch: Vec<String> = names.to_vec();
 
         while !to_fetch.is_empty() {
             // Fetch current batch in parallel
@@ -374,8 +377,8 @@ impl Installer {
     }
 
     /// Convenience method to plan and execute in one call
-    pub async fn install(&mut self, name: &str, link: bool) -> Result<ExecuteResult, Error> {
-        let plan = self.plan(name).await?;
+    pub async fn install(&mut self, names: &[String], link: bool) -> Result<ExecuteResult, Error> {
+        let plan = self.plan(names).await?;
         self.execute(plan, link).await
     }
 
@@ -487,7 +490,6 @@ pub fn create_installer(
     })?;
     let db = Database::open(&root.join("db/zb.sqlite3"))?;
 
-    // Create ParallelDownloader with custom concurrency
     use crate::download::ParallelDownloader;
     let parallel_downloader = ParallelDownloader::with_concurrency(blob_cache, concurrency);
 
@@ -616,7 +618,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install
-        installer.install("testpkg", true).await.unwrap();
+        installer
+            .install(&["testpkg".to_string()], true)
+            .await
+            .unwrap();
 
         // Verify keg exists
         assert!(root.join("cellar/testpkg/1.0.0").exists());
@@ -694,7 +699,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install
-        installer.install("uninstallme", true).await.unwrap();
+        installer
+            .install(&["uninstallme".to_string()], true)
+            .await
+            .unwrap();
 
         // Verify installed
         assert!(installer.is_installed("uninstallme"));
@@ -771,7 +779,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install and uninstall
-        installer.install("gctest", true).await.unwrap();
+        installer
+            .install(&["gctest".to_string()], true)
+            .await
+            .unwrap();
 
         // Store entry should exist before GC
         assert!(root.join("store").join(&bottle_sha).exists());
@@ -851,7 +862,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install but don't uninstall
-        installer.install("keepme", true).await.unwrap();
+        installer
+            .install(&["keepme".to_string()], true)
+            .await
+            .unwrap();
 
         // Store entry should exist
         assert!(root.join("store").join(&bottle_sha).exists());
@@ -965,7 +979,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install main package (should also install dependency)
-        installer.install("mainpkg", true).await.unwrap();
+        installer
+            .install(&["mainpkg".to_string()], true)
+            .await
+            .unwrap();
 
         // Both packages should be installed
         assert!(installer.db.get_installed("mainpkg").is_some());
@@ -1068,7 +1085,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install root (should install all 5 packages)
-        installer.install("root", true).await.unwrap();
+        installer
+            .install(&["root".to_string()], true)
+            .await
+            .unwrap();
 
         // All packages should be installed
         assert!(installer.db.get_installed("root").is_some());
@@ -1156,7 +1176,10 @@ mod tests {
 
         // Install slow package (which depends on fast)
         // With streaming, fast should be extracted while slow is still downloading
-        installer.install("slowpkg", true).await.unwrap();
+        installer
+            .install(&["slowpkg".to_string()], true)
+            .await
+            .unwrap();
 
         // Both packages should be installed
         assert!(installer.db.get_installed("fastpkg").is_some());
@@ -1259,7 +1282,10 @@ mod tests {
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
         // Install - should succeed (first download is valid in this test)
-        installer.install("retrypkg", true).await.unwrap();
+        installer
+            .install(&["retrypkg".to_string()], true)
+            .await
+            .unwrap();
 
         // Verify installation succeeded
         assert!(installer.is_installed("retrypkg"));
