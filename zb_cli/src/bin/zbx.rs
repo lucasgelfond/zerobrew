@@ -6,7 +6,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
 
     if args.is_empty() {
-        eprintln!("zbx - Run a Homebrew package without installing it");
+        eprintln!("zbx - Run a command from a formula without linking it");
         eprintln!();
         eprintln!("Usage: zbx <formula> [args...]");
         eprintln!();

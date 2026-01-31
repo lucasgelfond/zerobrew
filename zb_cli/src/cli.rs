@@ -49,6 +49,7 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::shells::Shell,
     },
+    #[command(disable_help_flag = true)]
     Run {
         formula: String,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
