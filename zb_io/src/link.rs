@@ -41,13 +41,13 @@ impl Linker {
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
-                linked.extend(self.link_recursive(&src_dir, &dst_dir)?);
+                linked.extend(Self::link_recursive(&src_dir, &dst_dir)?);
             }
         }
         Ok(linked)
     }
 
-    fn link_recursive(&self, src: &Path, dst: &Path) -> Result<Vec<LinkedFile>, Error> {
+    fn link_recursive(src: &Path, dst: &Path) -> Result<Vec<LinkedFile>, Error> {
         let mut linked = Vec::new();
         if !dst.exists() {
             fs::create_dir_all(dst).map_err(|e| Error::StoreCorruption {
@@ -74,9 +74,9 @@ impl Linker {
                             message: e.to_string(),
                         })?;
                     let _ = fs::remove_file(&dst_path);
-                    self.link_recursive(&old_target, &dst_path)?;
+                    Self::link_recursive(&old_target, &dst_path)?;
                 }
-                linked.extend(self.link_recursive(&src_path, &dst_path)?);
+                linked.extend(Self::link_recursive(&src_path, &dst_path)?);
                 continue;
             }
 
@@ -128,13 +128,13 @@ impl Linker {
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
-                unlinked.extend(self.unlink_recursive(&src_dir, &dst_dir)?);
+                unlinked.extend(Self::unlink_recursive(&src_dir, &dst_dir)?);
             }
         }
         Ok(unlinked)
     }
 
-    fn unlink_recursive(&self, src: &Path, dst: &Path) -> Result<Vec<PathBuf>, Error> {
+    fn unlink_recursive(src: &Path, dst: &Path) -> Result<Vec<PathBuf>, Error> {
         let mut unlinked = Vec::new();
         if !src.exists() || !dst.exists() {
             return Ok(unlinked);
@@ -149,8 +149,7 @@ impl Linker {
             let dst_path = dst.join(entry.file_name());
 
             if src_path.is_dir() && dst_path.is_dir() && !dst_path.is_symlink() {
-                unlinked.extend(self.unlink_recursive(&src_path, &dst_path)?);
-                // Clean up empty directories
+                unlinked.extend(Self::unlink_recursive(&src_path, &dst_path)?);
                 if let Ok(mut entries) = fs::read_dir(&dst_path)
                     && entries.next().is_none()
                 {
