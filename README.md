@@ -40,11 +40,26 @@ This leads to dramatic speedups, up to 5x cold and 20x warm. Full benchmarks [he
 ```bash
 zb install jq        # install jq
 zb install wget git  # install multiple
+zb install --file Brewfile  # install from a manifest
+zb bundle               # shorthand for Brewfile in current dir
 zb uninstall jq      # uninstall
 zb reset             # uninstall everything
 zb gc                # garbage collect unused store entries
 zbx jq --version     # run without linking
 ```
+
+### Brewfile manifests
+
+Create a plain text manifest (compatible with Homebrew's Brewfile) listing one formula per line:
+
+```text
+# Brewfile
+jq
+wget
+git
+```
+
+Blank lines and comments (lines starting with `#`) are ignored. Install everything in the manifest with `zb install --file Brewfile` or use `zb bundle` to read the default `./Brewfile`.
 
 ## Why is it faster?
 
