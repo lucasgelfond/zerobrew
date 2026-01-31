@@ -1,4 +1,3 @@
-use console::style;
 use std::path::PathBuf;
 
 pub fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
@@ -18,22 +17,6 @@ pub fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
     }
 
     Ok(trimmed.to_string())
-}
-
-pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
-    eprintln!();
-    eprintln!(
-        "{} This package can't be installed with zerobrew.",
-        style("Note:").yellow().bold()
-    );
-    eprintln!("      Error: {}", error);
-    eprintln!();
-    eprintln!("      Try installing with Homebrew instead:");
-    eprintln!(
-        "      {}",
-        style(format!("brew install {}", formula)).cyan()
-    );
-    eprintln!();
 }
 
 pub fn get_root_path(cli_root: Option<PathBuf>) -> PathBuf {

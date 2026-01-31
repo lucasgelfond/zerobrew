@@ -98,7 +98,7 @@ pub async fn execute(
     for pkg in &packages.formulas {
         print!("    {} {}...", style("○").dim(), pkg.name);
 
-        match installer.plan(&pkg.name).await {
+        match installer.plan(std::slice::from_ref(&pkg.name)).await {
             Ok(plan) => match installer.execute(plan, true).await {
                 Ok(_) => {
                     println!(" {}", style("✓").green());

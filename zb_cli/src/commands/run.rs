@@ -23,7 +23,7 @@ pub async fn prepare_execution(
             style(&normalized).green()
         );
 
-        let plan = installer.plan(&normalized).await?;
+        let plan = installer.plan(std::slice::from_ref(&normalized)).await?;
         installer.execute(plan, false).await?;
     }
 
@@ -257,7 +257,10 @@ mod tests {
 
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
 
-        installer.install("alreadyinstalled", false).await.unwrap();
+        installer
+            .install(&["alreadyinstalled".to_string()], false)
+            .await
+            .unwrap();
         assert!(installer.is_installed("alreadyinstalled"));
 
         let bin_path = prepare_execution(&mut installer, "alreadyinstalled")

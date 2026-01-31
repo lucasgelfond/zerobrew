@@ -39,8 +39,8 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     match cli.command {
         Commands::Init => unreachable!(),
         Commands::Completion { .. } => unreachable!(),
-        Commands::Install { formula, no_link } => {
-            commands::install::execute(&mut installer, formula, no_link).await
+        Commands::Install { formulas, no_link } => {
+            commands::install::execute(&mut installer, formulas, no_link).await
         }
         Commands::Uninstall { formula } => commands::uninstall::execute(&mut installer, formula),
         Commands::Migrate { yes, force } => {
