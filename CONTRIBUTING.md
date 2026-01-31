@@ -4,7 +4,7 @@ Thanks for your interest in contributing to zerobrew! This document provides gui
 
 ## Licensing
 
-By contributing to zerobrew, you agree your contributions will be dual-licensed under both [Apache](./LICENSE-APACHE.md) and [MIT](./LICENSE-MIT.md).
+By contributing to zerobrew, you agree your contributions will be dual-licensed under either [Apache](./LICENSE-APACHE.md) OR [MIT](./LICENSE-MIT.md), at the licensee's choice.
 
 ## Soft Prerequisites
 
