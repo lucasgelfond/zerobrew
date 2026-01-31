@@ -37,8 +37,9 @@ struct Cli {
 enum Commands {
     /// Install a formula
     Install {
-        /// Formula name to install
-        formula: String,
+        /// Formula names to install
+        #[arg(required = true, num_args = 1..)]
+        formulas: Vec<String>,
 
         /// Skip linking executables
         #[arg(long)]
@@ -178,7 +179,7 @@ fn run_init(root: &Path, prefix: &Path) -> Result<(), String> {
             .unwrap_or_else(|| std::env::var("USER").unwrap_or_else(|_| "root".to_string()));
 
         let status = Command::new("sudo")
-            .args(["chown", "-R", &user, &root.to_string_lossy()])
+            .args(["chown", "-R", &user, &root.to_path_buf().to_string_lossy()])
             .status()
             .map_err(|e| format!("Failed to run sudo chown: {}", e))?;
 
@@ -187,7 +188,12 @@ fn run_init(root: &Path, prefix: &Path) -> Result<(), String> {
         }
 
         let status = Command::new("sudo")
-            .args(["chown", "-R", &user, &prefix.to_string_lossy()])
+            .args([
+                "chown",
+                "-R",
+                &user,
+                &prefix.to_path_buf().to_string_lossy(),
+            ])
             .status()
             .map_err(|e| format!("Failed to run sudo chown: {}", e))?;
 
@@ -415,26 +421,33 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     match cli.command {
         Commands::Init => unreachable!(),              // Handled above
         Commands::Completion { .. } => unreachable!(), // Handled above
-        Commands::Install { formula, no_link } => {
+        Commands::Install { formulas, no_link } => {
             let start = Instant::now();
             println!(
                 "{} Installing {}...",
                 style("==>").cyan().bold(),
-                style(&formula).bold()
+                style(formulas.join(", ")).bold()
             );
 
-            let normalized = match normalize_formula_name(&formula) {
-                Ok(name) => name,
-                Err(e) => {
-                    suggest_homebrew(&formula, &e);
-                    return Err(e);
+            let mut normalized_names = Vec::new();
+            for formula in &formulas {
+                match normalize_formula_name(formula) {
+                    Ok(name) => normalized_names.push(name),
+                    Err(e) => {
+                        suggest_homebrew(formula, &e);
+                        return Err(e);
+                    }
                 }
-            };
+            }
 
-            let plan = match installer.plan(&normalized).await {
+            let plan = match installer.plan(&normalized_names).await {
                 Ok(p) => p,
                 Err(e) => {
-                    suggest_homebrew(&formula, &e);
+                    // Note: This suggestion might be suboptimal for multiple formulas
+                    // but it's better than nothing.
+                    if let Some(first) = formulas.first() {
+                        suggest_homebrew(first, &e);
+                    }
                     return Err(e);
                 }
             };
@@ -571,7 +584,9 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             let result = match result_val {
                 Ok(r) => r,
                 Err(e) => {
-                    suggest_homebrew(&formula, &e);
+                    if let Some(first) = formulas.first() {
+                        suggest_homebrew(first, &e);
+                    }
                     return Err(e);
                 }
             };
@@ -717,7 +732,8 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
             for pkg in &packages.formulas {
                 print!("    {} {}...", style("○").dim(), pkg.name);
 
-                match installer.plan(&pkg.name).await {
+                // Use the new multi-install interface, but we just pass one at a time for migration to handle errors individually
+                match installer.plan(&[pkg.name.clone()]).await {
                     Ok(plan) => {
                         // Execute the plan without progress bars for batch migration
                         match installer.execute(plan, true).await {
@@ -873,11 +889,15 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
 
         Commands::Info { formula } => {
             if let Some(keg) = installer.get_installed(&formula) {
-                println!("{}       {}", style("Name:").dim(), style(&keg.name).bold());
-                println!("{}    {}", style("Version:").dim(), keg.version);
-                println!("{}  {}", style("Store key:").dim(), &keg.store_key[..12]);
                 println!(
-                    "{}  {}",
+                    "{}        {}",
+                    style("Name:").dim(),
+                    style(&keg.name).bold()
+                );
+                println!("{}     {}", style("Version:").dim(), keg.version);
+                println!("{}   {}", style("Store key:").dim(), &keg.store_key[..12]);
+                println!(
+                    "{}   {}",
                     style("Installed:").dim(),
                     chrono_lite_format(keg.installed_at)
                 );
