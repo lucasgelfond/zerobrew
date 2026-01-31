@@ -11,22 +11,24 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
-console = "0.15"
-indicatif = "0.17"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots", "http2"] }
-flate2 = "1.0"
-tar = "0.4"
-xz2 = "0.1"
-zstd = "0.13"
-rusqlite = { version = "0.32", features = ["bundled"] }
-futures = "0.3"
-futures-util = "0.3"
-rayon = "1.10"
-regex = "1"
-sha2 = "0.10"
-walkdir = "2"
-fs4 = "0.13"
-libc = "0.2"
+console = "0.16.2"
+indicatif = "0.18.3"
+reqwest = { version = "0.13.1", default-features = false, features = ["json", "stream", "rustls", "http2"] }
+rustls = { version = "0.23.26", features = ["aws-lc-rs"] }
+rustls-native-certs = "0.8.3"
+flate2 = "1.1.8"
+tar = "0.4.44"
+xz2 = "0.1.7"
+zstd = "0.13.3"
+rusqlite = { version = "0.38", features = ["bundled"] }
+futures = "0.3.31"
+futures-util = "0.3.31"
+rayon = "1.11.0"
+regex = "1.12.2"
+sha2 = "0.10.9"
+walkdir = "2.5.0"
+fs4 = "0.13.1"
+libc = "0.2.180"
 
 # Dev dependencies
 tempfile = "3"

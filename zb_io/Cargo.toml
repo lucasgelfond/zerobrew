@@ -12,6 +12,8 @@ futures-util.workspace = true
 rayon.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,7 +26,7 @@ xz2.workspace = true
 zstd.workspace = true
 zb_core = { path = "../zb_core" }
 arwen = "0.0.5"
-object = "0.38"
+object = "0.38.1"
 
 [dev-dependencies]
 tempfile.workspace = true
