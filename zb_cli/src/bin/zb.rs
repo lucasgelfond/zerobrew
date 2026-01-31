@@ -1,15 +1,12 @@
 use clap::Parser;
 use console::style;
+use zb_cli::{
+    cli::{Cli, Commands},
+    commands,
+    init::ensure_init,
+    utils::get_root_path,
+};
 use zb_io::install::create_installer;
-
-mod cli;
-mod commands;
-mod init;
-mod utils;
-
-use cli::{Cli, Commands};
-use init::ensure_init;
-use utils::get_root_path;
 
 #[tokio::main]
 async fn main() {
@@ -53,5 +50,8 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         Commands::Info { formula } => commands::info::execute(&mut installer, formula),
         Commands::Gc => commands::gc::execute(&mut installer),
         Commands::Reset { yes } => commands::reset::execute(&root, &prefix, yes),
+        Commands::Run { formula, args } => {
+            commands::run::execute(&mut installer, formula, args).await
+        }
     }
 }

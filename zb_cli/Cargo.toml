@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
 
-[[bin]]
-name = "zb"
-path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
@@ -21,3 +18,10 @@ zb_io = { path = "../zb_io" }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock.workspace = true
+tar.workspace = true
+flate2.workspace = true
+sha2.workspace = true
