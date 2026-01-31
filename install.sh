@@ -103,7 +103,7 @@ if [[ ! -w $SHELL_CONFIG ]]; then
 fi
 
 # Add to PATH in shell config if not already there
-PATHS_TO_ADD=("$ZEROBREW_BIN" "$ZEROBREW_PREFIX/bin")
+PATHS_TO_ADD=("\$ZEROBREW_BIN" "\$ZEROBREW_PREFIX/bin")
 if ! grep -q "^# zerobrew$" "$SHELL_CONFIG" 2>/dev/null; then
     cat >>"$SHELL_CONFIG" <<EOF
 # zerobrew
