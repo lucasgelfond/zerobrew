@@ -2371,6 +2371,7 @@ dependencies = [
  "indicatif",
  "libc",
  "serde_json",
+ "tempfile",
  "tokio",
  "zb_core",
  "zb_io",

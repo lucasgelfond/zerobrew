@@ -21,3 +21,6 @@ zb_io = { path = "../zb_io" }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
