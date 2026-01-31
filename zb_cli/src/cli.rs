@@ -26,6 +26,12 @@ pub enum Commands {
         #[arg(long)]
         no_link: bool,
     },
+    Bundle {
+        #[arg(long, short = 'f', value_name = "FILE", default_value = "Brewfile")]
+        file: PathBuf,
+        #[arg(long)]
+        no_link: bool,
+    },
     Uninstall {
         formula: Option<String>,
     },
