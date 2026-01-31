@@ -19,7 +19,7 @@ Join the [Discord](https://discord.gg/UxAAvZ93) for support / discussion.
 
 ## About
 
-A faster, modern Mac package manager.
+A fast, modern package manager.
 
 ![zb demo](zb-demo.gif)
 
