@@ -41,8 +41,9 @@ This leads to dramatic speedups, up to 5x cold and 20x warm. Full benchmarks [he
 zb install jq        # install jq
 zb install wget git  # install multiple
 zb uninstall jq      # uninstall
-zb reset         # uninstall everything
+zb reset             # uninstall everything
 zb gc                # garbage collect unused store entries
+zbx jq --version     # run without linking
 ```
 
 ## Why is it faster?
