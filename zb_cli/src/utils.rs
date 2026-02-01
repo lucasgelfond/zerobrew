@@ -29,7 +29,7 @@ pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!("      Error: {}", error);
     eprintln!();
 
-    // Return Error for termux on android since homebrew
+    // Error for termux on android since homebrew
     // doesn't support bottles for this platform
     if cfg!(target_os = "android") {
         eprintln!(
