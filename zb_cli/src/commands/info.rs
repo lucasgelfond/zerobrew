@@ -1,4 +1,5 @@
 use console::style;
+use std::time::{Duration, UNIX_EPOCH};
 
 pub fn execute(
     installer: &mut zb_io::install::Installer,
@@ -11,7 +12,7 @@ pub fn execute(
         println!(
             "{}  {}",
             style("Installed:").dim(),
-            chrono_lite_format(keg.installed_at)
+            format_timestamp(keg.installed_at)
         );
     } else {
         println!("Formula '{}' is not installed.", formula);
@@ -20,9 +21,12 @@ pub fn execute(
     Ok(())
 }
 
-fn chrono_lite_format(timestamp: i64) -> String {
-    use std::time::{Duration, UNIX_EPOCH};
+fn format_timestamp(timestamp: i64) -> String {
+    let secs = timestamp.max(0) as u64;
+    let dt = UNIX_EPOCH + Duration::from_secs(secs);
 
-    let dt = UNIX_EPOCH + Duration::from_secs(timestamp as u64);
-    format!("{:?}", dt)
+    match dt.duration_since(UNIX_EPOCH) {
+        Ok(dur) => format!("{}s since epoch", dur.as_secs()),
+        Err(_) => "invalid timestamp".to_string(),
+    }
 }
