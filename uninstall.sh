@@ -19,6 +19,8 @@ fi
 echo "Uninstalling zerobrew..."
 
 if [[ -f "$ZEROBREW_BIN/zb" ]]; then
+    # TODO: should we reset?
+    # this will also remove ALL formulas downloaded through zerobrew
     "$ZEROBREW_BIN/zb" reset --yes
 
     rm "$ZEROBREW_BIN/zb"
@@ -38,6 +40,8 @@ if [[ -d "$ZEROBREW_DIR" ]]; then
     echo "Removed source directory $ZEROBREW_DIR"
 fi
 
+# TODO: should we delete?
+# this will also remove ALL formulas downloaded through zerobrew
 if [[ -d "$ZEROBREW_ROOT" ]]; then
     if [[ "$ZEROBREW_ROOT" == /opt/* ]]; then
         echo "Removing $ZEROBREW_ROOT (requires sudo)..."
