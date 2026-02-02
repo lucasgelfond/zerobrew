@@ -15,6 +15,7 @@ serde_json.workspace = true
 
 zb_core = { path = "../zb_core" }
 zb_io = { path = "../zb_io" }
+chrono = "0.4.43"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
