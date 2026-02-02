@@ -28,14 +28,6 @@ pub fn is_writable(path: &Path) -> bool {
 }
 
 pub fn run_init(root: &Path, prefix: &Path) -> Result<(), InitError> {
-    run_init_impl(root, prefix, false)
-}
-
-pub fn run_init_with_shell_setup(root: &Path, prefix: &Path) -> Result<(), InitError> {
-    run_init_impl(root, prefix, true)
-}
-
-fn run_init_impl(root: &Path, prefix: &Path, update_shell_profile: bool) -> Result<(), InitError> {
     println!("{} Initializing zerobrew...", style("==>").cyan().bold());
 
     let dirs_to_create: Vec<PathBuf> = vec![
@@ -117,88 +109,17 @@ fn run_init_impl(root: &Path, prefix: &Path, update_shell_profile: bool) -> Resu
         }
     }
 
-    if update_shell_profile {
-        add_to_path(prefix)?;
-    }
-
-    println!("{} Initialization complete!", style("==>").cyan().bold());
-
-    Ok(())
-}
-
-fn add_to_path(prefix: &Path) -> Result<(), InitError> {
-    let shell = std::env::var("SHELL").unwrap_or_default();
-    let home = std::env::var("HOME").map_err(|_| InitError::Message("HOME not set".to_string()))?;
-
-    let config_file = if shell.contains("zsh") {
-        let zdotdir = std::env::var("ZDOTDIR").unwrap_or_else(|_| home.clone());
-        let zshenv = format!("{}/.zshenv", zdotdir);
-
-        if std::path::Path::new(&zshenv).exists() {
-            zshenv
-        } else {
-            format!("{}/.zshrc", zdotdir)
-        }
-    } else if shell.contains("bash") {
-        let bash_profile = format!("{}/.bash_profile", home);
-        if std::path::Path::new(&bash_profile).exists() {
-            bash_profile
-        } else {
-            format!("{}/.bashrc", home)
-        }
-    } else {
-        format!("{}/.profile", home)
-    };
-
     let bin_path = prefix.join("bin");
-    let path_export = format!("export PATH=\"{}:$PATH\"", bin_path.display());
-
-    let already_added = if let Ok(contents) = std::fs::read_to_string(&config_file) {
-        contents.contains(&bin_path.to_string_lossy().to_string())
-    } else {
-        false
-    };
-
-    if !already_added {
-        let addition = format!("\n# zerobrew\n{}\n", path_export);
-
-        let write_result = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&config_file)
-            .and_then(|mut f| f.write_all(addition.as_bytes()));
-
-        if let Err(e) = write_result {
-            println!(
-                "{} Could not write to {} due to error: {}",
-                style("Warning:").yellow().bold(),
-                config_file,
-                e
-            );
-            println!(
-                "{} Please add the following line to {}:",
-                style("Info:").cyan().bold(),
-                config_file
-            );
-            println!("{}", addition);
-        } else {
-            println!(
-                "    {} Added {} to PATH in {}",
-                style("✓").green(),
-                bin_path.display(),
-                config_file
-            );
-        }
-    }
-
     let current_path = std::env::var("PATH").unwrap_or_default();
     if !current_path.contains(&bin_path.to_string_lossy().to_string()) {
         println!(
-            "    {} Run {} or restart your terminal",
+            "    {} Add {} to your PATH, or re-run the installer",
             style("→").cyan(),
-            style(format!("source {}", config_file)).cyan()
+            style(bin_path.display()).cyan()
         );
     }
+
+    println!("{} Initialization complete!", style("==>").cyan().bold());
 
     Ok(())
 }
