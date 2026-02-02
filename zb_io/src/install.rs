@@ -15,6 +15,7 @@ use crate::store::Store;
 use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
 use zb_core::formula::BinaryDownload;
 
+#[path = "install_formula.rs"]
 mod install_formula;
 use install_formula::{FormulaResolver, parse_formula_ref};
 
@@ -55,6 +56,7 @@ struct ProcessedPackage {
 }
 
 #[cfg(test)]
+#[path = "install_tests.rs"]
 mod install_tests;
 
 impl Installer {
@@ -739,7 +741,10 @@ mod tests {
 
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
-        installer.install("gpd", true).await.unwrap();
+        installer
+            .install(&["gpd".to_string()], true)
+            .await
+            .unwrap();
 
         let keg_path = root.join("cellar/gpd/0.1.0");
         assert!(keg_path.exists());
@@ -1156,7 +1161,10 @@ mod tests {
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
-        installer.install("user/tools/tappkg", true).await.unwrap();
+        installer
+            .install(&["user/tools/tappkg".to_string()], true)
+            .await
+            .unwrap();
 
         assert!(installer.db.get_installed("tappkg").is_some());
     }

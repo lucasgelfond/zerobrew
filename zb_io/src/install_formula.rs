@@ -167,6 +167,17 @@ impl<'a> FormulaResolver<'a> {
                         exact_tap: dep_ref.exact_tap,
                     };
 
+                    if let Some(existing) = sources.get(&next_request.name) {
+                        if existing != &next_request.preferred_tap {
+                            return Err(Error::ConflictingFormulaSource {
+                                name: next_request.name.clone(),
+                                first: source_label(existing.as_ref()),
+                                second: source_label(next_request.preferred_tap.as_ref()),
+                            });
+                        }
+                        continue;
+                    }
+
                     if fetched.contains(&next_request.name) {
                         continue;
                     }
