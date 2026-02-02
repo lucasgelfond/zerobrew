@@ -185,7 +185,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         assert!(!installer.is_installed("testrun"));
 
@@ -255,7 +255,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         installer
             .install(&["alreadyinstalled".to_string()], false)
@@ -300,7 +300,7 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
         let result = prepare_execution(&mut installer, "nonexistent").await;
         assert!(result.is_err());

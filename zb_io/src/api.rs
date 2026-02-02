@@ -32,8 +32,20 @@ impl ApiClient {
         self
     }
 
+    pub(crate) fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
-        let url = format!("{}/{}.json", self.base_url, name);
+        self.get_formula_with_base_url(&self.base_url, name).await
+    }
+
+    pub(crate) async fn get_formula_with_base_url(
+        &self,
+        base_url: &str,
+        name: &str,
+    ) -> Result<Formula, Error> {
+        let url = format!("{}/{}.json", base_url, name);
 
         let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
 
@@ -104,6 +116,33 @@ impl ApiClient {
         })?;
 
         Ok(formula)
+    }
+
+    pub(crate) async fn get_text_if_exists(&self, url: &str) -> Result<Option<String>, Error> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("HTTP {}", response.status()),
+            });
+        }
+
+        let body = response.text().await.map_err(|e| Error::NetworkFailure {
+            message: format!("failed to read response body: {e}"),
+        })?;
+
+        Ok(Some(body))
     }
 }
 
