@@ -16,7 +16,7 @@ ZEROBREW_BIN := env('ZEROBREW_BIN', env('HOME', '~') / '.local' / 'bin')
 ZEROBREW_PREFIX := env('ZEROBREW_PREFIX', ZEROBREW_ROOT / 'prefix')
 ZEROBREW_INSTALLED_BIN := ZEROBREW_BIN / 'zb'
 
-SUDO := if require('doas') != '' {
+SUDO := if `command -v doas || true` != '' {
     'doas'
 } else {
     require('sudo')
