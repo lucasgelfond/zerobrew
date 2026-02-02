@@ -1,0 +1,91 @@
+---
+title: Quickstart
+description: Get zerobrew installed in under a minute
+---
+
+## Install zerobrew
+
+Run the install script:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/lucasgelfond/zerobrew/main/install.sh | bash
+```
+
+After install, either run the export command it prints, or restart your terminal.
+
+<Tip>
+  The installer will automatically install Rust if you don't have it.
+</Tip>
+
+---
+
+## Your First Package
+
+Install a package:
+
+```bash
+zb install jq
+```
+
+That's it! You'll see zerobrew resolve dependencies, download, and link the package.
+
+---
+
+## Common Commands
+
+| Command | Description |
+|---------|-------------|
+| `zb install <package>` | Install a package |
+| `zb uninstall <package>` | Remove a package |
+| `zb list` | Show installed packages |
+| `zb info <package>` | Display package details |
+
+---
+
+## Install Multiple Packages
+
+You can install several packages at once:
+
+```bash
+zb install wget git ffmpeg sqlite
+```
+
+zerobrew will resolve all dependencies and install everything in parallel.
+
+---
+
+## Migrating from Homebrew
+
+If you have existing Homebrew packages, migrate them with one command:
+
+```bash
+zb migrate
+```
+
+This will:
+1. Detect all your installed Homebrew formulas
+2. Install them via zerobrew
+3. Optionally uninstall them from Homebrew
+
+<Info>
+  Learn more in the [Migration Guide](/guides/migrating-from-homebrew).
+</Info>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="All Commands" icon="terminal" href="/commands/overview">
+    Explore the full command reference
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Customize zerobrew's behavior
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Learn how zerobrew works
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/contributing">
+    Help improve zerobrew
+  </Card>
+</CardGroup>

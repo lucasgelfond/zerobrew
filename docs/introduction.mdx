@@ -1,0 +1,121 @@
+---
+title: Introduction
+description: A faster, modern package manager
+---
+
+<style>
+{`
+  .hero-title {
+    text-align: center;
+    margin: 2.5rem 0 0.75rem 0;
+  }
+  
+  .hero-logo {
+    max-width: 280px;
+    height: auto;
+  }
+  
+  .hero-subtitle {
+    text-align: center;
+    font-size: 1.125rem;
+    color: #6b6b6b;
+    margin-bottom: 2rem;
+  }
+`}
+</style>
+
+<Frame>
+  <img src="/images/demo.gif" alt="zerobrew demo" />
+</Frame>
+
+---
+
+## What is zerobrew?
+
+zerobrew applies [uv](https://github.com/astral-sh/uv)'s model to Mac packages. Packages live in a content-addressable store (by sha256), so reinstalls are instant. Downloads, extraction, and linking run in parallel with aggressive HTTP caching.
+
+It pulls from Homebrew's CDN, so you can swap `brew` for `zb` with your existing commands.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running in under a minute
+  </Card>
+  <Card title="Commands" icon="terminal" href="/commands/overview">
+    Explore all available commands
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Learn how zerobrew works under the hood
+  </Card>
+  <Card title="Migrate" icon="arrow-right-arrow-left" href="/guides/migrating-from-homebrew">
+    Move your packages from Homebrew
+  </Card>
+</CardGroup>
+
+---
+
+## Performance
+
+zerobrew delivers dramatic speedups — up to **5x cold** and **20x warm**.
+
+| Package | Homebrew | ZB (cold) | ZB (warm) | Cold Speedup | Warm Speedup |
+|---------|----------|-----------|-----------|--------------|--------------|
+| **Overall (top 100)** | 452s | 226s | 59s | **2.0x** | **7.6x** |
+| ffmpeg | 3034ms | 3481ms | 688ms | 0.9x | 4.4x |
+| libsodium | 2353ms | 392ms | 130ms | 6.0x | 18.1x |
+| sqlite | 2876ms | 625ms | 159ms | 4.6x | 18.1x |
+| tesseract | 18950ms | 5536ms | 643ms | 3.4x | 29.5x |
+
+<Note>
+  "Cold" means the package isn't in the store. "Warm" means it's already cached.
+</Note>
+
+---
+
+## Why is it faster?
+
+<AccordionGroup>
+  <Accordion title="Content-addressable store">
+    Packages are stored by sha256 hash at `/opt/zerobrew/store/{sha256}/`. Reinstalls are instant if the store entry exists.
+  </Accordion>
+  <Accordion title="APFS clonefile">
+    Materializing from store uses copy-on-write, meaning zero disk overhead.
+  </Accordion>
+  <Accordion title="Parallel downloads">
+    Deduplicates in-flight requests and races across CDN connections.
+  </Accordion>
+  <Accordion title="Streaming execution">
+    Downloads, extractions, and linking happen concurrently.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Quick Example
+
+```bash
+# Install a package
+zb install jq
+
+# Install multiple packages
+zb install wget git ffmpeg
+
+# List installed packages
+zb list
+
+# Uninstall a package
+zb uninstall jq
+```
+
+---
+
+## Status
+
+<Warning>
+  zerobrew is **experimental**. It works for most core Homebrew packages. Some formulas may need more work — please submit issues or PRs!
+</Warning>
+
+---
+
+## License
+
+zerobrew is dual-licensed under [Apache 2.0](https://github.com/lucasgelfond/zerobrew/blob/main/LICENSE-APACHE.md) or [MIT](https://github.com/lucasgelfond/zerobrew/blob/main/LICENSE-MIT.md), at your choice.

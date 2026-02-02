@@ -1,0 +1,40 @@
+---
+title: list
+description: Show all installed packages
+---
+
+## Usage
+
+```bash
+zb list
+```
+
+## Description
+
+Displays all packages currently installed via zerobrew.
+
+---
+
+## Example
+
+```bash
+zb list
+```
+
+Output:
+```
+Installed packages:
+  ffmpeg 7.0
+  git 2.44.0
+  jq 1.7.1
+  sqlite 3.45.0
+  wget 1.24.5
+```
+
+---
+
+## Notes
+
+- Shows packages in the Cellar (linked packages)
+- Does not show packages only in the store (use for listing store contents)
+- Versions are displayed alongside package names

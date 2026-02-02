@@ -1,0 +1,88 @@
+---
+title: Commands Overview
+description: Complete reference for all zerobrew commands
+---
+
+## Command Structure
+
+```bash
+zb [OPTIONS] <COMMAND>
+```
+
+### Global Options
+
+| Option | Description |
+|--------|-------------|
+| `--root <PATH>` | Override the data directory (env: `ZEROBREW_ROOT`) |
+| `--prefix <PATH>` | Override the installation prefix (env: `ZEROBREW_PREFIX`) |
+| `--concurrency <N>` | Set download concurrency (default: 48) |
+| `--version` | Print version information |
+| `--help` | Print help |
+
+---
+
+## Commands
+
+<CardGroup cols={2}>
+  <Card title="install" icon="download" href="/commands/install">
+    Install one or more packages
+  </Card>
+  <Card title="uninstall" icon="trash" href="/commands/uninstall">
+    Remove a package
+  </Card>
+  <Card title="list" icon="list" href="/commands/list">
+    Show installed packages
+  </Card>
+  <Card title="info" icon="circle-info" href="/commands/info">
+    Display package information
+  </Card>
+  <Card title="migrate" icon="arrow-right-arrow-left" href="/commands/migrate">
+    Migrate packages from Homebrew
+  </Card>
+  <Card title="gc" icon="broom" href="/commands/gc">
+    Garbage collect unused store entries
+  </Card>
+  <Card title="reset" icon="rotate-left" href="/commands/reset">
+    Uninstall all packages
+  </Card>
+  <Card title="completion" icon="terminal" href="/commands/completion">
+    Generate shell completions
+  </Card>
+</CardGroup>
+
+---
+
+## Quick Reference
+
+```bash
+# Install packages
+zb install jq
+zb install wget git ffmpeg
+
+# Manage packages
+zb uninstall jq
+zb list
+zb info sqlite
+
+# Migration & maintenance
+zb migrate
+zb gc
+zb reset
+
+# Setup
+zb init
+zb completion zsh
+```
+
+---
+
+## Command Comparison with Homebrew
+
+| Task | Homebrew | zerobrew |
+|------|----------|----------|
+| Install | `brew install jq` | `zb install jq` |
+| Uninstall | `brew uninstall jq` | `zb uninstall jq` |
+| List | `brew list` | `zb list` |
+| Info | `brew info jq` | `zb info jq` |
+| Update | `brew upgrade` | Re-run `zb install` |
+| Cleanup | `brew cleanup` | `zb gc` |

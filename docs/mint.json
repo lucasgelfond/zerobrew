@@ -1,0 +1,118 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "zerobrew",
+  "logo": {
+    "light": "/images/zerobrew-dark.png",
+    "dark": "/images/zerobrew-light.png"
+  },
+  "favicon": "/images/favicon.svg",
+  "colors": {
+    "primary": "#1a1a1a",
+    "light": "#6b6b6b",
+    "dark": "#1a1a1a",
+    "background": {
+      "light": "#FAF9F6",
+      "dark": "#1a1a1a"
+    }
+  },
+  "font": {
+    "headings": {
+      "family": "DM Serif Display",
+      "weight": 400
+    },
+    "body": {
+      "family": "Inter",
+      "weight": 400
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "Discord",
+      "url": "https://discord.gg/UxAAvZ93"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "GitHub",
+    "url": "https://github.com/lucasgelfond/zerobrew"
+  },
+  "tabs": [
+    {
+      "name": "Commands",
+      "url": "commands"
+    },
+    {
+      "name": "Guides",
+      "url": "guides"
+    }
+  ],
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/lucasgelfond/zerobrew"
+    },
+    {
+      "name": "Discord",
+      "icon": "discord",
+      "url": "https://discord.gg/UxAAvZ93"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Get Started",
+      "pages": [
+        "introduction",
+        "quickstart",
+        "installation"
+      ]
+    },
+    {
+      "group": "Core Concepts",
+      "pages": [
+        "architecture",
+        "configuration"
+      ]
+    },
+    {
+      "group": "Commands",
+      "pages": [
+        "commands/overview",
+        "commands/install",
+        "commands/uninstall",
+        "commands/list",
+        "commands/info",
+        "commands/migrate",
+        "commands/gc",
+        "commands/reset",
+        "commands/init",
+        "commands/completion"
+      ]
+    },
+    {
+      "group": "Guides",
+      "pages": [
+        "guides/migrating-from-homebrew",
+        "guides/benchmarking",
+        "guides/troubleshooting"
+      ]
+    },
+    {
+      "group": "Community",
+      "pages": [
+        "contributing"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "github": "https://github.com/lucasgelfond/zerobrew",
+    "discord": "https://discord.gg/UxAAvZ93"
+  },
+  "modeToggle": {
+    "default": "light"
+  },
+  "styling": {
+    "codeblocks": {
+      "theme": "github-light"
+    }
+  }
+}
