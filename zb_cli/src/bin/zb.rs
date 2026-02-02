@@ -26,8 +26,8 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     let root = get_root_path(cli.root);
     let prefix = cli.prefix.unwrap_or_else(|| root.join("prefix"));
 
-    if matches!(cli.command, Commands::Init) {
-        return commands::init::execute(&root, &prefix);
+    if let Commands::Init { no_modify_path } = cli.command {
+        return commands::init::execute(&root, &prefix, no_modify_path);
     }
 
     if matches!(cli.command, Commands::Tap { .. } | Commands::Untap { .. }) {
@@ -45,7 +45,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     let mut installer = create_installer(&root, &prefix, cli.concurrency)?;
 
     match cli.command {
-        Commands::Init => unreachable!(),
+        Commands::Init { .. } => unreachable!(),
         Commands::Completion { .. } => unreachable!(),
         Commands::Install { formulas, no_link } => {
             commands::install::execute(&mut installer, formulas, no_link).await

@@ -66,7 +66,10 @@ pub enum Commands {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    Init,
+    Init {
+        #[arg(long)]
+        no_modify_path: bool,
+    },
     Completion {
         #[arg(value_enum)]
         shell: clap_complete::shells::Shell,

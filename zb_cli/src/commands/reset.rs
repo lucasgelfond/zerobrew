@@ -56,7 +56,8 @@ pub fn execute(root: &Path, prefix: &Path, yes: bool) -> Result<(), zb_core::Err
         }
     }
 
-    run_init(root, prefix).map_err(|e| match e {
+    // Pass false for no_modify_shell since this is a re-initialization
+    run_init(root, prefix, false).map_err(|e| match e {
         InitError::Message(msg) => zb_core::Error::StoreCorruption { message: msg },
     })?;
 
