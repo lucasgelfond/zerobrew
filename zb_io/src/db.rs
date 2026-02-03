@@ -116,19 +116,14 @@ impl Database {
             .map_err(|e| Error::StoreCorruption {
                 message: format!("failed to read schema info: {e}"),
             })?;
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to query schema info: {e}"),
-            })?;
+        let mut rows = stmt.query([]).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to query schema info: {e}"),
+        })?;
 
         let mut has_kind = false;
-        while let Some(row) = rows
-            .next()
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to read schema row: {e}"),
-            })?
-        {
+        while let Some(row) = rows.next().map_err(|e| Error::StoreCorruption {
+            message: format!("failed to read schema row: {e}"),
+        })? {
             let name: String = row.get(1).map_err(|e| Error::StoreCorruption {
                 message: format!("failed to read schema column: {e}"),
             })?;
@@ -455,7 +450,10 @@ impl<'a> InstallTransaction<'a> {
             })?;
 
         self.tx
-            .execute("DELETE FROM keg_dependencies WHERE name = ?1", params![name])
+            .execute(
+                "DELETE FROM keg_dependencies WHERE name = ?1",
+                params![name],
+            )
             .map_err(|e| Error::StoreCorruption {
                 message: format!("failed to remove dependency records: {e}"),
             })?;
@@ -598,5 +596,78 @@ mod tests {
         }
 
         assert!(db.get_installed("foo").is_none());
+    }
+
+    #[test]
+    fn dependencies_and_explicit_are_recorded_and_listed() {
+        let mut db = Database::in_memory().unwrap();
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_install("root", "1.0.0", "key-root").unwrap();
+            tx.record_install("req", "2.0.0", "key-req").unwrap();
+            tx.record_install("build", "3.0.0", "key-build").unwrap();
+            tx.record_dependencies(
+                "root",
+                &[
+                    ("req".to_string(), DependencyKind::Required),
+                    ("build".to_string(), DependencyKind::Build),
+                ],
+            )
+            .unwrap();
+            tx.record_explicit("root").unwrap();
+            tx.commit().unwrap();
+        }
+
+        let rows = db.list_dependencies().unwrap();
+        assert_eq!(rows.len(), 2);
+
+        let root_rows = db.list_dependencies_for("root").unwrap();
+        assert!(
+            root_rows
+                .iter()
+                .any(|row| { row.dependency == "req" && row.kind == DependencyKind::Required })
+        );
+        assert!(
+            root_rows
+                .iter()
+                .any(|row| { row.dependency == "build" && row.kind == DependencyKind::Build })
+        );
+
+        let explicit = db.list_explicit().unwrap();
+        assert_eq!(explicit, vec!["root".to_string()]);
+    }
+
+    #[test]
+    fn uninstall_clears_dependency_and_explicit_records() {
+        let mut db = Database::in_memory().unwrap();
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_install("root", "1.0.0", "key-root").unwrap();
+            tx.record_install("other", "1.0.0", "key-other").unwrap();
+            tx.record_install("dep", "1.0.0", "key-dep").unwrap();
+            tx.record_dependencies("root", &[("dep".to_string(), DependencyKind::Required)])
+                .unwrap();
+            tx.record_dependencies("other", &[("dep".to_string(), DependencyKind::Required)])
+                .unwrap();
+            tx.record_explicit("root").unwrap();
+            tx.commit().unwrap();
+        }
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_uninstall("root").unwrap();
+            tx.commit().unwrap();
+        }
+
+        let root_deps = db.list_dependencies_for("root").unwrap();
+        assert!(root_deps.is_empty());
+
+        let explicit = db.list_explicit().unwrap();
+        assert!(!explicit.contains(&"root".to_string()));
+
+        let other_deps = db.list_dependencies_for("other").unwrap();
+        assert_eq!(other_deps.len(), 1);
     }
 }

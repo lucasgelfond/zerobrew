@@ -278,8 +278,7 @@ impl Installer {
         let formula_names: std::collections::BTreeSet<String> =
             plan.formulas.iter().map(|f| f.name.clone()).collect();
         let dependency_map = build_dependency_map(&plan.formulas, &formula_names);
-        let root_set: std::collections::BTreeSet<String> =
-            plan.roots.iter().cloned().collect();
+        let root_set: std::collections::BTreeSet<String> = plan.roots.iter().cloned().collect();
 
         // Pair formulas with bottles
         let to_install: Vec<(Formula, SelectedBottle)> = plan
@@ -585,6 +584,7 @@ mod tests {
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    use zb_core::formula::{Bottle, BottleStable, Versions};
 
     fn create_bottle_tarball(formula_name: &str) -> Vec<u8> {
         use flate2::Compression;
@@ -626,6 +626,53 @@ mod tests {
         } else {
             "arm64_sonoma"
         }
+    }
+
+    #[test]
+    fn build_dependency_map_tracks_build_and_required() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let formula = Formula {
+            name: "main".to_string(),
+            versions: Versions {
+                stable: "1.0.0".to_string(),
+            },
+            dependencies: vec!["dep1".to_string()],
+            build_dependencies: vec![
+                "dep1".to_string(),
+                "dep2".to_string(),
+                "missing".to_string(),
+            ],
+            bottle: Bottle {
+                stable: BottleStable {
+                    files: BTreeMap::new(),
+                    rebuild: 0,
+                },
+            },
+            revision: 0,
+        };
+
+        let available: BTreeSet<String> = ["main", "dep1", "dep2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let map = build_dependency_map(&[formula], &available);
+        let deps = map.get("main").unwrap();
+        let mut kind_by_dep: BTreeMap<String, crate::db::DependencyKind> = BTreeMap::new();
+        for (dep, kind) in deps {
+            kind_by_dep.insert(dep.clone(), *kind);
+        }
+
+        assert_eq!(
+            kind_by_dep.get("dep1"),
+            Some(&crate::db::DependencyKind::Required)
+        );
+        assert_eq!(
+            kind_by_dep.get("dep2"),
+            Some(&crate::db::DependencyKind::Build)
+        );
+        assert!(!kind_by_dep.contains_key("missing"));
     }
 
     #[tokio::test]

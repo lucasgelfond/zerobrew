@@ -127,6 +127,7 @@ mod tests {
         );
 
         Formula {
+            build_dependencies: Vec::new(),
             name: name.to_string(),
             versions: Versions {
                 stable: "1.0.0".to_string(),

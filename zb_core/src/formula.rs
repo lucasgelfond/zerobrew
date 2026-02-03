@@ -67,6 +67,7 @@ mod tests {
             assert!(!formula.name.is_empty());
             assert!(!formula.versions.stable.is_empty());
             assert!(!formula.bottle.stable.files.is_empty());
+            assert!(formula.build_dependencies.is_empty());
         }
     }
 

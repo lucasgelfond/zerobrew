@@ -86,10 +86,7 @@ fn print_keg_info(
     if build_deps.is_empty() && required_deps.is_empty() {
         println!("(no dependency metadata; reinstall to populate)");
     } else {
-        println!(
-            "Build: {}",
-            format_dep_line(&build_deps, &installed_set)
-        );
+        println!("Build: {}", format_dep_line(&build_deps, &installed_set));
         println!(
             "Required: {}",
             format_dep_line(&required_deps, &installed_set)
@@ -140,17 +137,13 @@ fn collect_stats(path: &Path) -> Result<(u64, u64), zb_core::Error> {
     let mut stack: Vec<PathBuf> = vec![path.to_path_buf()];
 
     while let Some(current) = stack.pop() {
-        let meta = std::fs::symlink_metadata(&current).map_err(|e| {
-            zb_core::Error::FileError {
-                message: format!("failed to stat {}: {e}", current.display()),
-            }
+        let meta = std::fs::symlink_metadata(&current).map_err(|e| zb_core::Error::FileError {
+            message: format!("failed to stat {}: {e}", current.display()),
         })?;
 
         if meta.is_dir() {
-            let entries = std::fs::read_dir(&current).map_err(|e| {
-                zb_core::Error::FileError {
-                    message: format!("failed to read {}: {e}", current.display()),
-                }
+            let entries = std::fs::read_dir(&current).map_err(|e| zb_core::Error::FileError {
+                message: format!("failed to read {}: {e}", current.display()),
             })?;
             for entry in entries {
                 let entry = entry.map_err(|e| zb_core::Error::FileError {
@@ -211,5 +204,25 @@ fn format_size(bytes: u64) -> String {
         format!("{bytes}B")
     } else {
         format!("{:.1}{}", size, units[unit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_count_inserts_commas() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(1_234), "1,234");
+        assert_eq!(format_count(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn format_size_humanizes_bytes() {
+        assert_eq!(format_size(0), "0B");
+        assert_eq!(format_size(1024), "1.0KB");
+        assert_eq!(format_size(1536), "1.5KB");
+        assert_eq!(format_size(1024 * 1024), "1.0MB");
     }
 }

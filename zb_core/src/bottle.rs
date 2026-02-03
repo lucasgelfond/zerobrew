@@ -181,6 +181,7 @@ mod tests {
         );
 
         let formula = Formula {
+            build_dependencies: Vec::new(),
             name: "ca-certificates".to_string(),
             versions: Versions {
                 stable: "2024-01-01".to_string(),
@@ -220,6 +221,7 @@ mod tests {
                 stable: BottleStable { files, rebuild: 0 },
             },
             revision: 0,
+            build_dependencies: Vec::new(),
         };
 
         let err = select_bottle(&formula).unwrap_err();

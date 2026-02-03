@@ -56,7 +56,11 @@ pub fn execute(installer: &mut zb_io::install::Installer) -> Result<(), zb_core:
                     let label = format!("(required by: {})", join_names(roots));
                     line.push_str(&format!(" {}", style(label).dim()));
                 } else if roots.contains(&keg.name) {
-                    let label = if use_explicit { "(explicit)" } else { "(top-level)" };
+                    let label = if use_explicit {
+                        "(explicit)"
+                    } else {
+                        "(top-level)"
+                    };
                     line.push_str(&format!(" {}", style(label).dim()));
                 } else if has_dependency_data
                     && let Some(dependents) = direct_dependents.get(&keg.name)
@@ -76,7 +80,10 @@ pub fn execute(installer: &mut zb_io::install::Installer) -> Result<(), zb_core:
 fn build_dependency_maps(
     dependency_rows: &[DependencyRow],
     installed_set: &BTreeSet<String>,
-) -> (BTreeMap<String, BTreeSet<String>>, BTreeMap<String, BTreeSet<String>>) {
+) -> (
+    BTreeMap<String, BTreeSet<String>>,
+    BTreeMap<String, BTreeSet<String>>,
+) {
     let mut dependencies: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut direct_dependents: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
@@ -130,4 +137,71 @@ fn build_required_by_roots(
 
 fn join_names(names: &BTreeSet<String>) -> String {
     names.iter().cloned().collect::<Vec<_>>().join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+    use zb_io::DependencyKind;
+
+    fn set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn build_dependency_maps_filters_non_installed() {
+        let rows = vec![
+            DependencyRow {
+                name: "a".to_string(),
+                dependency: "b".to_string(),
+                kind: DependencyKind::Required,
+            },
+            DependencyRow {
+                name: "a".to_string(),
+                dependency: "c".to_string(),
+                kind: DependencyKind::Required,
+            },
+            DependencyRow {
+                name: "a".to_string(),
+                dependency: "x".to_string(),
+                kind: DependencyKind::Required,
+            },
+            DependencyRow {
+                name: "y".to_string(),
+                dependency: "b".to_string(),
+                kind: DependencyKind::Required,
+            },
+        ];
+        let installed_set = set(&["a", "b", "c"]);
+
+        let (dependencies, direct_dependents) = build_dependency_maps(&rows, &installed_set);
+
+        assert_eq!(dependencies.get("a"), Some(&set(&["b", "c"])));
+        assert_eq!(direct_dependents.get("b"), Some(&set(&["a"])));
+        assert_eq!(direct_dependents.get("c"), Some(&set(&["a"])));
+        assert!(!dependencies.contains_key("y"));
+    }
+
+    #[test]
+    fn build_required_by_roots_expands_transitive_edges() {
+        let mut dependencies: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        dependencies.insert("root1".to_string(), set(&["dep1", "dep2"]));
+        dependencies.insert("root2".to_string(), set(&["dep2", "dep3"]));
+        dependencies.insert("dep2".to_string(), set(&["dep4"]));
+
+        let roots = set(&["root1", "root2"]);
+        let required = build_required_by_roots(&dependencies, &roots);
+
+        assert_eq!(required.get("dep1"), Some(&set(&["root1"])));
+        assert_eq!(required.get("dep2"), Some(&set(&["root1", "root2"])));
+        assert_eq!(required.get("dep3"), Some(&set(&["root2"])));
+        assert_eq!(required.get("dep4"), Some(&set(&["root1", "root2"])));
+    }
+
+    #[test]
+    fn join_names_orders_and_joins() {
+        let names = set(&["z", "a"]);
+        assert_eq!(join_names(&names), "a, z");
+    }
 }

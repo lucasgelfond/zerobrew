@@ -232,7 +232,13 @@ fn topo_uninstall_order(
 
     let mut ready: BTreeSet<String> = indegree
         .iter()
-        .filter_map(|(name, count)| if *count == 0 { Some(name.clone()) } else { None })
+        .filter_map(|(name, count)| {
+            if *count == 0 {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
         .collect();
 
     let mut ordered = Vec::with_capacity(removal_set.len());
@@ -255,5 +261,58 @@ fn topo_uninstall_order(
         ordered
     } else {
         removal_set.iter().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn build_candidate_set_collects_transitive_deps() {
+        let mut dependencies: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        dependencies.insert("a".to_string(), set(&["b", "c"]));
+        dependencies.insert("b".to_string(), set(&["d"]));
+
+        let installed_set = set(&["a", "b", "c", "d", "e"]);
+        let formulas = vec!["a".to_string()];
+        let candidates = build_candidate_set(&formulas, &dependencies, &installed_set);
+
+        assert_eq!(candidates, set(&["a", "b", "c", "d"]));
+    }
+
+    #[test]
+    fn filter_removal_set_skips_explicit_and_remaining_dependents() {
+        let candidates = set(&["a", "b", "c"]);
+        let mut reverse: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        reverse.insert("b".to_string(), set(&["a"]));
+        reverse.insert("c".to_string(), set(&["a", "d"]));
+
+        let explicit_set = set(&["b"]);
+        let installed_set = set(&["a", "b", "c", "d"]);
+        let roots = vec!["a".to_string()];
+
+        let removal =
+            filter_removal_set(&roots, &candidates, &reverse, &explicit_set, &installed_set);
+        assert_eq!(removal, set(&["a"]));
+    }
+
+    #[test]
+    fn topo_uninstall_order_removes_dependents_first() {
+        let removal_set = set(&["a", "b", "c"]);
+        let mut dependencies: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        dependencies.insert("a".to_string(), set(&["b"]));
+        dependencies.insert("b".to_string(), set(&["c"]));
+
+        let ordered = topo_uninstall_order(&removal_set, &dependencies);
+        assert_eq!(
+            ordered,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 }
