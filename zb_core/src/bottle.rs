@@ -9,13 +9,34 @@ pub struct SelectedBottle {
 
 pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
     // Prefer macOS ARM bottles in order of preference (newest first)
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         let macos_tags = [
             "arm64_tahoe",
             "arm64_sequoia",
             "arm64_sonoma",
             "arm64_ventura",
+        ];
+
+        for preferred_tag in macos_tags {
+            if let Some(file) = formula.bottle.stable.files.get(preferred_tag) {
+                return Ok(SelectedBottle {
+                    tag: preferred_tag.to_string(),
+                    url: file.url.clone(),
+                    sha256: file.sha256.clone(),
+                });
+            }
+        }
+    }
+
+    // Prefer macOS Intel bottles in order of preference (newest first)
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        let macos_tags = [
+            "x86_64_tahoe",
+            "x86_64_sequoia",
+            "x86_64_sonoma",
+            "x86_64_ventura",
         ];
 
         for preferred_tag in macos_tags {
@@ -54,9 +75,21 @@ pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
     }
 
     // Fallback: any arm64 macOS bottle (but not linux)
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     for (tag, file) in &formula.bottle.stable.files {
         if tag.starts_with("arm64_") && !tag.contains("linux") {
+            return Ok(SelectedBottle {
+                tag: tag.clone(),
+                url: file.url.clone(),
+                sha256: file.sha256.clone(),
+            });
+        }
+    }
+
+    // Fallback: any x86_64 macOS bottle (but not linux)
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    for (tag, file) in &formula.bottle.stable.files {
+        if tag.starts_with("x86_64_") && !tag.contains("linux") {
             return Ok(SelectedBottle {
                 tag: tag.clone(),
                 url: file.url.clone(),
@@ -95,7 +128,7 @@ mod tests {
 
         let selected = select_bottle(&formula).unwrap();
 
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
             assert_eq!(selected.tag, "arm64_sonoma");
             assert_eq!(
@@ -105,6 +138,19 @@ mod tests {
             assert_eq!(
                 selected.sha256,
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            );
+        }
+
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        {
+            assert_eq!(selected.tag, "x86_64_sonoma");
+            assert_eq!(
+                selected.url,
+                "https://example.com/foo-1.2.3.x86_64_sonoma.bottle.tar.gz"
+            );
+            assert_eq!(
+                selected.sha256,
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
             );
         }
 
@@ -152,6 +198,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     fn errors_when_no_arm64_bottle() {
         let mut files = BTreeMap::new();
         files.insert(
@@ -159,6 +206,38 @@ mod tests {
             BottleFile {
                 url: "https://example.com/legacy.tar.gz".to_string(),
                 sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    .to_string(),
+            },
+        );
+
+        let formula = Formula {
+            name: "legacy".to_string(),
+            versions: Versions {
+                stable: "0.1.0".to_string(),
+            },
+            dependencies: Vec::new(),
+            bottle: Bottle {
+                stable: BottleStable { files, rebuild: 0 },
+            },
+            revision: 0,
+        };
+
+        let err = select_bottle(&formula).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::UnsupportedBottle { name } if name == "legacy"
+        ));
+    }
+
+    #[test]
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    fn errors_when_no_x86_64_bottle() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "arm64_sonoma".to_string(),
+            BottleFile {
+                url: "https://example.com/legacy.tar.gz".to_string(),
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .to_string(),
             },
         );
