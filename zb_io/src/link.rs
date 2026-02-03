@@ -23,7 +23,7 @@ impl Linker {
         fs::create_dir_all(&bin_dir)?;
         fs::create_dir_all(&opt_dir)?;
 
-        for dir in ["lib", "include", "share"] {
+        for dir in ["lib", "libexec", "include", "share"] {
             fs::create_dir_all(prefix.join(dir))?;
         }
 
@@ -37,7 +37,7 @@ impl Linker {
     pub fn link_keg(&self, keg_path: &Path) -> Result<Vec<LinkedFile>, Error> {
         self.link_opt(keg_path)?;
         let mut linked = Vec::new();
-        for dir_name in ["bin", "lib", "include", "share"] {
+        for dir_name in ["bin", "lib", "libexec", "include", "share"] {
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
@@ -124,7 +124,7 @@ impl Linker {
     pub fn unlink_keg(&self, keg_path: &Path) -> Result<Vec<PathBuf>, Error> {
         self.unlink_opt(keg_path)?;
         let mut unlinked = Vec::new();
-        for dir_name in ["bin", "lib", "include", "share"] {
+        for dir_name in ["bin", "lib", "libexec", "include", "share"] {
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
