@@ -47,7 +47,7 @@ pub enum Commands {
     },
     List,
     Info {
-        formula: String,
+        formula: Option<String>,
     },
     Gc,
     Reset {
