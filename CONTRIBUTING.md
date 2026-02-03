@@ -91,7 +91,7 @@ build    # -> changes to build system (i.e. ext deps, tooling, scripts, etc)
 
 Generally speaking, we also ask that you please write isolated, [atomic commits](https://en.wikipedia.org/wiki/Atomic_commit). 
 This means if you are approaching a PR that touches various parts of the codebase for example, ensure that your commits
-are contained and cleanly seperated, properly describing/notating which commits belong where.
+are contained and cleanly separated, properly describing/notating which commits belong where.
 
 
 ## Testing
