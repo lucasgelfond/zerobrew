@@ -68,6 +68,12 @@ fn compute_closure(
         let mut deps = formula.dependencies.clone();
         deps.sort();
         for dep in deps {
+            // Skip dependencies that aren't in the formulas map
+            // (they were filtered out due to missing bottles for this platform)
+            // FIXME: we should probably just ignore these dependencies instead of skipping the entire formula
+            if !formulas.contains_key(&dep) {
+                continue;
+            }
             if !closure.contains(&dep) {
                 stack.push(dep);
             }

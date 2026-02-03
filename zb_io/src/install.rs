@@ -165,6 +165,7 @@ impl Installer {
         names: &[String],
     ) -> Result<BTreeMap<String, Formula>, Error> {
         use std::collections::HashSet;
+        use zb_core::select_bottle;
 
         let mut formulas = BTreeMap::new();
         let mut fetched: HashSet<String> = HashSet::new();
@@ -196,7 +197,20 @@ impl Installer {
 
             // Process results and queue new dependencies
             for (i, result) in results.into_iter().enumerate() {
-                let formula = result?;
+                let formula = match result {
+                    Ok(f) => f,
+                    Err(e) => return Err(e),
+                };
+
+                // Check if this formula has a bottle for the current platform
+                // If not, skip it (it's likely a system-provided dependency on this platform)
+                if select_bottle(&formula).is_err() {
+                    eprintln!(
+                        "    Skipping {} (no bottle available for this platform)",
+                        formula.name
+                    );
+                    continue;
+                }
 
                 // Queue dependencies for next batch
                 for dep in &formula.dependencies {
