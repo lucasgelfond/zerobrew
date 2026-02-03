@@ -44,7 +44,8 @@ out in the Discord to give us a heads up or open an issue first to discuss your 
 2. Make your changes and ensure, at the _least_:
    - Code is formatted: `cargo fmt --all`
    - No clippy warnings: `cargo clippy --workspace --all-targets -- -D warnings`
-   - Tests pass: `cargo test --workspace`
+   - Unit tests pass: `cargo test --workspace`
+   - Integration tests pass: `cargo test --workspace -- --ignored` (or `just test` for all tests)
 > [!NOTE] 
 > These will run in CI but it's best you clean up your code _before_ opening a PR to ensure a quick 
 > turnaround!
@@ -58,7 +59,7 @@ This project includes a `Justfile`, Install [just](https://github.com/casey/just
 - `just uninstall` Remove all zerobrew installations and configurations
 - `just fmt` Check code formatting
 - `just lint` Run clippy with strict warnings
-- `just test` Run all workspace tests
+- `just test` Run all workspace tests (unit & integration)
 
 Before creating a PR make sure you `build` your changes and `test` them.
 

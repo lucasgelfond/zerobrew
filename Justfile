@@ -188,4 +188,4 @@ lint:
 [doc('Run all tests')]
 [group('test')]
 test:
-    cargo test --workspace
+    cargo test --workspace -- --include-ignored

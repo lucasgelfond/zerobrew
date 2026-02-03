@@ -59,5 +59,8 @@ jobs:
       - name: build (release)
         run: cargo build --workspace --release
       
-      - name: run tests
+      - name: run unit tests
         run: cargo test --workspace
+
+      - name: run integration tests
+        run: cargo test --package zb_cli --test integration -- --ignored

@@ -34,7 +34,10 @@ pub enum Commands {
         no_link: bool,
     },
     Uninstall {
-        formula: Option<String>,
+        #[arg(required_unless_present = "all", num_args = 1..)]
+        formulas: Vec<String>,
+        #[arg(long)]
+        all: bool,
     },
     Migrate {
         #[arg(long, short = 'y')]
