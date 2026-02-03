@@ -288,4 +288,25 @@ mod tests {
         assert!(prefix.join("lib/pkgconfig/pkg1.pc").exists());
         assert!(prefix.join("lib/pkgconfig/pkg2.pc").exists());
     }
+
+    #[test]
+    fn links_libexec_directory() {
+        // Test that libexec directory is linked
+        let tmp = TempDir::new().unwrap();
+        let keg = tmp.path().join("cellar/git/2.52.0");
+        let libexec_dir = keg.join("libexec/git-core");
+        fs::create_dir_all(&libexec_dir).unwrap();
+
+        let helper = libexec_dir.join("git-remote-https");
+        fs::write(&helper, b"#!/bin/sh\necho helper").unwrap();
+        fs::set_permissions(&helper, PermissionsExt::from_mode(0o755)).unwrap();
+
+        let linker = Linker::new(tmp.path()).unwrap();
+        linker.link_keg(&keg).unwrap();
+
+        // Verify libexec is linked
+        let linked_helper = tmp.path().join("libexec/git-core/git-remote-https");
+        assert!(linked_helper.exists(), "git-remote-https should be linked");
+        assert!(linked_helper.is_symlink(), "should be a symlink");
+    }
 }
