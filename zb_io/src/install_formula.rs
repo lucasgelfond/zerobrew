@@ -146,14 +146,14 @@ impl<'a> FormulaResolver<'a> {
                 let (formula, source) = result?;
                 let name = batch[i].name.clone();
 
-                if let Some(existing) = sources.get(&name) {
-                    if existing != &source {
-                        return Err(Error::ConflictingFormulaSource {
-                            name,
-                            first: source_label(existing.as_ref()),
-                            second: source_label(source.as_ref()),
-                        });
-                    }
+                if let Some(existing) = sources.get(&name)
+                    && existing != &source
+                {
+                    return Err(Error::ConflictingFormulaSource {
+                        name,
+                        first: source_label(existing.as_ref()),
+                        second: source_label(source.as_ref()),
+                    });
                 }
 
                 sources.insert(name.clone(), source.clone());
@@ -213,19 +213,17 @@ impl<'a> FormulaResolver<'a> {
         exact_tap: bool,
         taps: &[TapRef],
     ) -> Result<(Formula, Option<TapRef>), Error> {
-        if exact_tap {
-            if let Some(tap) = preferred_tap {
-                match fetch_tap_formula(self.api_client, tap, name).await {
-                    Ok(formula) => return Ok((formula, Some(tap.clone()))),
-                    Err(Error::MissingFormula { .. }) => {
-                        return Err(Error::MissingFormulaInSources {
-                            name: name.to_string(),
-                            sources: vec![source_label(Some(tap))],
-                        });
-                    }
-                    Err(e) => return Err(e),
-                };
-            }
+        if exact_tap && let Some(tap) = preferred_tap {
+            match fetch_tap_formula(self.api_client, tap, name).await {
+                Ok(formula) => return Ok((formula, Some(tap.clone()))),
+                Err(Error::MissingFormula { .. }) => {
+                    return Err(Error::MissingFormulaInSources {
+                        name: name.to_string(),
+                        sources: vec![source_label(Some(tap))],
+                    });
+                }
+                Err(e) => return Err(e),
+            };
         }
 
         let core_base = self.api_client.base_url();

@@ -39,6 +39,14 @@ fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn get_test_bottle_tag() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "x86_64_linux"
+    } else {
+        "arm64_sonoma"
+    }
+}
+
 struct EnvVarGuard {
     key: String,
     previous: Option<String>,
@@ -80,6 +88,7 @@ async fn install_completes_successfully() {
     let bottle_sha = sha256_hex(&bottle);
 
     // Create formula JSON
+    let tag = get_test_bottle_tag();
     let formula_json = format!(
         r#"{{
             "name": "testpkg",
@@ -88,15 +97,17 @@ async fn install_completes_successfully() {
             "bottle": {{
                 "stable": {{
                     "files": {{
-                        "arm64_sonoma": {{
-                            "url": "{}/bottles/testpkg-1.0.0.arm64_sonoma.bottle.tar.gz",
+                        "{}": {{
+                            "url": "{}/bottles/testpkg-1.0.0.{}.bottle.tar.gz",
                             "sha256": "{}"
                         }}
                     }}
                 }}
             }}
         }}"#,
+        tag,
         mock_server.uri(),
+        tag,
         bottle_sha
     );
 
@@ -109,7 +120,10 @@ async fn install_completes_successfully() {
 
     // Mount bottle download mock
     Mock::given(method("GET"))
-        .and(path("/bottles/testpkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+        .and(path(format!(
+            "/bottles/testpkg-1.0.0.{}.bottle.tar.gz",
+            tag
+        )))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
         .mount(&mock_server)
         .await;
@@ -199,10 +213,7 @@ async fn install_binary_formula_without_bottle() {
 
     let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
-    installer
-        .install(&["gpd".to_string()], true)
-        .await
-        .unwrap();
+    installer.install(&["gpd".to_string()], true).await.unwrap();
 
     let keg_path = root.join("cellar/gpd/0.1.0");
     assert!(keg_path.exists());
@@ -220,6 +231,7 @@ async fn uninstall_cleans_everything() {
     let bottle_sha = sha256_hex(&bottle);
 
     // Create formula JSON
+    let tag = get_test_bottle_tag();
     let formula_json = format!(
         r#"{{
             "name": "uninstallme",
@@ -228,15 +240,17 @@ async fn uninstall_cleans_everything() {
             "bottle": {{
                 "stable": {{
                     "files": {{
-                        "arm64_sonoma": {{
-                            "url": "{}/bottles/uninstallme-1.0.0.arm64_sonoma.bottle.tar.gz",
+                        "{}": {{
+                            "url": "{}/bottles/uninstallme-1.0.0.{}.bottle.tar.gz",
                             "sha256": "{}"
                         }}
                     }}
                 }}
             }}
         }}"#,
+        tag,
         mock_server.uri(),
+        tag,
         bottle_sha
     );
 
@@ -248,9 +262,10 @@ async fn uninstall_cleans_everything() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path(
-            "/bottles/uninstallme-1.0.0.arm64_sonoma.bottle.tar.gz",
-        ))
+        .and(path(format!(
+            "/bottles/uninstallme-1.0.0.{}.bottle.tar.gz",
+            tag
+        )))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
         .mount(&mock_server)
         .await;
@@ -299,6 +314,7 @@ async fn gc_removes_unreferenced_store_entries() {
     let bottle_sha = sha256_hex(&bottle);
 
     // Create formula JSON
+    let tag = get_test_bottle_tag();
     let formula_json = format!(
         r#"{{
             "name": "gctest",
@@ -307,15 +323,17 @@ async fn gc_removes_unreferenced_store_entries() {
             "bottle": {{
                 "stable": {{
                     "files": {{
-                        "arm64_sonoma": {{
-                            "url": "{}/bottles/gctest-1.0.0.arm64_sonoma.bottle.tar.gz",
+                        "{}": {{
+                            "url": "{}/bottles/gctest-1.0.0.{}.bottle.tar.gz",
                             "sha256": "{}"
                         }}
                     }}
                 }}
             }}
         }}"#,
+        tag,
         mock_server.uri(),
+        tag,
         bottle_sha
     );
 
@@ -327,7 +345,7 @@ async fn gc_removes_unreferenced_store_entries() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/bottles/gctest-1.0.0.arm64_sonoma.bottle.tar.gz"))
+        .and(path(format!("/bottles/gctest-1.0.0.{}.bottle.tar.gz", tag)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
         .mount(&mock_server)
         .await;
@@ -379,6 +397,7 @@ async fn gc_does_not_remove_referenced_store_entries() {
     let bottle_sha = sha256_hex(&bottle);
 
     // Create formula JSON
+    let tag = get_test_bottle_tag();
     let formula_json = format!(
         r#"{{
             "name": "keepme",
@@ -387,15 +406,17 @@ async fn gc_does_not_remove_referenced_store_entries() {
             "bottle": {{
                 "stable": {{
                     "files": {{
-                        "arm64_sonoma": {{
-                            "url": "{}/bottles/keepme-1.0.0.arm64_sonoma.bottle.tar.gz",
+                        "{}": {{
+                            "url": "{}/bottles/keepme-1.0.0.{}.bottle.tar.gz",
                             "sha256": "{}"
                         }}
                     }}
                 }}
             }}
         }}"#,
+        tag,
         mock_server.uri(),
+        tag,
         bottle_sha
     );
 
@@ -407,7 +428,7 @@ async fn gc_does_not_remove_referenced_store_entries() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/bottles/keepme-1.0.0.arm64_sonoma.bottle.tar.gz"))
+        .and(path(format!("/bottles/keepme-1.0.0.{}.bottle.tar.gz", tag)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
         .mount(&mock_server)
         .await;
@@ -456,6 +477,7 @@ async fn install_with_dependencies() {
     let main_sha = sha256_hex(&main_bottle);
 
     // Create formula JSONs
+    let tag = get_test_bottle_tag();
     let dep_json = format!(
         r#"{{
             "name": "deplib",
@@ -464,15 +486,17 @@ async fn install_with_dependencies() {
             "bottle": {{
                 "stable": {{
                     "files": {{
-                        "arm64_sonoma": {{
-                            "url": "{}/bottles/deplib-1.0.0.arm64_sonoma.bottle.tar.gz",
+                        "{}": {{
+                            "url": "{}/bottles/deplib-1.0.0.{}.bottle.tar.gz",
                             "sha256": "{}"
                         }}
                     }}
                 }}
             }}
         }}"#,
+        tag,
         mock_server.uri(),
+        tag,
         dep_sha
     );
 
@@ -484,15 +508,17 @@ async fn install_with_dependencies() {
             "bottle": {{
                 "stable": {{
                     "files": {{
-                        "arm64_sonoma": {{
-                            "url": "{}/bottles/mainpkg-2.0.0.arm64_sonoma.bottle.tar.gz",
+                        "{}": {{
+                            "url": "{}/bottles/mainpkg-2.0.0.{}.bottle.tar.gz",
                             "sha256": "{}"
                         }}
                     }}
                 }}
             }}
         }}"#,
+        tag,
         mock_server.uri(),
+        tag,
         main_sha
     );
 
@@ -510,13 +536,16 @@ async fn install_with_dependencies() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/bottles/deplib-1.0.0.arm64_sonoma.bottle.tar.gz"))
+        .and(path(format!("/bottles/deplib-1.0.0.{}.bottle.tar.gz", tag)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(dep_bottle))
         .mount(&mock_server)
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/bottles/mainpkg-2.0.0.arm64_sonoma.bottle.tar.gz"))
+        .and(path(format!(
+            "/bottles/mainpkg-2.0.0.{}.bottle.tar.gz",
+            tag
+        )))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(main_bottle))
         .mount(&mock_server)
         .await;
@@ -551,12 +580,12 @@ async fn install_from_explicit_tap() {
     let mock_server = MockServer::start().await;
     let tmp = TempDir::new().unwrap();
 
-    let _tap_base =
-        EnvVarGuard::set("ZB_TAP_BASE_URL", &mock_server.uri());
+    let _tap_base = EnvVarGuard::set("ZB_TAP_BASE_URL", &mock_server.uri());
 
     let bottle = create_bottle_tarball("tappkg");
     let bottle_sha = sha256_hex(&bottle);
 
+    let tag = get_test_bottle_tag();
     let formula_json = format!(
         r#"{{
             "name": "tappkg",
@@ -565,15 +594,17 @@ async fn install_from_explicit_tap() {
             "bottle": {{
                 "stable": {{
                     "files": {{
-                        "arm64_sonoma": {{
-                            "url": "{}/bottles/tappkg-1.0.0.arm64_sonoma.bottle.tar.gz",
+                        "{}": {{
+                            "url": "{}/bottles/tappkg-1.0.0.{}.bottle.tar.gz",
                             "sha256": "{}"
                         }}
                     }}
                 }}
             }}
         }}"#,
+        tag,
         mock_server.uri(),
+        tag,
         bottle_sha
     );
 
@@ -584,7 +615,7 @@ async fn install_from_explicit_tap() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/bottles/tappkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+        .and(path(format!("/bottles/tappkg-1.0.0.{}.bottle.tar.gz", tag)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
         .mount(&mock_server)
         .await;
@@ -631,28 +662,34 @@ async fn parallel_api_fetching_with_deep_deps() {
     let root_sha = sha256_hex(&root_bottle);
 
     // Formula JSONs
+    let tag = get_test_bottle_tag();
     let leaf1_json = format!(
-        r#"{{"name":"leaf1","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/leaf1.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        r#"{{"name":"leaf1","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"{}":{{"url":"{}/bottles/leaf1.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        tag,
         mock_server.uri(),
         leaf1_sha
     );
     let leaf2_json = format!(
-        r#"{{"name":"leaf2","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/leaf2.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        r#"{{"name":"leaf2","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"{}":{{"url":"{}/bottles/leaf2.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        tag,
         mock_server.uri(),
         leaf2_sha
     );
     let mid1_json = format!(
-        r#"{{"name":"mid1","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/mid1.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        r#"{{"name":"mid1","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1"],"bottle":{{"stable":{{"files":{{"{}":{{"url":"{}/bottles/mid1.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        tag,
         mock_server.uri(),
         mid1_sha
     );
     let mid2_json = format!(
-        r#"{{"name":"mid2","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1","leaf2"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/mid2.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        r#"{{"name":"mid2","versions":{{"stable":"1.0.0"}},"dependencies":["leaf1","leaf2"],"bottle":{{"stable":{{"files":{{"{}":{{"url":"{}/bottles/mid2.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        tag,
         mock_server.uri(),
         mid2_sha
     );
     let root_json = format!(
-        r#"{{"name":"root","versions":{{"stable":"1.0.0"}},"dependencies":["mid1","mid2"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/root.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        r#"{{"name":"root","versions":{{"stable":"1.0.0"}},"dependencies":["mid1","mid2"],"bottle":{{"stable":{{"files":{{"{}":{{"url":"{}/bottles/root.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        tag,
         mock_server.uri(),
         root_sha
     );
@@ -728,15 +765,18 @@ async fn streaming_extraction_processes_as_downloads_complete() {
     let slow_sha = sha256_hex(&slow_bottle);
 
     // Fast package formula
+    let tag = get_test_bottle_tag();
     let fast_json = format!(
-        r#"{{"name":"fastpkg","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/fast.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        r#"{{"name":"fastpkg","versions":{{"stable":"1.0.0"}},"dependencies":[],"bottle":{{"stable":{{"files":{{"{}":{{"url":"{}/bottles/fast.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        tag,
         mock_server.uri(),
         fast_sha
     );
 
     // Slow package formula (depends on fast)
     let slow_json = format!(
-        r#"{{"name":"slowpkg","versions":{{"stable":"1.0.0"}},"dependencies":["fastpkg"],"bottle":{{"stable":{{"files":{{"arm64_sonoma":{{"url":"{}/bottles/slow.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        r#"{{"name":"slowpkg","versions":{{"stable":"1.0.0"}},"dependencies":["fastpkg"],"bottle":{{"stable":{{"files":{{"{}":{{"url":"{}/bottles/slow.tar.gz","sha256":"{}"}}}}}}}}}}"#,
+        tag,
         mock_server.uri(),
         slow_sha
     );
@@ -817,6 +857,7 @@ async fn retries_on_corrupted_download() {
     let bottle_sha = sha256_hex(&bottle);
 
     // Create formula JSON
+    let tag = get_test_bottle_tag();
     let formula_json = format!(
         r#"{{
             "name": "retrypkg",
@@ -825,15 +866,17 @@ async fn retries_on_corrupted_download() {
             "bottle": {{
                 "stable": {{
                     "files": {{
-                        "arm64_sonoma": {{
-                            "url": "{}/bottles/retrypkg-1.0.0.arm64_sonoma.bottle.tar.gz",
+                        "{}": {{
+                            "url": "{}/bottles/retrypkg-1.0.0.{}.bottle.tar.gz",
                             "sha256": "{}"
                         }}
                     }}
                 }}
             }}
         }}"#,
+        tag,
         mock_server.uri(),
+        tag,
         bottle_sha
     );
 
@@ -852,7 +895,10 @@ async fn retries_on_corrupted_download() {
     // First request returns corrupted data (wrong content but matches sha for download)
     // This simulates CDN corruption where sha passes but tar is invalid
     Mock::given(method("GET"))
-        .and(path("/bottles/retrypkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+        .and(path(format!(
+            "/bottles/retrypkg-1.0.0.{}.bottle.tar.gz",
+            tag
+        )))
         .respond_with(move |_: &wiremock::Request| {
             let attempt = attempt_clone.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {

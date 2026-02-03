@@ -9,5 +9,5 @@ pub mod migrate;
 pub mod reset;
 pub mod run;
 pub mod tap;
-pub mod untap;
 pub mod uninstall;
+pub mod untap;

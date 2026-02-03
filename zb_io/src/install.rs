@@ -12,8 +12,8 @@ use crate::materialize::Cellar;
 use crate::progress::{InstallProgress, ProgressCallback};
 use crate::store::Store;
 
-use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
 use zb_core::formula::BinaryDownload;
+use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
 
 #[path = "install_formula.rs"]
 mod install_formula;
@@ -191,7 +191,6 @@ impl Installer {
         }))
     }
 
-
     /// Execute the install plan
     pub async fn execute(&mut self, plan: InstallPlan, link: bool) -> Result<ExecuteResult, Error> {
         self.execute_with_progress(plan, link, None).await
@@ -285,14 +284,12 @@ impl Installer {
                             }
                         },
                         InstallArtifact::Binary(binary) => {
-                            let bin_name = binary
-                                .bin
-                                .as_deref()
-                                .unwrap_or(&formula.name);
-                            match self
-                                .store
-                                .ensure_binary_entry(&binary.sha256, &download.blob_path, bin_name)
-                            {
+                            let bin_name = binary.bin.as_deref().unwrap_or(&formula.name);
+                            match self.store.ensure_binary_entry(
+                                &binary.sha256,
+                                &download.blob_path,
+                                bin_name,
+                            ) {
                                 Ok(entry) => entry,
                                 Err(e) => {
                                     error = Some(e);
@@ -741,10 +738,7 @@ mod tests {
 
         let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, 4);
 
-        installer
-            .install(&["gpd".to_string()], true)
-            .await
-            .unwrap();
+        installer.install(&["gpd".to_string()], true).await.unwrap();
 
         let keg_path = root.join("cellar/gpd/0.1.0");
         assert!(keg_path.exists());
@@ -1111,12 +1105,12 @@ mod tests {
         let mock_server = MockServer::start().await;
         let tmp = TempDir::new().unwrap();
 
-        let _tap_base =
-            EnvVarGuard::set("ZB_TAP_BASE_URL", &mock_server.uri());
+        let _tap_base = EnvVarGuard::set("ZB_TAP_BASE_URL", &mock_server.uri());
 
         let bottle = create_bottle_tarball("tappkg");
         let bottle_sha = sha256_hex(&bottle);
 
+        let tag = get_test_bottle_tag();
         let formula_json = format!(
             r#"{{
                 "name": "tappkg",
@@ -1125,15 +1119,17 @@ mod tests {
                 "bottle": {{
                     "stable": {{
                         "files": {{
-                            "arm64_sonoma": {{
-                                "url": "{}/bottles/tappkg-1.0.0.arm64_sonoma.bottle.tar.gz",
+                            "{}": {{
+                                "url": "{}/bottles/tappkg-1.0.0.{}.bottle.tar.gz",
                                 "sha256": "{}"
                             }}
                         }}
                     }}
                 }}
             }}"#,
+            tag,
             mock_server.uri(),
+            tag,
             bottle_sha
         );
 
@@ -1144,7 +1140,7 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/bottles/tappkg-1.0.0.arm64_sonoma.bottle.tar.gz"))
+            .and(path(format!("/bottles/tappkg-1.0.0.{}.bottle.tar.gz", tag)))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
             .mount(&mock_server)
             .await;

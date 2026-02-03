@@ -20,7 +20,12 @@ pub fn execute(root: &Path, tap: Option<String>, all: bool) -> Result<(), zb_cor
 
         for tap in taps {
             let _ = db.remove_tap(&tap.owner, &tap.repo)?;
-            println!("{} Untapped {}/{}", style("==>").cyan().bold(), tap.owner, tap.repo);
+            println!(
+                "{} Untapped {}/{}",
+                style("==>").cyan().bold(),
+                tap.owner,
+                tap.repo
+            );
         }
 
         return Ok(());
@@ -34,7 +39,12 @@ pub fn execute(root: &Path, tap: Option<String>, all: bool) -> Result<(), zb_cor
     if removed {
         println!("{} Untapped {}/{}", style("==>").cyan().bold(), owner, repo);
     } else {
-        println!("{} Tap not found: {}/{}", style("==>").cyan().bold(), owner, repo);
+        println!(
+            "{} Tap not found: {}/{}",
+            style("==>").cyan().bold(),
+            owner,
+            repo
+        );
     }
 
     Ok(())

@@ -34,10 +34,7 @@ pub async fn fetch_formula(
 
     for repo in repo_candidates {
         for path in &path_candidates {
-            let url = format!(
-                "{}/{}/{}/HEAD/{}",
-                base_url, tap.owner, repo, path
-            );
+            let url = format!("{}/{}/{}/HEAD/{}", base_url, tap.owner, repo, path);
 
             let Some(body) = api_client.get_text_if_exists(&url).await? else {
                 continue;
@@ -122,10 +119,10 @@ fn extract_version(name: &str, content: &str) -> Result<String, Error> {
     }
 
     let url_re = Regex::new(r#"(?m)^\s*url\s+["']([^"']+)["']"#).unwrap();
-    if let Some(caps) = url_re.captures(content) {
-        if let Some(version) = version_from_url(&caps[1], name) {
-            return Ok(version);
-        }
+    if let Some(caps) = url_re.captures(content)
+        && let Some(version) = version_from_url(&caps[1], name)
+    {
+        return Ok(version);
     }
 
     Err(Error::StoreCorruption {
@@ -145,7 +142,7 @@ fn version_from_url(url: &str, name: &str) -> Option<String> {
 
     let suffix = trimmed
         .split('-')
-        .last()
+        .next_back()
         .filter(|s| s.chars().any(|c| c.is_ascii_digit()))?;
     Some(suffix.to_string())
 }
@@ -172,8 +169,7 @@ fn extract_dependencies(content: &str) -> Vec<String> {
 }
 
 fn extract_bottle(name: &str, version: &str, content: &str) -> Result<Option<Bottle>, Error> {
-    let bottle_block =
-        find_block(content, "bottle do");
+    let bottle_block = find_block(content, "bottle do");
 
     let Some(bottle_block) = bottle_block else {
         return Ok(None);
@@ -182,7 +178,7 @@ fn extract_bottle(name: &str, version: &str, content: &str) -> Result<Option<Bot
     let root_url_re = Regex::new(r#"(?m)^\s*root_url\s+["']([^"']+)["']"#).unwrap();
     let root_url = root_url_re
         .captures(&bottle_block)
-        .and_then(|caps| Some(caps[1].to_string()))
+        .map(|caps| caps[1].to_string())
         .ok_or_else(|| Error::UnsupportedBottle {
             name: name.to_string(),
         })?;
@@ -231,12 +227,8 @@ fn extract_binary_download(name: &str, content: &str) -> Result<Option<BinaryDow
     let sha_re = Regex::new(r#"(?m)^\s*sha256\s+["']([a-f0-9]{64})["']"#).unwrap();
     let bin_re = Regex::new(r#"(?m)^\s*bin\.install\s+\[?["']([^"']+)["']"#).unwrap();
 
-    let url = url_re
-        .captures(content)
-        .and_then(|caps| Some(caps[1].to_string()));
-    let sha256 = sha_re
-        .captures(content)
-        .and_then(|caps| Some(caps[1].to_string()));
+    let url = url_re.captures(content).map(|caps| caps[1].to_string());
+    let sha256 = sha_re.captures(content).map(|caps| caps[1].to_string());
 
     let Some(url) = url else {
         return Ok(None);
@@ -247,7 +239,7 @@ fn extract_binary_download(name: &str, content: &str) -> Result<Option<BinaryDow
 
     let bin = bin_re
         .captures(content)
-        .and_then(|caps| Some(caps[1].to_string()))
+        .map(|caps| caps[1].to_string())
         .or_else(|| Some(name.to_string()));
 
     Ok(Some(BinaryDownload { url, sha256, bin }))
