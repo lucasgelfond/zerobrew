@@ -173,4 +173,18 @@ mod tests {
         let err = resolve_closure(&["alpha".to_string()], &formulas).unwrap_err();
         assert!(matches!(err, Error::DependencyCycle { .. }));
     }
+
+    #[test]
+    fn skips_missing_dependencies() {
+        // Test that dependencies not in the formulas map are skipped
+        // (e.g., platform-incompatible dependencies filtered out during fetch)
+        let mut formulas = BTreeMap::new();
+        formulas.insert("git".to_string(), formula("git", &["gettext", "libiconv"]));
+        formulas.insert("gettext".to_string(), formula("gettext", &[]));
+        // libiconv is intentionally missing (filtered out for Linux)
+
+        let order = resolve_closure(&["git".to_string()], &formulas).unwrap();
+        // Should successfully resolve with just git and gettext
+        assert_eq!(order, vec!["gettext", "git"]);
+    }
 }
