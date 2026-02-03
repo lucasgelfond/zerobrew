@@ -18,6 +18,34 @@ use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
 /// Maximum number of retries for corrupted downloads
 const MAX_CORRUPTION_RETRIES: usize = 3;
 
+fn build_dependency_map(
+    formulas: &[Formula],
+    available: &std::collections::BTreeSet<String>,
+) -> BTreeMap<String, Vec<(String, crate::db::DependencyKind)>> {
+    let mut map = BTreeMap::new();
+
+    for formula in formulas {
+        let mut deps: BTreeMap<String, crate::db::DependencyKind> = BTreeMap::new();
+
+        for dep in &formula.dependencies {
+            if available.contains(dep) {
+                deps.insert(dep.clone(), crate::db::DependencyKind::Required);
+            }
+        }
+
+        for dep in &formula.build_dependencies {
+            if available.contains(dep) {
+                deps.entry(dep.clone())
+                    .or_insert(crate::db::DependencyKind::Build);
+            }
+        }
+
+        map.insert(formula.name.clone(), deps.into_iter().collect());
+    }
+
+    map
+}
+
 pub struct Installer {
     api_client: ApiClient,
     downloader: ParallelDownloader,
@@ -28,6 +56,7 @@ pub struct Installer {
 }
 
 pub struct InstallPlan {
+    pub roots: Vec<String>,
     pub formulas: Vec<Formula>,
     pub bottles: Vec<SelectedBottle>,
 }
@@ -86,6 +115,7 @@ impl Installer {
         }
 
         Ok(InstallPlan {
+            roots: names.to_vec(),
             formulas: all_formulas,
             bottles,
         })
@@ -245,6 +275,12 @@ impl Installer {
             }
         };
 
+        let formula_names: std::collections::BTreeSet<String> =
+            plan.formulas.iter().map(|f| f.name.clone()).collect();
+        let dependency_map = build_dependency_map(&plan.formulas, &formula_names);
+        let root_set: std::collections::BTreeSet<String> =
+            plan.roots.iter().cloned().collect();
+
         // Pair formulas with bottles
         let to_install: Vec<(Formula, SelectedBottle)> = plan
             .formulas
@@ -373,6 +409,13 @@ impl Installer {
             let tx = self.db.transaction()?;
             tx.record_install(&processed.name, &processed.version, &processed.store_key)?;
 
+            if let Some(deps) = dependency_map.get(&processed.name) {
+                tx.record_dependencies(&processed.name, deps)?;
+            }
+            if root_set.contains(&processed.name) {
+                tx.record_explicit(&processed.name)?;
+            }
+
             for linked in &processed.linked_files {
                 tx.record_linked_file(
                     &processed.name,
@@ -446,6 +489,24 @@ impl Installer {
     /// List all installed formulas
     pub fn list_installed(&self) -> Result<Vec<crate::db::InstalledKeg>, Error> {
         self.db.list_installed()
+    }
+
+    /// List stored dependency edges
+    pub fn list_dependencies(&self) -> Result<Vec<crate::db::DependencyRow>, Error> {
+        self.db.list_dependencies()
+    }
+
+    /// List stored dependencies for a keg
+    pub fn list_dependencies_for(
+        &self,
+        name: &str,
+    ) -> Result<Vec<crate::db::DependencyRow>, Error> {
+        self.db.list_dependencies_for(name)
+    }
+
+    /// List explicitly installed formulas
+    pub fn list_explicit(&self) -> Result<Vec<String>, Error> {
+        self.db.list_explicit()
     }
 
     /// Get the path to a keg in the cellar

@@ -6,6 +6,8 @@ pub struct Formula {
     pub name: String,
     pub versions: Versions,
     pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub build_dependencies: Vec<String>,
     pub bottle: Bottle,
     #[serde(default)]
     pub revision: u32,

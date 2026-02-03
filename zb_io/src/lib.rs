@@ -16,7 +16,7 @@ pub mod store;
 pub use api::ApiClient;
 pub use blob::BlobCache;
 pub use cache::ApiCache;
-pub use db::{Database, InstalledKeg};
+pub use db::{Database, DependencyKind, DependencyRow, InstalledKeg};
 pub use download::{DownloadProgressCallback, DownloadRequest, Downloader, ParallelDownloader};
 pub use extract::extract_tarball;
 pub use homebrew::{HomebrewMigrationPackages, HomebrewPackage, get_homebrew_packages};

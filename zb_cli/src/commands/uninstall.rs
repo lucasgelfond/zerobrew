@@ -1,4 +1,6 @@
 use console::style;
+use std::collections::{BTreeMap, BTreeSet};
+use zb_io::DependencyRow;
 
 pub fn execute(
     installer: &mut zb_io::install::Installer,
@@ -16,16 +18,31 @@ pub fn execute(
         formulas
     };
 
+    let removal_plan = build_removal_plan(installer, &formulas)?;
+    if removal_plan.is_empty() {
+        println!("No formulas installed.");
+        return Ok(());
+    }
+
+    let extras: Vec<String> = removal_plan
+        .iter()
+        .filter(|name| !formulas.contains(name))
+        .cloned()
+        .collect();
+
     println!(
         "{} Uninstalling {}...",
         style("==>").cyan().bold(),
-        style(formulas.join(", ")).bold()
+        style(removal_plan.join(", ")).bold()
     );
+    if !extras.is_empty() {
+        println!("    Also removing: {}", extras.join(", "));
+    }
 
     let mut errors: Vec<(String, zb_core::Error)> = Vec::new();
 
-    if formulas.len() > 1 {
-        for name in &formulas {
+    if removal_plan.len() > 1 {
+        for name in &removal_plan {
             print!("    {} {}...", style("○").dim(), name);
             match installer.uninstall(name) {
                 Ok(()) => println!(" {}", style("✓").green()),
@@ -35,8 +52,8 @@ pub fn execute(
                 }
             }
         }
-    } else if let Err(e) = installer.uninstall(&formulas[0]) {
-        errors.push((formulas[0].clone(), e));
+    } else if let Err(e) = installer.uninstall(&removal_plan[0]) {
+        errors.push((removal_plan[0].clone(), e));
     }
 
     if errors.is_empty() {
@@ -52,5 +69,191 @@ pub fn execute(
         }
         // Return just the first error up. TODO: don't return errors from this fn?
         Err(errors.remove(0).1)
+    }
+}
+
+fn build_removal_plan(
+    installer: &mut zb_io::install::Installer,
+    formulas: &[String],
+) -> Result<Vec<String>, zb_core::Error> {
+    if formulas.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let installed = installer.list_installed()?;
+    if installed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let installed_set: BTreeSet<String> = installed.into_iter().map(|k| k.name).collect();
+
+    let dependency_rows = installer.list_dependencies()?;
+    if dependency_rows.is_empty() {
+        return Ok(formulas
+            .iter()
+            .filter(|name| installed_set.contains(*name))
+            .cloned()
+            .collect());
+    }
+
+    let explicit_set: BTreeSet<String> = installer
+        .list_explicit()?
+        .into_iter()
+        .filter(|name| installed_set.contains(name))
+        .collect();
+
+    let (dependencies, reverse) = build_dependency_maps(&dependency_rows, &installed_set);
+    let candidates = build_candidate_set(formulas, &dependencies, &installed_set);
+
+    let removal_set = filter_removal_set(
+        formulas,
+        &candidates,
+        &reverse,
+        &explicit_set,
+        &installed_set,
+    );
+
+    Ok(topo_uninstall_order(&removal_set, &dependencies))
+}
+
+fn build_dependency_maps(
+    dependency_rows: &[DependencyRow],
+    installed_set: &BTreeSet<String>,
+) -> (
+    BTreeMap<String, BTreeSet<String>>,
+    BTreeMap<String, BTreeSet<String>>,
+) {
+    let mut dependencies: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut reverse: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for row in dependency_rows {
+        if !installed_set.contains(&row.name) || !installed_set.contains(&row.dependency) {
+            continue;
+        }
+        dependencies
+            .entry(row.name.clone())
+            .or_default()
+            .insert(row.dependency.clone());
+        reverse
+            .entry(row.dependency.clone())
+            .or_default()
+            .insert(row.name.clone());
+    }
+
+    (dependencies, reverse)
+}
+
+fn build_candidate_set(
+    formulas: &[String],
+    dependencies: &BTreeMap<String, BTreeSet<String>>,
+    installed_set: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut candidates: BTreeSet<String> = BTreeSet::new();
+    let mut stack: Vec<String> = formulas
+        .iter()
+        .filter(|name| installed_set.contains(*name))
+        .cloned()
+        .collect();
+
+    while let Some(name) = stack.pop() {
+        if !candidates.insert(name.clone()) {
+            continue;
+        }
+        if let Some(deps) = dependencies.get(&name) {
+            for dep in deps {
+                if installed_set.contains(dep) {
+                    stack.push(dep.clone());
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+fn filter_removal_set(
+    roots: &[String],
+    candidates: &BTreeSet<String>,
+    reverse: &BTreeMap<String, BTreeSet<String>>,
+    explicit_set: &BTreeSet<String>,
+    installed_set: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut removal_set: BTreeSet<String> = BTreeSet::new();
+    let root_set: BTreeSet<String> = roots.iter().cloned().collect();
+
+    for name in candidates {
+        if root_set.contains(name) {
+            removal_set.insert(name.clone());
+            continue;
+        }
+        if explicit_set.contains(name) {
+            continue;
+        }
+        if has_remaining_dependents(name, candidates, reverse, installed_set) {
+            continue;
+        }
+        removal_set.insert(name.clone());
+    }
+
+    removal_set
+}
+
+fn has_remaining_dependents(
+    name: &str,
+    candidates: &BTreeSet<String>,
+    reverse: &BTreeMap<String, BTreeSet<String>>,
+    installed_set: &BTreeSet<String>,
+) -> bool {
+    let Some(dependents) = reverse.get(name) else {
+        return false;
+    };
+    dependents
+        .iter()
+        .any(|dep| installed_set.contains(dep) && !candidates.contains(dep))
+}
+
+fn topo_uninstall_order(
+    removal_set: &BTreeSet<String>,
+    dependencies: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<String> {
+    let mut indegree: BTreeMap<String, usize> =
+        removal_set.iter().map(|name| (name.clone(), 0)).collect();
+
+    for name in removal_set {
+        if let Some(deps) = dependencies.get(name) {
+            for dep in deps {
+                if removal_set.contains(dep) {
+                    if let Some(count) = indegree.get_mut(dep) {
+                        *count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut ready: BTreeSet<String> = indegree
+        .iter()
+        .filter_map(|(name, count)| if *count == 0 { Some(name.clone()) } else { None })
+        .collect();
+
+    let mut ordered = Vec::with_capacity(removal_set.len());
+    while let Some(name) = ready.iter().next().cloned() {
+        ready.take(&name);
+        ordered.push(name.clone());
+        if let Some(deps) = dependencies.get(&name) {
+            for dep in deps {
+                if let Some(count) = indegree.get_mut(dep) {
+                    *count -= 1;
+                    if *count == 0 {
+                        ready.insert(dep.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if ordered.len() == removal_set.len() {
+        ordered
+    } else {
+        removal_set.iter().cloned().collect()
     }
 }

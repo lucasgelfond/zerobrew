@@ -16,6 +16,35 @@ pub struct InstalledKeg {
     pub installed_at: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DependencyKind {
+    Required,
+    Build,
+}
+
+impl DependencyKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            DependencyKind::Required => "required",
+            DependencyKind::Build => "build",
+        }
+    }
+
+    fn from_db(value: &str) -> Self {
+        match value {
+            "build" => DependencyKind::Build,
+            _ => DependencyKind::Required,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DependencyRow {
+    pub name: String,
+    pub dependency: String,
+    pub kind: DependencyKind,
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let conn = Connection::open(path).map_err(|e| Error::StoreCorruption {
@@ -59,11 +88,65 @@ impl Database {
                 target_path TEXT NOT NULL,
                 PRIMARY KEY (name, linked_path)
             );
+
+            CREATE TABLE IF NOT EXISTS explicit_kegs (
+                name TEXT PRIMARY KEY
+            );
+
+            CREATE TABLE IF NOT EXISTS keg_dependencies (
+                name TEXT NOT NULL,
+                dependency TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'required',
+                PRIMARY KEY (name, dependency, kind)
+            );
             ",
         )
         .map_err(|e| Error::StoreCorruption {
             message: format!("failed to initialize schema: {e}"),
         })?;
+
+        Self::ensure_dependency_kind_column(conn)?;
+
+        Ok(())
+    }
+
+    fn ensure_dependency_kind_column(conn: &Connection) -> Result<(), Error> {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(keg_dependencies)")
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to read schema info: {e}"),
+            })?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to query schema info: {e}"),
+            })?;
+
+        let mut has_kind = false;
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to read schema row: {e}"),
+            })?
+        {
+            let name: String = row.get(1).map_err(|e| Error::StoreCorruption {
+                message: format!("failed to read schema column: {e}"),
+            })?;
+            if name == "kind" {
+                has_kind = true;
+                break;
+            }
+        }
+
+        if !has_kind {
+            conn.execute(
+                "ALTER TABLE keg_dependencies ADD COLUMN kind TEXT NOT NULL DEFAULT 'required'",
+                [],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to migrate keg_dependencies: {e}"),
+            })?;
+        }
 
         Ok(())
     }
@@ -124,6 +207,87 @@ impl Database {
             })?;
 
         Ok(kegs)
+    }
+
+    pub fn list_dependencies(&self) -> Result<Vec<DependencyRow>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT name, dependency, kind FROM keg_dependencies ORDER BY name, dependency",
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to prepare statement: {e}"),
+            })?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let kind: String = row.get(2)?;
+                Ok(DependencyRow {
+                    name: row.get(0)?,
+                    dependency: row.get(1)?,
+                    kind: DependencyKind::from_db(&kind),
+                })
+            })
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to query dependency kegs: {e}"),
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to collect results: {e}"),
+            })?;
+
+        Ok(rows)
+    }
+
+    pub fn list_dependencies_for(&self, name: &str) -> Result<Vec<DependencyRow>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT name, dependency, kind FROM keg_dependencies WHERE name = ?1 ORDER BY dependency",
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to prepare statement: {e}"),
+            })?;
+
+        let rows = stmt
+            .query_map(params![name], |row| {
+                let kind: String = row.get(2)?;
+                Ok(DependencyRow {
+                    name: row.get(0)?,
+                    dependency: row.get(1)?,
+                    kind: DependencyKind::from_db(&kind),
+                })
+            })
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to query dependency kegs: {e}"),
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to collect results: {e}"),
+            })?;
+
+        Ok(rows)
+    }
+
+    pub fn list_explicit(&self) -> Result<Vec<String>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM explicit_kegs ORDER BY name")
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to prepare statement: {e}"),
+            })?;
+
+        let rows = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to query explicit kegs: {e}"),
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to collect results: {e}"),
+            })?;
+
+        Ok(rows)
     }
 
     pub fn get_store_refcount(&self, store_key: &str) -> i64 {
@@ -213,6 +377,58 @@ impl<'a> InstallTransaction<'a> {
         Ok(())
     }
 
+    pub fn record_dependencies(
+        &self,
+        name: &str,
+        deps: &[(String, DependencyKind)],
+    ) -> Result<(), Error> {
+        self.tx
+            .execute(
+                "DELETE FROM keg_dependencies WHERE name = ?1",
+                params![name],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to remove existing dependencies: {e}"),
+            })?;
+
+        for (dep, kind) in deps {
+            self.tx
+                .execute(
+                    "INSERT OR IGNORE INTO keg_dependencies (name, dependency, kind)
+                     VALUES (?1, ?2, ?3)",
+                    params![name, dep, kind.as_str()],
+                )
+                .map_err(|e| Error::StoreCorruption {
+                    message: format!("failed to record dependency: {e}"),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    pub fn record_explicit(&self, name: &str) -> Result<(), Error> {
+        self.tx
+            .execute(
+                "INSERT OR REPLACE INTO explicit_kegs (name) VALUES (?1)",
+                params![name],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to record explicit keg: {e}"),
+            })?;
+
+        Ok(())
+    }
+
+    pub fn clear_explicit(&self, name: &str) -> Result<(), Error> {
+        self.tx
+            .execute("DELETE FROM explicit_kegs WHERE name = ?1", params![name])
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to clear explicit keg: {e}"),
+            })?;
+
+        Ok(())
+    }
+
     pub fn record_uninstall(&self, name: &str) -> Result<Option<String>, Error> {
         // Get the store_key before removing
         let store_key: Option<String> = self
@@ -237,6 +453,14 @@ impl<'a> InstallTransaction<'a> {
             .map_err(|e| Error::StoreCorruption {
                 message: format!("failed to remove keg files records: {e}"),
             })?;
+
+        self.tx
+            .execute("DELETE FROM keg_dependencies WHERE name = ?1", params![name])
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to remove dependency records: {e}"),
+            })?;
+
+        self.clear_explicit(name)?;
 
         // Decrement store ref if we had one
         if let Some(ref key) = store_key {
