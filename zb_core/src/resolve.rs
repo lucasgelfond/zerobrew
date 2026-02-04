@@ -70,7 +70,6 @@ fn compute_closure(
         for dep in deps {
             // Skip dependencies that aren't in the formulas map
             // (they were filtered out due to missing bottles for this platform)
-            // FIXME: we should probably just ignore these dependencies instead of skipping the entire formula
             if !formulas.contains_key(&dep) {
                 continue;
             }
