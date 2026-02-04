@@ -68,7 +68,33 @@ pub async fn execute(
         style(&formula).green()
     );
 
-    let err = Command::new(&bin_path).args(&args).exec();
+    let mut cmd = Command::new(&bin_path);
+    cmd.args(&args);
+
+    if let Ok(prefix_str) = std::env::var("ZEROBREW_PREFIX") {
+        let prefix_path = PathBuf::from(&prefix_str);
+
+        if let Some(ca_bundle) = zb_io::find_ca_bundle_from_prefix(&prefix_path) {
+            cmd.env("CURL_CA_BUNDLE", &ca_bundle);
+            cmd.env("SSL_CERT_FILE", &ca_bundle);
+        }
+
+        if let Some(ca_dir) = zb_io::find_ca_dir(&prefix_path) {
+            cmd.env("SSL_CERT_DIR", &ca_dir);
+        }
+
+        let lib_path = prefix_path.join("lib");
+        if let Ok(existing_ld_path) = std::env::var("LD_LIBRARY_PATH") {
+            cmd.env(
+                "LD_LIBRARY_PATH",
+                format!("{}:{}", lib_path.display(), existing_ld_path),
+            );
+        } else {
+            cmd.env("LD_LIBRARY_PATH", lib_path);
+        }
+    }
+
+    let err = cmd.exec();
 
     Err(zb_core::Error::ExecutionError {
         message: format!("failed to execute '{}': {}", formula, err),
@@ -304,5 +330,21 @@ mod tests {
 
         let result = prepare_execution(&mut installer, "nonexistent").await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn ssl_cert_paths_use_prefix() {
+        let prefix = "/opt/test/prefix";
+        let ca_bundle = format!(
+            "{}/opt/ca-certificates/share/ca-certificates/cacert.pem",
+            prefix
+        );
+        let ca_dir = format!("{}/etc/ca-certificates", prefix);
+
+        assert_eq!(
+            ca_bundle,
+            "/opt/test/prefix/opt/ca-certificates/share/ca-certificates/cacert.pem"
+        );
+        assert_eq!(ca_dir, "/opt/test/prefix/etc/ca-certificates");
     }
 }
