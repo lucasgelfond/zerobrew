@@ -167,7 +167,30 @@ fn add_to_path(
     };
 
     if !no_modify_path && !already_added {
-        // Build the shell configuration content
+        let ca_bundle_candidates = [
+            format!(
+                "{}/opt/ca-certificates/share/ca-certificates/cacert.pem",
+                prefix.display()
+            ),
+            format!("{}/etc/ca-certificates/cacert.pem", prefix.display()),
+            format!("{}/share/ca-certificates/cacert.pem", prefix.display()),
+        ];
+        let ca_bundle = ca_bundle_candidates
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .cloned()
+            .unwrap_or_else(|| ca_bundle_candidates[0].clone());
+
+        let ca_dir_candidates = [
+            format!("{}/etc/ca-certificates", prefix.display()),
+            format!("{}/share/ca-certificates", prefix.display()),
+        ];
+        let ca_dir = ca_dir_candidates
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .cloned()
+            .unwrap_or_else(|| ca_dir_candidates[0].clone());
+
         let config_content = format!(
             "\n# zerobrew
 export ZEROBREW_DIR={}
@@ -175,6 +198,9 @@ export ZEROBREW_BIN={}
 export ZEROBREW_ROOT={}
 export ZEROBREW_PREFIX={}
 export PKG_CONFIG_PATH=\"{}/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}\"
+export CURL_CA_BUNDLE=\"{}\"
+export SSL_CERT_FILE=\"{}\"
+export SSL_CERT_DIR=\"{}\"
 _zb_path_append() {{
     local argpath=\"$1\"
     case \":${{PATH}}:\" in
@@ -190,6 +216,9 @@ _zb_path_append {}
             root.display(),
             prefix.display(),
             prefix.display(),
+            ca_bundle,
+            ca_bundle,
+            ca_dir,
             zerobrew_bin,
             prefix_bin.display()
         );
@@ -388,6 +417,10 @@ mod tests {
         assert!(content.contains(&format!("export ZEROBREW_PREFIX={}", prefix.display())));
         assert!(content.contains("export PKG_CONFIG_PATH="));
         assert!(content.contains("/lib/pkgconfig"));
+        assert!(content.contains("export CURL_CA_BUNDLE="));
+        assert!(content.contains("export SSL_CERT_FILE="));
+        assert!(content.contains("export SSL_CERT_DIR="));
+        assert!(content.contains("/opt/ca-certificates/share/ca-certificates/cacert.pem"));
     }
 
     #[test]
