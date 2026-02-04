@@ -12,7 +12,7 @@ pub struct Cli {
     #[arg(long, env = "ZEROBREW_PREFIX")]
     pub prefix: Option<PathBuf>,
 
-    #[arg(long, default_value = "48")]
+    #[arg(long, default_value = "20")]
     pub concurrency: usize,
 
     #[command(subcommand)]
