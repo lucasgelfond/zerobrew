@@ -39,7 +39,7 @@ pub struct ConcurrencyLimits {
 impl Default for ConcurrencyLimits {
     fn default() -> Self {
         Self {
-            download: 16,
+            download: 20,
             unpack: 4,
             materialize: 4,
         }
