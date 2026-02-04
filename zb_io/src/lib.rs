@@ -11,6 +11,7 @@ pub mod link;
 mod linux_patch;
 pub mod materialize;
 pub mod progress;
+pub mod ssl;
 pub mod store;
 
 pub use api::ApiClient;
@@ -24,4 +25,5 @@ pub use install::Installer;
 pub use link::Linker;
 pub use materialize::Cellar;
 pub use progress::{InstallProgress, ProgressCallback};
+pub use ssl::{find_ca_bundle_from_prefix, find_ca_dir};
 pub use store::Store;
