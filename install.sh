@@ -255,7 +255,7 @@ fi
 if [[ -d "$ZEROBREW_PREFIX/lib/pkgconfig" ]]; then
     export PKG_CONFIG_PATH="$ZEROBREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 fi
-if [[ -d "/opt/homebrew/lib/pkgconfig" ]] && [[ ! "$PKG_CONFIG_PATH" =~ "/opt/homebrew/lib/pkgconfig" ]]; then
+if [[ -d "/opt/homebrew/lib/pkgconfig" ]] && [[ ! "${PKG_CONFIG_PATH:-}" =~ "/opt/homebrew/lib/pkgconfig" ]]; then
     export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 fi
 
