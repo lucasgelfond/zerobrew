@@ -333,15 +333,17 @@ fn patch_text_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Err
                 Err(_) => return Ok(()), // Not valid UTF-8, skip
             };
 
-            if !content.contains("@@HOMEBREW_PREFIX@@") && !content.contains("@@HOMEBREW_CELLAR@@")
-            {
+            if !content.contains("@@HOMEBREW_") {
                 return Ok(());
             }
 
-            // Replace
             let new_content = content
                 .replace("@@HOMEBREW_PREFIX@@", &prefix_str)
-                .replace("@@HOMEBREW_CELLAR@@", &cellar_str);
+                .replace("@@HOMEBREW_CELLAR@@", &cellar_str)
+                .replace("@@HOMEBREW_REPOSITORY@@", &prefix_str)
+                .replace("@@HOMEBREW_LIBRARY@@", &format!("{}/Library", prefix_str))
+                .replace("@@HOMEBREW_PERL@@", "/usr/bin/perl")
+                .replace("@@HOMEBREW_JAVA@@", "/usr/bin/java");
 
             // Write back
             // Check readonly
@@ -423,7 +425,7 @@ mod tests {
         let script_path = bin_dir.join("script.sh");
         fs::write(
             &script_path,
-            "#!/bin/bash\necho @@HOMEBREW_PREFIX@@\necho @@HOMEBREW_CELLAR@@",
+            "#!/bin/bash\necho @@HOMEBREW_PREFIX@@\necho @@HOMEBREW_CELLAR@@\necho @@HOMEBREW_LIBRARY@@\necho @@HOMEBREW_PERL@@",
         )
         .unwrap();
 
@@ -433,7 +435,9 @@ mod tests {
         let content = fs::read_to_string(&script_path).unwrap();
         assert!(content.contains(prefix.to_str().unwrap()));
         assert!(content.contains(cellar.to_str().unwrap()));
-        assert!(!content.contains("@@HOMEBREW_PREFIX@@"));
+        assert!(content.contains(&format!("{}/Library", prefix.to_str().unwrap())));
+        assert!(content.contains("/usr/bin/perl"));
+        assert!(!content.contains("@@HOMEBREW_"));
     }
 
     #[test]
