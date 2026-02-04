@@ -531,16 +531,14 @@ async fn fetch_range_response_internal(
 }
 
 async fn get_cached_token_for_url_internal(token_cache: &TokenCache, url: &str) -> Option<String> {
-    let scope_prefix = extract_scope_prefix(url)?;
+    let scope = extract_scope_for_url(url)?;
     let cache = token_cache.read().await;
     let now = Instant::now();
 
-    for (scope, cached) in cache.iter() {
-        if scope.starts_with(&scope_prefix) && cached.expires_at > now {
-            return Some(cached.token.clone());
-        }
-    }
-    None
+    cache
+        .get(&scope)
+        .filter(|cached| cached.expires_at > now)
+        .map(|cached| cached.token.clone())
 }
 
 async fn handle_auth_challenge_internal(
@@ -1093,17 +1091,18 @@ async fn download_response_internal(
     writer.commit()
 }
 
-/// Extract scope prefix from a GHCR URL for token cache matching.
+/// Extract full scope from a GHCR URL for token cache matching.
 /// For URL like "https://ghcr.io/v2/homebrew/core/lz4/blobs/sha256:...",
-/// returns "repository:homebrew/core/" which matches scopes like "repository:homebrew/core/lz4:pull"
-fn extract_scope_prefix(url: &str) -> Option<String> {
-    if url.contains("ghcr.io/v2/homebrew/core/") {
-        // All homebrew/core packages use the same token server, but scopes are per-package
-        // We can't reuse tokens across packages, so return the full path prefix
-        Some("repository:homebrew/core/".to_string())
-    } else {
-        None
+/// returns "repository:homebrew/core/lz4:pull".
+fn extract_scope_for_url(url: &str) -> Option<String> {
+    let marker = "ghcr.io/v2/homebrew/core/";
+    let start = url.find(marker)? + marker.len();
+    let remainder = &url[start..];
+    let formula = remainder.split('/').next()?;
+    if formula.is_empty() {
+        return None;
     }
+    Some(format!("repository:homebrew/core/{formula}:pull"))
 }
 
 fn parse_www_authenticate(header: &str) -> Result<(String, String, String), Error> {
