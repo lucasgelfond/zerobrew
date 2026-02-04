@@ -286,19 +286,33 @@ impl Downloader {
                 .clone()
                 .unwrap_or_else(|| Arc::new(Semaphore::new(GLOBAL_DOWNLOAD_CONCURRENCY)));
 
-            let ctx = ChunkedDownloadContext {
-                blob_cache: &self.blob_cache,
-                client: &self.client,
-                token_cache: &self.token_cache,
-                url: primary_url,
-                expected_sha256,
-                name,
-                progress,
-                file_size: size,
-                global_semaphore: &semaphore,
-            };
+            let mut all_urls = Vec::new();
+            all_urls.push(primary_url.to_string());
+            all_urls.extend(alternate_urls.iter().cloned());
 
-            return download_with_chunks(&ctx).await;
+            let mut last_error = None;
+            for url in &all_urls {
+                let ctx = ChunkedDownloadContext {
+                    blob_cache: &self.blob_cache,
+                    client: &self.client,
+                    token_cache: &self.token_cache,
+                    url: url.as_str(),
+                    expected_sha256,
+                    name: name.clone(),
+                    progress: progress.clone(),
+                    file_size: size,
+                    global_semaphore: &semaphore,
+                };
+
+                match download_with_chunks(&ctx).await {
+                    Ok(path) => return Ok(path),
+                    Err(err) => last_error = Some(err),
+                }
+            }
+
+            return Err(last_error.unwrap_or_else(|| Error::NetworkFailure {
+                message: "all chunked download attempts failed".to_string(),
+            }));
         }
 
         // Otherwise, use the existing racing logic
@@ -455,6 +469,41 @@ async fn fetch_download_response_internal(
     let cached_token = get_cached_token_for_url_internal(token_cache, url).await;
 
     let mut request = client.get(url);
+    if let Some(token) = &cached_token {
+        request = request.header(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+    }
+
+    let response = request.send().await.map_err(|e| Error::NetworkFailure {
+        message: e.to_string(),
+    })?;
+
+    let response = if response.status() == StatusCode::UNAUTHORIZED {
+        handle_auth_challenge_internal(client, token_cache, url, response).await?
+    } else {
+        response
+    };
+
+    if !response.status().is_success() {
+        return Err(Error::NetworkFailure {
+            message: format!("HTTP {}", response.status()),
+        });
+    }
+
+    Ok(response)
+}
+
+async fn fetch_range_response_internal(
+    client: &reqwest::Client,
+    token_cache: &TokenCache,
+    url: &str,
+    range: &str,
+) -> Result<reqwest::Response, Error> {
+    let cached_token = get_cached_token_for_url_internal(token_cache, url).await;
+
+    let mut request = client.get(url).header("Range", range);
     if let Some(token) = &cached_token {
         request = request.header(
             AUTHORIZATION,
@@ -766,6 +815,19 @@ async fn download_chunk(
 
 /// Download a file using parallel chunk requests
 async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBuf, Error> {
+    if !validate_range_support(ctx).await? {
+        let response =
+            fetch_download_response_internal(ctx.client, ctx.token_cache, ctx.url).await?;
+        return download_response_internal(
+            ctx.blob_cache,
+            response,
+            ctx.expected_sha256,
+            ctx.name.clone(),
+            ctx.progress.clone(),
+        )
+        .await;
+    }
+
     let chunks = calculate_chunk_ranges(ctx.file_size);
 
     if let (Some(cb), Some(n)) = (&ctx.progress, &ctx.name) {
@@ -935,6 +997,23 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
     }
 
     writer.commit()
+}
+
+async fn validate_range_support(ctx: &ChunkedDownloadContext<'_>) -> Result<bool, Error> {
+    let response =
+        fetch_range_response_internal(ctx.client, ctx.token_cache, ctx.url, "bytes=0-0").await?;
+
+    if response.status() != StatusCode::PARTIAL_CONTENT {
+        return Ok(false);
+    }
+
+    let content_range = response
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    Ok(content_range.contains("0-0"))
 }
 
 async fn download_response_internal(
