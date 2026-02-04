@@ -1013,6 +1013,35 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
+    fn test_patch_macho_skips_when_new_prefix_longer() {
+        let tmp = TempDir::new().unwrap();
+        let test_file = tmp.path().join("test_binary");
+
+        let old_prefix = "/opt/homebrew";
+        let new_prefix = "/opt/zerobrew/prefix";
+
+        let mut contents = Vec::new();
+        contents.extend_from_slice(b"\xfe\xed\xfa\xcf");
+        contents.extend_from_slice(b"some random data\0");
+        contents.extend_from_slice(old_prefix.as_bytes());
+        contents.extend_from_slice(b"/opt/git/libexec/git-core\0");
+        contents.extend_from_slice(b"more data\0");
+
+        let original = contents.clone();
+        fs::write(&test_file, &contents).unwrap();
+
+        let result = patch_macho_binary_strings(&test_file, new_prefix);
+        assert!(result.is_ok());
+
+        let patched = fs::read(&test_file).unwrap();
+        assert_eq!(
+            patched, original,
+            "binary should be unchanged when new prefix is longer than old"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
     fn test_patch_text_file_strings() {
         let tmp = TempDir::new().unwrap();
         let test_file = tmp.path().join("test_script.sh");
