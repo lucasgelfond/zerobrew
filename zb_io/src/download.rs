@@ -1477,8 +1477,8 @@ mod tests {
 
         let peak = max_concurrent.load(Ordering::SeqCst);
         assert!(
-            peak <= 2,
-            "peak concurrent downloads was {peak}, expected <= 2"
+            peak <= GLOBAL_DOWNLOAD_CONCURRENCY,
+            "peak concurrent downloads was {peak}, expected <= {GLOBAL_DOWNLOAD_CONCURRENCY}"
         );
     }
 
