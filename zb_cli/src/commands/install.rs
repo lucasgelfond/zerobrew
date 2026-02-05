@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use zb_io::{InstallProgress, ProgressCallback};
 
-use crate::utils::normalize_formula_name;
+use crate::utils::{normalize_formula_name, suggest_homebrew};
 
 pub async fn execute(
     installer: &mut zb_io::install::Installer,
@@ -21,10 +21,24 @@ pub async fn execute(
 
     let mut normalized_names = Vec::new();
     for formula in &formulas {
-        normalized_names.push(normalize_formula_name(formula)?);
+        match normalize_formula_name(formula) {
+            Ok(name) => normalized_names.push(name),
+            Err(e) => {
+                suggest_homebrew(formula, &e);
+                return Err(e);
+            }
+        }
     }
 
-    let plan = installer.plan(&normalized_names).await?;
+    let plan = match installer.plan(&normalized_names).await {
+        Ok(p) => p,
+        Err(e) => {
+            for formula in &formulas {
+                suggest_homebrew(formula, &e);
+            }
+            return Err(e);
+        }
+    };
 
     println!(
         "{} Resolving dependencies ({} packages)...",
@@ -149,7 +163,15 @@ pub async fn execute(
         }
     }
 
-    let result = result_val?;
+    let result = match result_val {
+        Ok(r) => r,
+        Err(e) => {
+            for formula in &formulas {
+                suggest_homebrew(formula, &e);
+            }
+            return Err(e);
+        }
+    };
 
     let elapsed = start.elapsed();
     println!();
