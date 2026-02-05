@@ -1,4 +1,4 @@
-use crate::cache::{ApiCache, CacheEntry};
+use crate::network::cache::{ApiCache, CacheEntry};
 use zb_core::{Error, Formula};
 
 pub struct ApiClient {
@@ -123,7 +123,7 @@ mod tests {
     async fn fetches_formula_from_mock_server() {
         let mock_server = MockServer::start().await;
 
-        let fixture = include_str!("../../zb_core/fixtures/formula_foo.json");
+        let fixture = include_str!("../../../zb_core/fixtures/formula_foo.json");
 
         Mock::given(method("GET"))
             .and(path("/foo.json"))
@@ -160,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn first_request_stores_etag() {
         let mock_server = MockServer::start().await;
-        let fixture = include_str!("../../zb_core/fixtures/formula_foo.json");
+        let fixture = include_str!("../../../zb_core/fixtures/formula_foo.json");
 
         Mock::given(method("GET"))
             .and(path("/foo.json"))
@@ -189,7 +189,7 @@ mod tests {
     #[tokio::test]
     async fn second_request_sends_if_none_match() {
         let mock_server = MockServer::start().await;
-        let fixture = include_str!("../../zb_core/fixtures/formula_foo.json");
+        let fixture = include_str!("../../../zb_core/fixtures/formula_foo.json");
 
         // First request returns 200 with ETag
         Mock::given(method("GET"))
@@ -228,7 +228,7 @@ mod tests {
     #[tokio::test]
     async fn uses_cached_body_on_304() {
         let mock_server = MockServer::start().await;
-        let fixture = include_str!("../../zb_core/fixtures/formula_foo.json");
+        let fixture = include_str!("../../../zb_core/fixtures/formula_foo.json");
 
         // First request returns 200 with ETag
         Mock::given(method("GET"))

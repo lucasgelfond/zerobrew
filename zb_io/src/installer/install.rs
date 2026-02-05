@@ -2,16 +2,16 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::api::ApiClient;
-use crate::blob::BlobCache;
-use crate::db::Database;
-use crate::download::{
+use crate::cellar::link::{LinkedFile, Linker};
+use crate::cellar::materialize::Cellar;
+use crate::network::api::ApiClient;
+use crate::network::download::{
     DownloadProgressCallback, DownloadRequest, DownloadResult, ParallelDownloader,
 };
-use crate::link::{LinkedFile, Linker};
-use crate::materialize::Cellar;
 use crate::progress::{InstallProgress, ProgressCallback};
-use crate::store::Store;
+use crate::storage::blob::BlobCache;
+use crate::storage::db::Database;
+use crate::storage::store::Store;
 
 use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
 
@@ -439,12 +439,12 @@ impl Installer {
     }
 
     /// Get info about an installed formula
-    pub fn get_installed(&self, name: &str) -> Option<crate::db::InstalledKeg> {
+    pub fn get_installed(&self, name: &str) -> Option<crate::storage::db::InstalledKeg> {
         self.db.get_installed(name)
     }
 
     /// List all installed formulas
-    pub fn list_installed(&self) -> Result<Vec<crate::db::InstalledKeg>, Error> {
+    pub fn list_installed(&self) -> Result<Vec<crate::storage::db::InstalledKeg>, Error> {
         self.db.list_installed()
     }
 
@@ -504,7 +504,7 @@ pub fn create_installer(
     })?;
     let db = Database::open(&root.join("db/zb.sqlite3"))?;
 
-    use crate::download::ParallelDownloader;
+    use crate::network::download::ParallelDownloader;
     let parallel_downloader = ParallelDownloader::with_concurrency(blob_cache, concurrency);
 
     Ok(Installer {

@@ -15,8 +15,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
 
-use crate::blob::BlobCache;
 use crate::progress::InstallProgress;
+use crate::storage::blob::BlobCache;
 use zb_core::Error;
 
 const RACING_CONNECTIONS: usize = 3;

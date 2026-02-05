@@ -1,29 +1,22 @@
-pub mod api;
-pub mod blob;
-pub mod cache;
-pub mod db;
-pub mod download;
-pub mod extract;
-pub mod homebrew;
-pub mod install;
-pub mod link;
-#[cfg(target_os = "linux")]
-mod linux_patch;
-pub mod materialize;
+// Submodules
+pub mod cellar;
+pub mod extraction;
+pub mod installer;
+pub mod network;
 pub mod progress;
 pub mod ssl;
-pub mod store;
+pub mod storage;
 
-pub use api::ApiClient;
-pub use blob::BlobCache;
-pub use cache::ApiCache;
-pub use db::{Database, InstalledKeg};
-pub use download::{DownloadProgressCallback, DownloadRequest, Downloader, ParallelDownloader};
-pub use extract::extract_tarball;
-pub use homebrew::{HomebrewMigrationPackages, HomebrewPackage, get_homebrew_packages};
-pub use install::Installer;
-pub use link::Linker;
-pub use materialize::Cellar;
+// Re-exports for convenience
+pub use cellar::{Cellar, LinkedFile, Linker};
+pub use extraction::extract_tarball;
+pub use installer::{
+    ExecuteResult, HomebrewMigrationPackages, HomebrewPackage, InstallPlan, Installer,
+    create_installer, get_homebrew_packages,
+};
+pub use network::{
+    ApiCache, ApiClient, DownloadProgressCallback, DownloadRequest, Downloader, ParallelDownloader,
+};
 pub use progress::{InstallProgress, ProgressCallback};
 pub use ssl::{find_ca_bundle_from_prefix, find_ca_dir};
-pub use store::Store;
+pub use storage::{BlobCache, Database, InstalledKeg, Store};

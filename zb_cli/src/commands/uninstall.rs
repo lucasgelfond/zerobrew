@@ -1,7 +1,7 @@
 use console::style;
 
 pub fn execute(
-    installer: &mut zb_io::install::Installer,
+    installer: &mut zb_io::Installer,
     formulas: Vec<String>,
     all: bool,
 ) -> Result<(), zb_core::Error> {

@@ -6,7 +6,7 @@ use std::time::Instant;
 use super::install;
 
 pub async fn execute(
-    installer: &mut zb_io::install::Installer,
+    installer: &mut zb_io::Installer,
     manifest_path: &Path,
     no_link: bool,
 ) -> Result<(), zb_core::Error> {

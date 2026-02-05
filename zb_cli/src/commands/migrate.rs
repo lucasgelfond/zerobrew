@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::process::Command;
 
 pub async fn execute(
-    installer: &mut zb_io::install::Installer,
+    installer: &mut zb_io::Installer,
     yes: bool,
     force: bool,
 ) -> Result<(), zb_core::Error> {
