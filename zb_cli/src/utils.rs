@@ -36,6 +36,22 @@ pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!();
 }
 
+pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
+    eprintln!();
+    eprintln!(
+        "{} This package can't be installed with zerobrew.",
+        style("Note:").yellow().bold()
+    );
+    eprintln!("      Error: {}", error);
+    eprintln!();
+    eprintln!("      Try installing with Homebrew instead:");
+    eprintln!(
+        "      {}",
+        style(format!("brew install {}", formula)).cyan()
+    );
+    eprintln!();
+}
+
 pub fn get_root_path(cli_root: Option<PathBuf>) -> PathBuf {
     if let Some(root) = cli_root {
         return root;
