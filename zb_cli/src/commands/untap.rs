@@ -1,6 +1,6 @@
 use console::style;
 use std::path::Path;
-use zb_io::db::Database;
+use zb_io::storage::db::Database;
 
 use crate::commands::tap::parse_tap_name;
 

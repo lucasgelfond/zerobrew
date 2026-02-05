@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::cellar::link::{LinkedFile, Linker};
 use crate::cellar::materialize::Cellar;
 use crate::network::api::ApiClient;
-use crate::network::download::
+use crate::network::download::{
     DownloadProgressCallback, DownloadRequest, DownloadResult, ParallelDownloader,
 };
 use crate::progress::{InstallProgress, ProgressCallback};
@@ -17,7 +17,7 @@ use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
 
 #[path = "install_formula.rs"]
 mod install_formula;
-use install_formula::{FormulaResolver, parse_formula_ref};
+pub use install_formula::{FormulaResolver, parse_formula_ref};
 
 /// Maximum number of retries for corrupted downloads
 const MAX_CORRUPTION_RETRIES: usize = 3;

@@ -1,6 +1,6 @@
 use console::style;
 use std::path::Path;
-use zb_io::db::Database;
+use zb_io::storage::db::Database;
 
 pub fn parse_tap_name(tap: &str) -> Result<(String, String), zb_core::Error> {
     let parts: Vec<&str> = tap.split('/').collect();

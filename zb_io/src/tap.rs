@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use regex::Regex;
 
-use crate::api::ApiClient;
+use crate::network::api::ApiClient;
 use zb_core::formula::{BinaryDownload, Bottle, BottleFile, BottleStable, Versions};
 use zb_core::{Error, Formula};
 

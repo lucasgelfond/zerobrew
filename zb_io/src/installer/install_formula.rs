@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::api::ApiClient;
-use crate::db::Database;
+use crate::network::api::ApiClient;
+use crate::storage::db::Database;
 use crate::tap::{TapRef, fetch_formula as fetch_tap_formula};
 use zb_core::{Error, Formula};
 
@@ -19,7 +19,7 @@ struct FormulaRequest {
     exact_tap: bool,
 }
 
-pub(crate) fn parse_formula_ref(input: &str) -> Result<FormulaRef, Error> {
+pub fn parse_formula_ref(input: &str) -> Result<FormulaRef, Error> {
     let parts: Vec<&str> = input.split('/').collect();
     match parts.len() {
         1 => Ok(FormulaRef {
@@ -56,7 +56,7 @@ fn source_label(source: Option<&TapRef>) -> String {
     }
 }
 
-pub(crate) struct FormulaResolver<'a> {
+pub struct FormulaResolver<'a> {
     api_client: &'a ApiClient,
     db: &'a Database,
 }
