@@ -175,52 +175,60 @@ fn add_to_path(
             format!("{}/etc/ca-certificates/cacert.pem", prefix.display()),
             format!("{}/share/ca-certificates/cacert.pem", prefix.display()),
         ];
-        let ca_bundle = ca_bundle_candidates
-            .iter()
-            .find(|p| std::path::Path::new(p).exists())
-            .cloned()
-            .unwrap_or_else(|| ca_bundle_candidates[0].clone());
 
         let ca_dir_candidates = [
             format!("{}/etc/ca-certificates", prefix.display()),
             format!("{}/share/ca-certificates", prefix.display()),
         ];
-        let ca_dir = ca_dir_candidates
-            .iter()
-            .find(|p| std::path::Path::new(p).exists())
-            .cloned()
-            .unwrap_or_else(|| ca_dir_candidates[0].clone());
 
         let config_content = format!(
-            "\n# zerobrew
-export ZEROBREW_DIR={}
-export ZEROBREW_BIN={}
-export ZEROBREW_ROOT={}
-export ZEROBREW_PREFIX={}
-export PKG_CONFIG_PATH=\"{}/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}\"
-export CURL_CA_BUNDLE=\"{}\"
-export SSL_CERT_FILE=\"{}\"
-export SSL_CERT_DIR=\"{}\"
+            r#"
+# zerobrew
+export ZEROBREW_DIR={zerobrew_dir}
+export ZEROBREW_BIN={zerobrew_bin}
+export ZEROBREW_ROOT={root}
+export ZEROBREW_PREFIX={prefix}
+export PKG_CONFIG_PATH="{prefix}/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}"
+
+# SSL/TLS certificates (only if ca-certificates is installed)
+if [ -f "{ca_bundle_0}" ]; then
+  export CURL_CA_BUNDLE="{ca_bundle_0}"
+  export SSL_CERT_FILE="{ca_bundle_0}"
+elif [ -f "{ca_bundle_1}" ]; then
+  export CURL_CA_BUNDLE="{ca_bundle_1}"
+  export SSL_CERT_FILE="{ca_bundle_1}"
+elif [ -f "{ca_bundle_2}" ]; then
+  export CURL_CA_BUNDLE="{ca_bundle_2}"
+  export SSL_CERT_FILE="{ca_bundle_2}"
+fi
+
+if [ -d "{ca_dir_0}" ]; then
+  export SSL_CERT_DIR="{ca_dir_0}"
+elif [ -d "{ca_dir_1}" ]; then
+  export SSL_CERT_DIR="{ca_dir_1}"
+fi
+
+# Helper function to safely append to PATH
 _zb_path_append() {{
-    local argpath=\"$1\"
-    case \":${{PATH}}:\" in
-        *:\"$argpath\":*) ;;
-        *) export PATH=\"$argpath:$PATH\" ;;
+    local argpath="$1"
+    case ":${{PATH}}:" in
+        *:"$argpath":*) ;;
+        *) export PATH="$argpath:$PATH" ;;
     esac;
 }}
-_zb_path_append {}
-_zb_path_append {}
-",
-            zerobrew_dir,
-            zerobrew_bin,
-            root.display(),
-            prefix.display(),
-            prefix.display(),
-            ca_bundle,
-            ca_bundle,
-            ca_dir,
-            zerobrew_bin,
-            prefix_bin.display()
+
+_zb_path_append "$ZEROBREW_BIN"
+_zb_path_append "$ZEROBREW_PREFIX/bin"
+"#,
+            zerobrew_dir = zerobrew_dir,
+            zerobrew_bin = zerobrew_bin,
+            root = root.display(),
+            prefix = prefix.display(),
+            ca_bundle_0 = ca_bundle_candidates[0],
+            ca_bundle_1 = ca_bundle_candidates[1],
+            ca_bundle_2 = ca_bundle_candidates[2],
+            ca_dir_0 = ca_dir_candidates[0],
+            ca_dir_1 = ca_dir_candidates[1]
         );
 
         let write_result = std::fs::OpenOptions::new()
@@ -417,6 +425,10 @@ mod tests {
         assert!(content.contains(&format!("export ZEROBREW_PREFIX={}", prefix.display())));
         assert!(content.contains("export PKG_CONFIG_PATH="));
         assert!(content.contains("/lib/pkgconfig"));
+        assert!(content.contains("if [ -f"));
+        assert!(content.contains("CURL_CA_BUNDLE"));
+        assert!(content.contains("SSL_CERT_FILE"));
+        assert!(content.contains("SSL_CERT_DIR"));
         assert!(content.contains("export CURL_CA_BUNDLE="));
         assert!(content.contains("export SSL_CERT_FILE="));
         assert!(content.contains("export SSL_CERT_DIR="));
@@ -474,9 +486,8 @@ mod tests {
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
 
         let content = fs::read_to_string(&shell_config).unwrap();
-        // Both paths should be added via _zb_path_append
-        assert!(content.contains("_zb_path_append /home/user/.zerobrew/bin"));
-        assert!(content.contains(&format!("_zb_path_append {}", prefix.join("bin").display())));
+        assert!(content.contains("_zb_path_append \"$ZEROBREW_BIN\""));
+        assert!(content.contains("_zb_path_append \"$ZEROBREW_PREFIX/bin\""));
     }
 
     #[test]
