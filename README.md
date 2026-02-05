@@ -106,6 +106,12 @@ cargo build --release
 cargo install --path zb_cli
 ```
 
+You can also install the latest version directly from GitHub:
+
+```console
+cargo install --git https://github.com/lucasgelfond/zerobrew
+```
+
 ## Benchmarking
 
 ```bash
