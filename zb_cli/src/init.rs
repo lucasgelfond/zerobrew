@@ -167,20 +167,6 @@ fn add_to_path(
     };
 
     if !no_modify_path && !already_added {
-        let ca_bundle_candidates = [
-            format!(
-                "{}/opt/ca-certificates/share/ca-certificates/cacert.pem",
-                prefix.display()
-            ),
-            format!("{}/etc/ca-certificates/cacert.pem", prefix.display()),
-            format!("{}/share/ca-certificates/cacert.pem", prefix.display()),
-        ];
-
-        let ca_dir_candidates = [
-            format!("{}/etc/ca-certificates", prefix.display()),
-            format!("{}/share/ca-certificates", prefix.display()),
-        ];
-
         let config_content = format!(
             r#"
 # zerobrew
@@ -188,24 +174,24 @@ export ZEROBREW_DIR={zerobrew_dir}
 export ZEROBREW_BIN={zerobrew_bin}
 export ZEROBREW_ROOT={root}
 export ZEROBREW_PREFIX={prefix}
-export PKG_CONFIG_PATH="{prefix}/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}"
+export PKG_CONFIG_PATH="$ZEROBREW_PREFIX/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}"
 
 # SSL/TLS certificates (only if ca-certificates is installed)
-if [ -f "{ca_bundle_0}" ]; then
-  export CURL_CA_BUNDLE="{ca_bundle_0}"
-  export SSL_CERT_FILE="{ca_bundle_0}"
-elif [ -f "{ca_bundle_1}" ]; then
-  export CURL_CA_BUNDLE="{ca_bundle_1}"
-  export SSL_CERT_FILE="{ca_bundle_1}"
-elif [ -f "{ca_bundle_2}" ]; then
-  export CURL_CA_BUNDLE="{ca_bundle_2}"
-  export SSL_CERT_FILE="{ca_bundle_2}"
+if [ -f "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem" ]; then
+  export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+  export SSL_CERT_FILE="$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+elif [ -f "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem" ]; then
+  export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+  export SSL_CERT_FILE="$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+elif [ -f "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem" ]; then
+  export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+  export SSL_CERT_FILE="$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
 fi
 
-if [ -d "{ca_dir_0}" ]; then
-  export SSL_CERT_DIR="{ca_dir_0}"
-elif [ -d "{ca_dir_1}" ]; then
-  export SSL_CERT_DIR="{ca_dir_1}"
+if [ -d "$ZEROBREW_PREFIX/etc/ca-certificates" ]; then
+  export SSL_CERT_DIR="$ZEROBREW_PREFIX/etc/ca-certificates"
+elif [ -d "$ZEROBREW_PREFIX/share/ca-certificates" ]; then
+  export SSL_CERT_DIR="$ZEROBREW_PREFIX/share/ca-certificates"
 fi
 
 # Helper function to safely append to PATH
@@ -223,12 +209,7 @@ _zb_path_append "$ZEROBREW_PREFIX/bin"
             zerobrew_dir = zerobrew_dir,
             zerobrew_bin = zerobrew_bin,
             root = root.display(),
-            prefix = prefix.display(),
-            ca_bundle_0 = ca_bundle_candidates[0],
-            ca_bundle_1 = ca_bundle_candidates[1],
-            ca_bundle_2 = ca_bundle_candidates[2],
-            ca_dir_0 = ca_dir_candidates[0],
-            ca_dir_1 = ca_dir_candidates[1]
+            prefix = prefix.display()
         );
 
         let write_result = std::fs::OpenOptions::new()
@@ -432,7 +413,10 @@ mod tests {
         assert!(content.contains("export CURL_CA_BUNDLE="));
         assert!(content.contains("export SSL_CERT_FILE="));
         assert!(content.contains("export SSL_CERT_DIR="));
-        assert!(content.contains("/opt/ca-certificates/share/ca-certificates/cacert.pem"));
+        assert!(
+            content
+                .contains("$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem")
+        );
     }
 
     #[test]
