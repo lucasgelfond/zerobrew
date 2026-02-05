@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use fs4::fs_std::FileExt;
 
-use crate::extract::extract_tarball;
+use crate::extraction::extract::extract_tarball;
 use zb_core::Error;
 
 pub struct Store {

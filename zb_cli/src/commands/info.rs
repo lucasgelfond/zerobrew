@@ -1,10 +1,7 @@
 use chrono::{DateTime, Local};
 use console::style;
 
-pub fn execute(
-    installer: &mut zb_io::install::Installer,
-    formula: String,
-) -> Result<(), zb_core::Error> {
+pub fn execute(installer: &mut zb_io::Installer, formula: String) -> Result<(), zb_core::Error> {
     if let Some(keg) = installer.get_installed(&formula) {
         print_field("Name:", style(&keg.name).bold());
         print_field("Version:", &keg.version);

@@ -8,7 +8,7 @@ use zb_io::{InstallProgress, ProgressCallback};
 use crate::utils::{normalize_formula_name, suggest_homebrew};
 
 pub async fn execute(
-    installer: &mut zb_io::install::Installer,
+    installer: &mut zb_io::Installer,
     formulas: Vec<String>,
     no_link: bool,
 ) -> Result<(), zb_core::Error> {

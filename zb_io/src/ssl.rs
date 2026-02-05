@@ -1,4 +1,4 @@
-use crate::db::Database;
+use crate::storage::db::Database;
 use std::path::{Path, PathBuf};
 
 pub fn find_ca_bundle(prefix: &Path, db: &Database) -> Option<PathBuf> {

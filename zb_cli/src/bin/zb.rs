@@ -6,7 +6,7 @@ use zb_cli::{
     init::ensure_init,
     utils::get_root_path,
 };
-use zb_io::install::create_installer;
+use zb_io::create_installer;
 
 #[tokio::main]
 async fn main() {

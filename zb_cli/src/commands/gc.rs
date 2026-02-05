@@ -1,6 +1,6 @@
 use console::style;
 
-pub fn execute(installer: &mut zb_io::install::Installer) -> Result<(), zb_core::Error> {
+pub fn execute(installer: &mut zb_io::Installer) -> Result<(), zb_core::Error> {
     println!(
         "{} Running garbage collection...",
         style("==>").cyan().bold()

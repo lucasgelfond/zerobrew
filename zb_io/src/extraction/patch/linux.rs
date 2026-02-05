@@ -10,7 +10,7 @@ use zb_core::Error;
 
 /// Patch @@HOMEBREW_CELLAR@@ and @@HOMEBREW_PREFIX@@ placeholders in both ELF binaries and text files.
 #[cfg(target_os = "linux")]
-pub(crate) fn patch_placeholders(
+pub fn patch_placeholders(
     keg_path: &Path,
     prefix_dir: &Path,
     _pkg_name: &str,

@@ -2,7 +2,7 @@ use console::style;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use zb_io::install::Installer;
+use zb_io::Installer;
 
 use crate::utils::normalize_formula_name;
 
@@ -108,12 +108,7 @@ mod tests {
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-    use zb_io::api::ApiClient;
-    use zb_io::blob::BlobCache;
-    use zb_io::db::Database;
-    use zb_io::link::Linker;
-    use zb_io::materialize::Cellar;
-    use zb_io::store::Store;
+    use zb_io::{ApiClient, BlobCache, Cellar, Database, Linker, Store};
 
     fn create_bottle_tarball(formula_name: &str) -> Vec<u8> {
         use flate2::Compression;
