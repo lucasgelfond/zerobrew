@@ -1,15 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Restore cursor on exit
-restore_cursor() {
+# Colors (defined early for error_exit)
+MUTED=$'\033[0;2m'
+RED=$'\033[0;31m'
+ORANGE=$'\033[38;5;214m'
+GREEN=$'\033[0;32m'
+NC=$'\033[0m'
+
+# Error handler (defined early so it can be used during initialization)
+error_exit() {
+    local msg="$1"
+    local exit_code="${2:-1}"
+    printf "\r\033[K"
     printf '\033[?25h'
+    printf "%b[✗]%b %b\n" "$RED" "$NC" "$msg" >&2
+    exit "$exit_code"
 }
-trap restore_cursor EXIT
+
+# Cleanup on exit
+BUILD_OUTPUT=""
+cleanup() {
+    printf '\033[?25h'  # Restore cursor
+    [[ -n "$BUILD_OUTPUT" && -f "$BUILD_OUTPUT" ]] && rm -f "$BUILD_OUTPUT"
+}
+trap cleanup EXIT
 
 ZEROBREW_REPO="https://github.com/lucasgelfond/zerobrew.git"
-: ${ZEROBREW_DIR:=$HOME/.zerobrew}
-: ${ZEROBREW_BIN:=$HOME/.local/bin}
+: "${ZEROBREW_DIR:=$HOME/.zerobrew}"
+: "${ZEROBREW_BIN:=$HOME/.local/bin}"
 
 if [[ -d "/opt/zerobrew" ]]; then
     ZEROBREW_ROOT="/opt/zerobrew"
@@ -21,7 +40,7 @@ else
 fi
 
 # Allow custom prefix, default to $ZEROBREW_ROOT/prefix
-: ${ZEROBREW_PREFIX:=$ZEROBREW_ROOT/prefix}
+: "${ZEROBREW_PREFIX:=$ZEROBREW_ROOT/prefix}"
 
 export ZEROBREW_ROOT
 export ZEROBREW_PREFIX
@@ -33,12 +52,6 @@ fi
 
 no_modify_path=false
 binary_paths=()
-
-MUTED=$'\033[0;2m'
-RED=$'\033[0;31m'
-ORANGE=$'\033[38;5;214m'
-GREEN=$'\033[0;32m'
-NC=$'\033[0m'
 
 usage() {
     printf "zero%bbrew%b Installer\n" "$ORANGE" "$NC"
@@ -58,38 +71,29 @@ usage() {
 
 spinner() {
     local msg="$1"
-    local pid=$2
-    local spin='|/-\'
+    local pid="$2"
+    local spin=$'|/-\\'
     local i=0
     local exit_code=0
 
     printf '\033[?25l'
 
-    while kill -0 $pid 2>/dev/null; do
+    while kill -0 "$pid" 2>/dev/null; do
         i=$(((i + 1) % 4))
         printf "\r%b[%s]%b %b" "$ORANGE" "${spin:$i:1}" "$NC" "$msg"
         sleep 0.1
     done
 
-    wait $pid 2>/dev/null && exit_code=0 || exit_code=$?
+    wait "$pid" 2>/dev/null && exit_code=0 || exit_code=$?
 
     printf "\r\033[K"
     printf '\033[?25h'
 
-    return $exit_code
+    return "$exit_code"
 }
 
 completed() {
     printf "%b[✓]%b %b\n" "$GREEN" "$NC" "$1"
-}
-
-error_exit() {
-    local msg="$1"
-    local exit_code="${2:-1}"
-    printf "\r\033[K"
-    printf '\033[?25h'
-    printf "%b[✗]%b %b\n" "$RED" "$NC" "$msg" >&2
-    exit $exit_code
 }
 
 check_command() {
@@ -151,7 +155,7 @@ print_logo() {
 
     printf "%bStart installing %bPackages%b with %bzerobrew%b:\n\n" "$MUTED" "$NC" "$MUTED" "$ORANGE" "$NC"
     printf "  zb install %bffmpeg%b    # Install a Package%b\n" "$ORANGE" "$MUTED" "$NC"
-    printf "  zbx %byetris%b           # Single-time Run\n\n" "$ORANGE" "$MUTED" "$NC"
+    printf "  zbx %byetris%b           # Single-time Run%b\n\n" "$ORANGE" "$MUTED" "$NC"
     printf "%bFor more information visit %bhttps://zerobrew.rs/docs\n\n" "$MUTED" "$NC"
 }
 
@@ -259,25 +263,49 @@ if [[ -d "/opt/homebrew/lib/pkgconfig" ]] && [[ ! "${PKG_CONFIG_PATH:-}" =~ "/op
     export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 fi
 
+# Use a temp file to capture cargo's JSON output for binary path detection
+BUILD_OUTPUT=$(mktemp)
+
 (
-    if ! cargo build --release --bin zb --bin zbx >/dev/null 2>&1; then
-        error_exit "Build failed. Run 'cargo build --bin zb --bin zbx' to see details."
+    if ! cargo build --release --bin zb --bin zbx --message-format=json > "$BUILD_OUTPUT" 2>&1; then
+        exit 1
     fi
 ) &
 if ! spinner "Building ${ORANGE}zerobrew${NC}" $!; then
-    error_exit "Failed to build zerobrew. Ensure Rust and dependencies are properly installed."
+    error_exit "Failed to build zerobrew. Run 'cargo build --release --bin zb --bin zbx' to see details."
 fi
 completed "Built ${ORANGE}zerobrew${NC}"
 
-if [[ ! -f "target/release/zb" ]]; then
-    error_exit "Build succeeded but zb binary not found at target/release/zb"
+# Parse cargo's JSON output to find the actual binary paths
+# This handles custom CARGO_TARGET_DIR, .cargo/config.toml target-dir, etc.
+parse_binary_path() {
+    local binary_name="$1"
+    local path
+    # Each JSON line from cargo is self-contained. Find lines that:
+    # 1. Are compiler-artifact messages (contain "reason":"compiler-artifact")
+    # 2. Have an executable (contain "executable":)
+    # 3. Match our binary name (contain "name":"$binary_name")
+    # The name field in target uniquely identifies the binary
+    path=$(grep "\"reason\":\"compiler-artifact\"" "$BUILD_OUTPUT" \
+        | grep "\"executable\":" \
+        | grep "\"name\":\"$binary_name\"" \
+        | sed -E 's/.*"executable":"([^"]+)".*/\1/' \
+        | tail -n1)
+    echo "$path"
+}
+
+ZB_PATH=$(parse_binary_path "zb")
+ZBX_PATH=$(parse_binary_path "zbx")
+
+if [[ -z "$ZB_PATH" || ! -f "$ZB_PATH" ]]; then
+    error_exit "Build succeeded but could not locate zb binary. Check cargo configuration."
 fi
 
-if [[ ! -f "target/release/zbx" ]]; then
-    error_exit "Build succeeded but zbx binary not found at target/release/zbx"
+if [[ -z "$ZBX_PATH" || ! -f "$ZBX_PATH" ]]; then
+    error_exit "Build succeeded but could not locate zbx binary. Check cargo configuration."
 fi
 
-install_bin "$ZEROBREW_BIN" target/release/zb target/release/zbx
+install_bin "$ZEROBREW_BIN" "$ZB_PATH" "$ZBX_PATH"
 
 # Verify the binary works
 if ! "$ZEROBREW_BIN/zb" --version >/dev/null 2>&1; then
