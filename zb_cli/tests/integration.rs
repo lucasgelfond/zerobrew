@@ -16,6 +16,10 @@ impl TestEnv {
         let zb = env!("CARGO_BIN_EXE_zb");
         Command::new(zb)
             .env("ZEROBREW_ROOT", self.root.path())
+            // Without this override a host-level ZEROBREW_PREFIX (from a previous `zb init`)
+            // leaks into the test, causing the cellar/linker to write outside the temp dir
+            // and making integration tests fail.
+            .env("ZEROBREW_PREFIX", self.root.path().join("prefix"))
             .env("ZEROBREW_AUTO_INIT", "true")
             .args(args)
             .output()
