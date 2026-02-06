@@ -27,3 +27,4 @@ tar.workspace = true
 flate2.workspace = true
 sha2.workspace = true
 walkdir.workspace = true
+serial_test.workspace = true

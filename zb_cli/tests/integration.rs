@@ -3,26 +3,29 @@ use std::process::{Command, Output};
 
 struct TestEnv {
     root: tempfile::TempDir,
+    prefix: PathBuf,
 }
 
 impl TestEnv {
     fn new() -> Self {
-        Self {
-            root: tempfile::TempDir::new().expect("failed to create temp dir"),
-        }
+        let root = tempfile::TempDir::new().expect("failed to create temp dir");
+        let prefix = root.path().join("prefix");
+
+        Self { root, prefix }
     }
 
     fn zb(&self, args: &[&str]) -> Output {
         let zb = env!("CARGO_BIN_EXE_zb");
         Command::new(zb)
             .env("ZEROBREW_ROOT", self.root.path())
+            .env("ZEROBREW_PREFIX", self.prefix.as_path())
             .args(args)
             .output()
             .unwrap_or_else(|_| panic!("failed to execute {zb} command"))
     }
 
     fn bin_dir(&self) -> PathBuf {
-        self.root.path().join("prefix").join("bin")
+        self.prefix.join("bin")
     }
 
     fn count_store_entries(&self) -> usize {

@@ -33,6 +33,7 @@ libc = "0.2.180"
 # Dev dependencies
 tempfile = "3"
 wiremock = "0.6"
+serial_test = "3.3.1"
 
 [profile.release]
 opt-level = 3
