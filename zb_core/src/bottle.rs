@@ -30,14 +30,10 @@ pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
     }
 
     // Prefer macOS Intel bottles in order of preference (newest first)
+    // Homebrew uses bare OS version names (e.g. "sonoma") for Intel Mac bottles
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
-        let macos_tags = [
-            "x86_64_tahoe",
-            "x86_64_sequoia",
-            "x86_64_sonoma",
-            "x86_64_ventura",
-        ];
+        let macos_tags = ["tahoe", "sequoia", "sonoma", "ventura"];
 
         for preferred_tag in macos_tags {
             if let Some(file) = formula.bottle.stable.files.get(preferred_tag) {
@@ -86,10 +82,10 @@ pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
         }
     }
 
-    // Fallback: any x86_64 macOS bottle (but not linux)
+    // Fallback: any Intel macOS bottle (bare OS name, not arm64_ or linux)
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     for (tag, file) in &formula.bottle.stable.files {
-        if tag.starts_with("x86_64_") && !tag.contains("linux") {
+        if !tag.starts_with("arm64_") && !tag.contains("linux") && tag != "all" {
             return Ok(SelectedBottle {
                 tag: tag.clone(),
                 url: file.url.clone(),
@@ -143,10 +139,10 @@ mod tests {
 
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
         {
-            assert_eq!(selected.tag, "x86_64_sonoma");
+            assert_eq!(selected.tag, "sonoma");
             assert_eq!(
                 selected.url,
-                "https://example.com/foo-1.2.3.x86_64_sonoma.bottle.tar.gz"
+                "https://example.com/foo-1.2.3.sonoma.bottle.tar.gz"
             );
             assert_eq!(
                 selected.sha256,
@@ -202,7 +198,7 @@ mod tests {
     fn errors_when_no_arm64_bottle() {
         let mut files = BTreeMap::new();
         files.insert(
-            "x86_64_sonoma".to_string(),
+            "sonoma".to_string(),
             BottleFile {
                 url: "https://example.com/legacy.tar.gz".to_string(),
                 sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"

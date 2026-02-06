@@ -11,8 +11,8 @@
           "url": "https://example.com/foo-1.2.3.arm64_sonoma.bottle.tar.gz",
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
-        "x86_64_sonoma": {
-          "url": "https://example.com/foo-1.2.3.x86_64_sonoma.bottle.tar.gz",
+        "sonoma": {
+          "url": "https://example.com/foo-1.2.3.sonoma.bottle.tar.gz",
           "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         },
         "x86_64_linux": {
