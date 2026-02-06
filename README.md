@@ -109,11 +109,9 @@ cargo install --path zb_cli
 ## Benchmarking
 
 ```bash
-./benchmark.sh                                # 100-package benchmark
-./benchmark.sh --format html -o results.html  # html report
-./benchmark.sh --format json -o results.json  # json output
-./benchmark.sh -c 20 --quick                  # quick test (22 packages)
-./benchmark.sh -h                             # show help
+just bench --quick          # quick test (22 packages)
+just bench --full results/  # 100-package benchmark
+just bench --help           # show help
 ```
 
 ## Status
