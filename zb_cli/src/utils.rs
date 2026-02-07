@@ -28,11 +28,32 @@ pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     );
     eprintln!("      Error: {}", error);
     eprintln!();
-    eprintln!("      Try installing with Homebrew instead:");
-    eprintln!(
-        "      {}",
-        style(format!("brew install {}", formula)).cyan()
-    );
+
+    // Error for Termux on android since homebrew
+    // doesn't support bottles for this platform
+    // details: https://github.com/lucasgelfond/zerobrew/pull/136
+    if cfg!(target_os = "android") {
+        eprintln!(
+            "      {} {}",
+            style(formula).yellow().bold(),
+            style(
+                "is not compatible with Termux - homebrew bottles are not available for Android."
+            )
+            .red()
+            .bold()
+        );
+        eprintln!(
+            "      {}",
+            style("and cannot be installed on it.").red().bold()
+        );
+    } else {
+        eprintln!("      Try installing with Homebrew instead:");
+        eprintln!(
+            "      {}",
+            style(format!("brew install {}", formula)).cyan()
+        );
+    }
+
     eprintln!();
 }
 
