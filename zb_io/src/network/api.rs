@@ -1,8 +1,10 @@
 use crate::network::cache::{ApiCache, CacheEntry};
+use crate::network::tap_formula::{parse_tap_formula_ref, parse_tap_formula_ruby};
 use zb_core::{Error, Formula};
 
 pub struct ApiClient {
     base_url: String,
+    tap_raw_base_url: String,
     client: reqwest::Client,
     cache: Option<ApiCache>,
 }
@@ -22,9 +24,16 @@ impl ApiClient {
 
         Self {
             base_url,
+            tap_raw_base_url: "https://raw.githubusercontent.com".to_string(),
             client,
             cache: None,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_tap_raw_base_url(mut self, tap_raw_base_url: String) -> Self {
+        self.tap_raw_base_url = tap_raw_base_url;
+        self
     }
 
     pub fn with_cache(mut self, cache: ApiCache) -> Self {
@@ -33,6 +42,10 @@ impl ApiClient {
     }
 
     pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
+        if let Some(spec) = parse_tap_formula_ref(name) {
+            return self.get_tap_formula(&spec).await;
+        }
+
         let url = format!("{}/{}.json", self.base_url, name);
 
         let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
@@ -104,6 +117,81 @@ impl ApiClient {
         })?;
 
         Ok(formula)
+    }
+
+    async fn get_tap_formula(
+        &self,
+        spec: &crate::network::tap_formula::TapFormulaRef,
+    ) -> Result<Formula, Error> {
+        let candidate_repos = if spec.repo.starts_with("homebrew-") {
+            vec![
+                spec.repo.clone(),
+                spec.repo.trim_start_matches("homebrew-").to_string(),
+            ]
+        } else {
+            vec![format!("homebrew-{}", spec.repo), spec.repo.clone()]
+        };
+        let candidate_paths = vec![
+            format!("Formula/{}.rb", spec.formula),
+            format!(
+                "Formula/{}/{}.rb",
+                spec.formula.chars().next().unwrap_or('x'),
+                spec.formula
+            ),
+        ];
+        let branches = vec!["HEAD", "main", "master"];
+
+        let mut last_status: Option<reqwest::StatusCode> = None;
+
+        for repo in candidate_repos {
+            for branch in &branches {
+                for path in &candidate_paths {
+                    let url = format!(
+                        "{}/{}/{}/{}/{}",
+                        self.tap_raw_base_url.trim_end_matches('/'),
+                        spec.owner,
+                        repo,
+                        branch,
+                        path
+                    );
+                    let response =
+                        self.client
+                            .get(&url)
+                            .send()
+                            .await
+                            .map_err(|e| Error::NetworkFailure {
+                                message: e.to_string(),
+                            })?;
+
+                    if response.status().is_success() {
+                        let body = response.text().await.map_err(|e| Error::NetworkFailure {
+                            message: format!("failed to read tap formula body: {e}"),
+                        })?;
+                        return parse_tap_formula_ruby(spec, &body);
+                    }
+
+                    last_status = Some(response.status());
+                }
+            }
+        }
+
+        if last_status == Some(reqwest::StatusCode::NOT_FOUND) {
+            return Err(Error::MissingFormula {
+                name: format!("{}/{}/{}", spec.owner, spec.repo, spec.formula),
+            });
+        }
+
+        Err(Error::NetworkFailure {
+            message: format!(
+                "failed to fetch tap formula '{}/{}/{}' (last status: {})",
+                spec.owner,
+                spec.repo,
+                spec.formula,
+                last_status
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ),
+        })
     }
 }
 
@@ -261,5 +349,35 @@ mod tests {
         let formula = client.get_formula("foo").await.unwrap();
         assert_eq!(formula.name, "foo");
         assert_eq!(formula.versions.stable, "1.2.3");
+    }
+
+    #[tokio::test]
+    async fn fetches_formula_from_tap_ruby_source() {
+        let mock_server = MockServer::start().await;
+        let rb = r#"
+class Terraform < Formula
+  version "1.10.0"
+  depends_on "go"
+  bottle do
+    root_url "https://ghcr.io/v2/hashicorp/tap"
+    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  end
+end
+"#;
+
+        Mock::given(method("GET"))
+            .and(path("/hashicorp/homebrew-tap/main/Formula/terraform.rb"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(rb))
+            .mount(&mock_server)
+            .await;
+
+        let client =
+            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
+
+        assert_eq!(formula.name, "terraform");
+        assert_eq!(formula.versions.stable, "1.10.0");
+        assert!(formula.dependencies.contains(&"go".to_string()));
+        assert!(formula.bottle.stable.files.contains_key("arm64_sonoma"));
     }
 }

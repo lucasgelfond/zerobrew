@@ -1125,14 +1125,17 @@ async fn download_response_internal(
 /// For URL like "https://ghcr.io/v2/homebrew/core/lz4/blobs/sha256:...",
 /// returns "repository:homebrew/core/lz4:pull".
 fn extract_scope_for_url(url: &str) -> Option<String> {
-    let marker = "ghcr.io/v2/homebrew/core/";
+    let marker = "ghcr.io/v2/";
     let start = url.find(marker)? + marker.len();
     let remainder = &url[start..];
-    let formula = remainder.split('/').next()?;
-    if formula.is_empty() {
+    let mut parts = remainder.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    let formula = parts.next()?;
+    if owner.is_empty() || repo.is_empty() || formula.is_empty() {
         return None;
     }
-    Some(format!("repository:homebrew/core/{formula}:pull"))
+    Some(format!("repository:{owner}/{repo}/{formula}:pull"))
 }
 
 fn parse_www_authenticate(header: &str) -> Result<(String, String, String), Error> {
@@ -1829,5 +1832,22 @@ mod tests {
         let downloaded_content = std::fs::read(&blob_path).unwrap();
         assert_eq!(downloaded_content.len(), large_content.len());
         assert_eq!(downloaded_content, large_content);
+    }
+
+    #[test]
+    fn extract_scope_for_url_supports_core_packages() {
+        let scope =
+            super::extract_scope_for_url("https://ghcr.io/v2/homebrew/core/lz4/blobs/sha256:abc")
+                .unwrap();
+        assert_eq!(scope, "repository:homebrew/core/lz4:pull");
+    }
+
+    #[test]
+    fn extract_scope_for_url_supports_tapped_packages() {
+        let scope = super::extract_scope_for_url(
+            "https://ghcr.io/v2/hashicorp/tap/terraform/blobs/sha256:abc",
+        )
+        .unwrap();
+        assert_eq!(scope, "repository:hashicorp/tap/terraform:pull");
     }
 }

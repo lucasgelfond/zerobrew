@@ -1,6 +1,7 @@
 pub mod api;
 pub mod cache;
 pub mod download;
+pub mod tap_formula;
 
 pub use api::ApiClient;
 pub use cache::{ApiCache, CacheEntry};

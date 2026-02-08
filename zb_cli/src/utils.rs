@@ -3,18 +3,31 @@ use std::path::PathBuf;
 
 pub fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
     let trimmed = name.trim();
+    if let Some(token) = trimmed.strip_prefix("cask:") {
+        if token.is_empty() {
+            return Err(zb_core::Error::InvalidArgument {
+                message: "cask token cannot be empty".to_string(),
+            });
+        }
+        return Ok(trimmed.to_string());
+    }
+
     if let Some((tap, formula)) = trimmed.rsplit_once('/') {
+        if formula.is_empty() {
+            return Err(zb_core::Error::MissingFormula {
+                name: trimmed.to_string(),
+            });
+        }
+
         if tap == "homebrew/core" {
-            if formula.is_empty() {
-                return Err(zb_core::Error::MissingFormula {
-                    name: trimmed.to_string(),
-                });
-            }
             return Ok(formula.to_string());
         }
-        return Err(zb_core::Error::UnsupportedTap {
-            name: trimmed.to_string(),
-        });
+
+        if tap == "homebrew/cask" {
+            return Ok(format!("cask:{formula}"));
+        }
+
+        return Ok(trimmed.to_string());
     }
 
     Ok(trimmed.to_string())
@@ -83,5 +96,34 @@ pub fn get_root_path(cli_root: Option<PathBuf>) -> PathBuf {
                     .unwrap_or_else(|_| legacy_root.clone())
             });
         xdg_data_home.join("zerobrew")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_formula_name;
+
+    #[test]
+    fn normalize_core_tap_formula() {
+        assert_eq!(
+            normalize_formula_name("homebrew/core/wget").unwrap(),
+            "wget".to_string()
+        );
+    }
+
+    #[test]
+    fn normalize_external_tap_formula_keeps_full_name() {
+        assert_eq!(
+            normalize_formula_name("hashicorp/tap/terraform").unwrap(),
+            "hashicorp/tap/terraform".to_string()
+        );
+    }
+
+    #[test]
+    fn normalize_homebrew_cask_prefixes_token() {
+        assert_eq!(
+            normalize_formula_name("homebrew/cask/docker-desktop").unwrap(),
+            "cask:docker-desktop".to_string()
+        );
     }
 }
