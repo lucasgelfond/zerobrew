@@ -269,7 +269,11 @@ set -gx ZEROBREW_DIR "{zerobrew_dir}"
 set -gx ZEROBREW_BIN "{zerobrew_bin}"
 set -gx ZEROBREW_ROOT "{root}"
 set -gx ZEROBREW_PREFIX "{prefix}"
-set -gx PKG_CONFIG_PATH "$ZEROBREW_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+if set -q PKG_CONFIG_PATH
+    set -gx PKG_CONFIG_PATH "$ZEROBREW_PREFIX/lib/pkgconfig" $PKG_CONFIG_PATH
+else
+    set -gx PKG_CONFIG_PATH "$ZEROBREW_PREFIX/lib/pkgconfig"
+end
 
 # SSL/TLS certificates (only if ca-certificates is installed)
 if not set -q CURL_CA_BUNDLE; or not set -q SSL_CERT_FILE
@@ -857,6 +861,13 @@ mod tests {
         assert!(content.contains("set -q SSL_CERT_FILE; or set -gx SSL_CERT_FILE"));
         assert!(content.contains("$ZEROBREW_PREFIX/etc/openssl/cert.pem"));
         assert!(content.contains("$ZEROBREW_PREFIX/etc/openssl/certs"));
+        assert!(content.contains("if set -q PKG_CONFIG_PATH"));
+        assert!(content.contains(
+            "set -gx PKG_CONFIG_PATH \"$ZEROBREW_PREFIX/lib/pkgconfig\" $PKG_CONFIG_PATH"
+        ));
+        assert!(!content.contains(
+            "set -gx PKG_CONFIG_PATH \"$ZEROBREW_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH\""
+        ));
     }
 
     #[test]
