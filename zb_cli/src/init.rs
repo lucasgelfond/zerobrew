@@ -127,6 +127,34 @@ pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), 
     Ok(())
 }
 
+const ZB_BLOCK_START: &str = "# >>> zerobrew >>>";
+const ZB_BLOCK_END: &str = "# <<< zerobrew <<<";
+
+fn upsert_managed_block(existing: &str, managed_block: &str) -> String {
+    if let Some(start_idx) = existing.find(ZB_BLOCK_START)
+        && let Some(end_rel_idx) = existing[start_idx..].find(ZB_BLOCK_END)
+    {
+        let end_idx = start_idx + end_rel_idx + ZB_BLOCK_END.len();
+        let mut out = String::with_capacity(existing.len() + managed_block.len());
+        out.push_str(&existing[..start_idx]);
+        out.push_str(managed_block);
+        out.push_str(&existing[end_idx..]);
+        return out;
+    }
+
+    if existing.trim().is_empty() {
+        managed_block.to_string()
+    } else {
+        let mut out = String::with_capacity(existing.len() + managed_block.len() + 1);
+        out.push_str(existing);
+        if !existing.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(managed_block);
+        out
+    }
+}
+
 fn add_to_path(
     prefix: &Path,
     zerobrew_dir: &str,
@@ -167,16 +195,10 @@ fn add_to_path(
     };
 
     let prefix_bin = prefix.join("bin");
+    let existing_config = std::fs::read_to_string(&config_file).unwrap_or_default();
 
-    // Check if zerobrew is already configured
-    let already_added = if let Ok(contents) = std::fs::read_to_string(&config_file) {
-        contents.contains("# zerobrew")
-    } else {
-        false
-    };
-
-    if !no_modify_path && !already_added {
-        let config_content = match shell_kind {
+    if !no_modify_path {
+        let block_body = match shell_kind {
             ShellConfigKind::Posix => format!(
                 r#"
 # zerobrew
@@ -261,6 +283,8 @@ end
                 prefix = prefix.display()
             ),
         };
+        let managed_block = format!("{ZB_BLOCK_START}{block_body}\n{ZB_BLOCK_END}\n");
+        let updated_config = upsert_managed_block(&existing_config, &managed_block);
 
         if let Some(parent) = std::path::Path::new(&config_file).parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -274,9 +298,10 @@ end
 
         let write_result = std::fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(&config_file)
-            .and_then(|mut f| f.write_all(config_content.as_bytes()));
+            .and_then(|mut f| f.write_all(updated_config.as_bytes()));
 
         if let Err(e) = write_result {
             println!(
@@ -290,10 +315,10 @@ end
                 style("Info:").cyan().bold(),
                 config_file
             );
-            println!("{}", config_content);
+            println!("{}", managed_block);
         } else {
             println!(
-                "    {} Added zerobrew configuration to {}",
+                "    {} Updated zerobrew configuration in {}",
                 style("✓").green(),
                 config_file
             );
@@ -477,6 +502,8 @@ mod tests {
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
 
         let content = fs::read_to_string(&shell_config).unwrap();
+        assert!(content.contains(ZB_BLOCK_START));
+        assert!(content.contains(ZB_BLOCK_END));
         assert!(content.contains("export ZEROBREW_DIR=/home/user/.zerobrew"));
         assert!(content.contains("export ZEROBREW_BIN=/home/user/.zerobrew/bin"));
         assert!(content.contains(&format!("export ZEROBREW_ROOT={}", root.display())));
@@ -597,15 +624,24 @@ mod tests {
             std::env::set_var("SHELL", "/bin/bash");
         }
 
-        // Write initial config
-        fs::write(&shell_config, "# existing content\n# zerobrew\n").unwrap();
+        // Write initial config with existing managed block and unrelated user content
+        fs::write(
+            &shell_config,
+            format!(
+                "export KEEP_ME=true\n{ZB_BLOCK_START}\n# zerobrew\nexport ZEROBREW_DIR=/old\n{ZB_BLOCK_END}\n"
+            ),
+        )
+        .unwrap();
 
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
 
-        // Content should remain unchanged since # zerobrew already exists
+        // Managed block should be replaced, preserving unrelated user content
         let content = fs::read_to_string(&shell_config).unwrap();
-        assert!(!content.contains("export ZEROBREW_DIR"));
-        assert_eq!(content, "# existing content\n# zerobrew\n");
+        assert!(content.contains("export KEEP_ME=true"));
+        assert!(content.contains("export ZEROBREW_DIR=/home/user/.zerobrew"));
+        assert!(!content.contains("export ZEROBREW_DIR=/old"));
+        assert_eq!(content.matches(ZB_BLOCK_START).count(), 1);
+        assert_eq!(content.matches(ZB_BLOCK_END).count(), 1);
     }
 
     #[test]
