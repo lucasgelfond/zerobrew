@@ -3,23 +3,36 @@ use std::process::{Command, Output};
 
 struct TestEnv {
     root: tempfile::TempDir,
+    /// On macOS, Mach-O binary patching requires the prefix path to be no longer
+    /// than the original Homebrew prefix (`/opt/homebrew` = 13 chars). The default
+    /// OS temp directory on macOS (`/var/folders/…`) produces paths far too long,
+    /// so we create a separate short temp dir in `/tmp` for the prefix.
+    prefix_dir: tempfile::TempDir,
 }
 
 impl TestEnv {
     fn new() -> Self {
         Self {
             root: tempfile::TempDir::new().expect("failed to create temp dir"),
+            prefix_dir: tempfile::Builder::new()
+                .prefix("zb")
+                .rand_bytes(3)
+                .tempdir_in("/tmp")
+                .expect("failed to create short prefix temp dir"),
         }
+    }
+
+    fn prefix(&self) -> PathBuf {
+        self.prefix_dir.path().to_path_buf()
     }
 
     fn zb(&self, args: &[&str]) -> Output {
         let zb = env!("CARGO_BIN_EXE_zb");
         Command::new(zb)
             .env("ZEROBREW_ROOT", self.root.path())
-            // Without this override a host-level ZEROBREW_PREFIX (from a previous `zb init`)
-            // leaks into the test, causing the cellar/linker to write outside the temp dir
-            // and making integration tests fail.
-            .env("ZEROBREW_PREFIX", self.root.path().join("prefix"))
+            // Use the short prefix so Mach-O patching stays within the 13-char limit,
+            // and prevent a host-level ZEROBREW_PREFIX from leaking into the test.
+            .env("ZEROBREW_PREFIX", self.prefix())
             .env("ZEROBREW_AUTO_INIT", "true")
             .args(args)
             .output()
@@ -27,7 +40,7 @@ impl TestEnv {
     }
 
     fn bin_dir(&self) -> PathBuf {
-        self.root.path().join("prefix").join("bin")
+        self.prefix().join("bin")
     }
 
     fn count_store_entries(&self) -> usize {
@@ -144,7 +157,7 @@ fn test_install_uninstall_and_reinstall() {
     assert_success(&t.zb(&["uninstall", "jq"]), "zb uninstall jq");
     assert_success(&t.zb(&["uninstall", "oniguruma"]), "zb uninstall oniguruma");
     assert!(!t.bin_dir().join("jq").exists());
-    assert_no_installed_symlinks(&t.root.path().join("prefix"));
+    assert_no_installed_symlinks(&t.prefix());
 
     assert_success(&t.zb(&["install", "jq"]), "zb install jq (reinstall)");
     assert_success(

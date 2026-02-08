@@ -9,6 +9,10 @@ const HOMEBREW_PREFIXES: &[&str] = &[
     "/home/linuxbrew/.linuxbrew",
 ];
 
+/// Longest old prefix we patch:
+/// macOS Mach-O cannot be expanded in-place, so new prefix must not exceed this.
+const MAX_PREFIX_LEN_MACOS: usize = 13;
+
 /// Patch hardcoded Homebrew paths in text files.
 fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
@@ -142,30 +146,35 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
         let new_bytes = new_prefix.as_bytes();
 
         if new_bytes.len() > old_bytes.len() {
+            if contents.windows(old_bytes.len()).any(|w| w == old_bytes) {
+                return Err(Error::StoreCorruption {
+                    message: format!(
+                        "zerobrew prefix \"{}\" ({} bytes) is longer than \"{}\" ({} bytes). \
+                         On macOS, Mach-O binaries cannot be expanded in-place, so path-sensitive formulae (e.g. git) will not work. \
+                         Use a prefix of at most {} characters, e.g. /opt/zerobrew. \
+                         Re-init with: zb init <root> /opt/zerobrew (or your chosen short prefix), then reinstall.",
+                        new_prefix,
+                        new_bytes.len(),
+                        *old_prefix,
+                        old_bytes.len(),
+                        MAX_PREFIX_LEN_MACOS
+                    ),
+                });
+            }
             continue;
         }
 
         let mut i = 0;
-        while i < contents.len() {
-            if i + old_bytes.len() > contents.len() {
-                break;
-            }
-
-            if contents[i..i + old_bytes.len()] == *old_bytes {
-                let next = contents.get(i + old_bytes.len()).copied();
-                let is_path_boundary = matches!(next, None | Some(0) | Some(b'/'));
-
-                if is_path_boundary {
-                    contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
-
-                    if new_bytes.len() < old_bytes.len() {
-                        for j in i + new_bytes.len()..i + old_bytes.len() {
-                            contents[j] = 0;
-                        }
-                    }
-
-                    patched = true;
-                }
+        while i + old_bytes.len() <= contents.len() {
+            if contents[i..i + old_bytes.len()] == *old_bytes
+                && matches!(
+                    contents.get(i + old_bytes.len()).copied(),
+                    None | Some(0) | Some(b'/')
+                )
+            {
+                contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
+                contents[i + new_bytes.len()..i + old_bytes.len()].fill(0);
+                patched = true;
             }
             i += 1;
         }
@@ -233,6 +242,7 @@ pub fn patch_homebrew_placeholders(
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     // Derive prefix from cellar (cellar_dir is typically prefix/Cellar)
     let prefix = cellar_dir.parent().unwrap_or(Path::new("/opt/homebrew"));
@@ -270,13 +280,25 @@ pub fn patch_homebrew_placeholders(
         .collect();
 
     let patch_failures = AtomicUsize::new(0);
+    let first_patch_error: Arc<Mutex<Option<Error>>> = Arc::new(Mutex::new(None));
 
     // First pass: patch binary strings in Mach-O files
     macho_files.par_iter().for_each(|path| {
-        if patch_macho_binary_strings(path, &prefix_str).is_err() {
+        if let Err(e) = patch_macho_binary_strings(path, &prefix_str) {
             patch_failures.fetch_add(1, Ordering::Relaxed);
+            if let Ok(mut guard) = first_patch_error.lock()
+                && guard.is_none()
+            {
+                *guard = Some(e);
+            }
         }
     });
+
+    if let Ok(mut guard) = first_patch_error.lock()
+        && let Some(e) = guard.take()
+    {
+        return Err(e);
+    }
 
     // Second pass: patch text files
     let text_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
@@ -556,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn test_patch_macho_skips_when_new_prefix_longer() {
+    fn test_patch_macho_fails_when_new_prefix_longer() {
         let tmp = TempDir::new().unwrap();
         let test_file = tmp.path().join("test_binary");
 
@@ -574,13 +596,22 @@ mod tests {
         fs::write(&test_file, &contents).unwrap();
 
         let result = patch_macho_binary_strings(&test_file, new_prefix);
-        assert!(result.is_ok());
-
-        let patched = fs::read(&test_file).unwrap();
-        assert_eq!(
-            patched, original,
-            "binary should be unchanged when new prefix is longer than old"
+        assert!(
+            result.is_err(),
+            "should error when prefix too long and path present"
         );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("13"),
+            "error should mention max prefix length"
+        );
+        assert!(
+            err_msg.contains("/opt/zerobrew"),
+            "error should suggest short prefix"
+        );
+
+        let unchanged = fs::read(&test_file).unwrap();
+        assert_eq!(unchanged, original, "binary must be unchanged");
     }
 
     #[test]
