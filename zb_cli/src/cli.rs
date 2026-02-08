@@ -12,7 +12,11 @@ pub struct Cli {
     #[arg(long, env = "ZEROBREW_PREFIX")]
     pub prefix: Option<PathBuf>,
 
-    #[arg(long, default_value = "20")]
+    #[arg(
+        long,
+        default_value = "20",
+        value_parser = parse_concurrency
+    )]
     pub concurrency: usize,
 
     #[arg(
@@ -25,6 +29,36 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Commands,
+}
+
+fn parse_concurrency(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("invalid value '{}': expected a positive integer", value))?;
+    if parsed == 0 {
+        return Err("concurrency must be at least 1".to_string());
+    }
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn accepts_positive_concurrency() {
+        let cli = Cli::try_parse_from(["zb", "--concurrency", "4", "list"]).unwrap();
+        assert_eq!(cli.concurrency, 4);
+    }
+
+    #[test]
+    fn rejects_zero_concurrency() {
+        let result = Cli::try_parse_from(["zb", "--concurrency", "0", "list"]);
+        assert!(result.is_err());
+        let err = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err.contains("at least 1"));
+    }
 }
 
 #[derive(Subcommand)]
