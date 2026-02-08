@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use zb_core::Error;
 
@@ -188,7 +188,10 @@ impl<'a> InstallTransaction<'a> {
                 params![name],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to query previous store key: {e}"),
+            })?;
 
         self.tx
             .execute(
@@ -206,27 +209,18 @@ impl<'a> InstallTransaction<'a> {
 
         match previous_store_key.as_deref() {
             Some(previous) if previous == store_key => {}
-            Some(previous) => {
-                self.tx
-                    .execute(
-                        "UPDATE store_refs SET refcount = refcount - 1 WHERE store_key = ?1",
-                        params![previous],
-                    )
-                    .map_err(|e| Error::StoreCorruption {
-                        message: format!("failed to decrement previous store ref: {e}"),
-                    })?;
+            other => {
+                if let Some(previous) = other {
+                    self.tx
+                        .execute(
+                            "UPDATE store_refs SET refcount = refcount - 1 WHERE store_key = ?1",
+                            params![previous],
+                        )
+                        .map_err(|e| Error::StoreCorruption {
+                            message: format!("failed to decrement previous store ref: {e}"),
+                        })?;
+                }
 
-                self.tx
-                    .execute(
-                        "INSERT INTO store_refs (store_key, refcount) VALUES (?1, 1)
-                         ON CONFLICT(store_key) DO UPDATE SET refcount = refcount + 1",
-                        params![store_key],
-                    )
-                    .map_err(|e| Error::StoreCorruption {
-                        message: format!("failed to increment store ref: {e}"),
-                    })?;
-            }
-            None => {
                 self.tx
                     .execute(
                         "INSERT INTO store_refs (store_key, refcount) VALUES (?1, 1)
@@ -486,5 +480,33 @@ mod tests {
         assert_eq!(db.get_unreferenced_store_keys().unwrap(), vec!["gc_key"]);
         db.delete_store_ref("gc_key").unwrap();
         assert!(db.get_unreferenced_store_keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn record_install_propagates_query_errors() {
+        let mut db = Database::in_memory().unwrap();
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_install("foo", "1.0.0", "oldkey").unwrap();
+            tx.commit().unwrap();
+        }
+
+        db.conn
+            .execute(
+                "UPDATE installed_kegs
+                 SET store_key = CAST(X'80' AS BLOB)
+                 WHERE name = 'foo'",
+                [],
+            )
+            .unwrap();
+
+        let tx = db.transaction().unwrap();
+        let err = tx.record_install("foo", "1.1.0", "newkey").unwrap_err();
+        assert!(matches!(err, Error::StoreCorruption { .. }));
+        assert!(
+            err.to_string()
+                .contains("failed to query previous store key")
+        );
     }
 }
