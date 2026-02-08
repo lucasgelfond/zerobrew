@@ -437,6 +437,7 @@ impl Installer {
 
         for store_key in unreferenced {
             self.store.remove_entry(&store_key)?;
+            self.db.delete_store_ref(&store_key)?;
             removed.push(store_key);
         }
 
@@ -825,6 +826,13 @@ mod tests {
 
         // Store entry should now be gone
         assert!(!root.join("store").join(&bottle_sha).exists());
+        assert!(
+            installer
+                .db
+                .get_unreferenced_store_keys()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

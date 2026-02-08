@@ -156,6 +156,18 @@ impl Database {
 
         Ok(keys)
     }
+
+    pub fn delete_store_ref(&self, store_key: &str) -> Result<(), Error> {
+        self.conn
+            .execute(
+                "DELETE FROM store_refs WHERE store_key = ?1",
+                params![store_key],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to delete store ref: {e}"),
+            })?;
+        Ok(())
+    }
 }
 
 pub struct InstallTransaction<'a> {
@@ -458,5 +470,21 @@ mod tests {
         let installed = db.get_installed("foo").unwrap();
         assert_eq!(installed.version, "1.1.0");
         assert_eq!(installed.store_key, "newkey");
+    }
+
+    #[test]
+    fn delete_store_ref_removes_unreferenced_entry() {
+        let mut db = Database::in_memory().unwrap();
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_install("foo", "1.0.0", "gc_key").unwrap();
+            tx.record_uninstall("foo").unwrap();
+            tx.commit().unwrap();
+        }
+
+        assert_eq!(db.get_unreferenced_store_keys().unwrap(), vec!["gc_key"]);
+        db.delete_store_ref("gc_key").unwrap();
+        assert!(db.get_unreferenced_store_keys().unwrap().is_empty());
     }
 }
