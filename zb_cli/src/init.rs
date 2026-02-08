@@ -28,7 +28,32 @@ pub fn is_writable(path: &Path) -> bool {
     }
 }
 
+/// Longest Homebrew prefix we may need to replace in Mach-O binaries.
+/// On macOS, paths inside Mach-O headers are fixed-size, so the replacement
+/// prefix must be no longer than the original.  `/opt/homebrew` = 13 chars.
+const MAX_PREFIX_LEN_MACOS: usize = 13;
+
 pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), InitError> {
+    // On macOS, warn early if the chosen prefix is too long for Mach-O patching.
+    if cfg!(target_os = "macos") {
+        let prefix_str = prefix.to_string_lossy();
+        if prefix_str.len() > MAX_PREFIX_LEN_MACOS {
+            println!(
+                "{} Prefix \"{}\" ({} chars) exceeds the macOS Mach-O limit of {} characters.",
+                style("Warning:").yellow().bold(),
+                prefix_str,
+                prefix_str.len(),
+                MAX_PREFIX_LEN_MACOS,
+            );
+            println!("         Path-sensitive packages (e.g. git, curl) will fail to install.");
+            println!(
+                "         Consider a shorter prefix, e.g.: {}",
+                style("zb init <root> /opt/zerobrew").cyan(),
+            );
+            println!();
+        }
+    }
+
     println!("{} Initializing zerobrew...", style("==>").cyan().bold());
 
     let zerobrew_dir = match std::env::var("ZEROBREW_DIR") {
