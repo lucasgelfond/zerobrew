@@ -185,6 +185,7 @@ mod tests {
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
+            binary: None,
             revision: 0,
         };
 
@@ -215,6 +216,7 @@ mod tests {
             bottle: Bottle {
                 stable: BottleStable { files, rebuild: 0 },
             },
+            binary: None,
             revision: 0,
         };
 

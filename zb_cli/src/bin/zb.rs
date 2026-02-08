@@ -30,6 +30,14 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         return commands::init::execute(&root, &prefix, no_modify_path);
     }
 
+    if matches!(cli.command, Commands::Tap { .. } | Commands::Untap { .. }) {
+        return match cli.command {
+            Commands::Tap { tap, full } => commands::tap::execute(&root, tap, full),
+            Commands::Untap { tap, all } => commands::untap::execute(&root, tap, all),
+            _ => unreachable!(),
+        };
+    }
+
     if !matches!(cli.command, Commands::Reset { .. }) {
         ensure_init(&root, &prefix, cli.auto_init)?;
     }
@@ -54,6 +62,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         Commands::List => commands::list::execute(&mut installer),
         Commands::Info { formula } => commands::info::execute(&mut installer, formula),
         Commands::Gc => commands::gc::execute(&mut installer),
+        Commands::Tap { .. } | Commands::Untap { .. } => unreachable!(),
         Commands::Reset { yes } => commands::reset::execute(&root, &prefix, yes),
         Commands::Run { formula, args } => {
             commands::run::execute(&mut installer, formula, args).await

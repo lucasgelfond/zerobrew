@@ -92,6 +92,18 @@ pub enum Commands {
         formula: String,
     },
     Gc,
+    Tap {
+        #[arg(value_name = "TAP")]
+        tap: Option<String>,
+        #[arg(long)]
+        full: bool,
+    },
+    Untap {
+        #[arg(value_name = "TAP")]
+        tap: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
     Reset {
         #[arg(long, short = 'y')]
         yes: bool,

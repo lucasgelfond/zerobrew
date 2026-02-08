@@ -6,6 +6,7 @@ pub mod network;
 pub mod progress;
 pub mod ssl;
 pub mod storage;
+pub mod tap;
 
 // Re-exports for convenience
 pub use cellar::{Cellar, LinkedFile, Linker};

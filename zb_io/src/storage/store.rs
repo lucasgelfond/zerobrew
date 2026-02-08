@@ -95,6 +95,74 @@ impl Store {
         Ok(entry_path)
     }
 
+    pub fn ensure_binary_entry(
+        &self,
+        store_key: &str,
+        blob_path: &Path,
+        bin_name: &str,
+    ) -> Result<PathBuf, Error> {
+        let entry_path = self.entry_path(store_key);
+
+        if entry_path.exists() {
+            return Ok(entry_path);
+        }
+
+        let lock_path = self.locks_dir.join(format!("{store_key}.lock"));
+        let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to create lock file: {e}"),
+        })?;
+
+        lock_file
+            .lock_exclusive()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to acquire lock: {e}"),
+            })?;
+
+        if entry_path.exists() {
+            return Ok(entry_path);
+        }
+
+        let tmp_dir = self
+            .store_dir
+            .join(format!(".{store_key}.tmp.{}", std::process::id()));
+
+        if tmp_dir.exists() {
+            let _ = fs::remove_dir_all(&tmp_dir);
+        }
+
+        fs::create_dir_all(tmp_dir.join("bin")).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to create temp bin directory: {e}"),
+        })?;
+
+        let bin_path = tmp_dir.join("bin").join(bin_name);
+        fs::copy(blob_path, &bin_path).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to stage binary: {e}"),
+        })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&bin_path)
+                .map_err(|e| Error::StoreCorruption {
+                    message: format!("failed to read binary metadata: {e}"),
+                })?
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&bin_path, perms).map_err(|e| Error::StoreCorruption {
+                message: format!("failed to set binary permissions: {e}"),
+            })?;
+        }
+
+        if let Err(e) = fs::rename(&tmp_dir, &entry_path) {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            return Err(Error::StoreCorruption {
+                message: format!("failed to rename store entry: {e}"),
+            });
+        }
+
+        Ok(entry_path)
+    }
+
     /// Remove a store entry. This should only be called when the refcount is 0.
     pub fn remove_entry(&self, store_key: &str) -> Result<(), Error> {
         let entry_path = self.entry_path(store_key);

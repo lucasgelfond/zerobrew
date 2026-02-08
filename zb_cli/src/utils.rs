@@ -3,21 +3,21 @@ use std::path::PathBuf;
 
 pub fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
     let trimmed = name.trim();
-    if let Some((tap, formula)) = trimmed.rsplit_once('/') {
-        if tap == "homebrew/core" {
-            if formula.is_empty() {
-                return Err(zb_core::Error::MissingFormula {
-                    name: trimmed.to_string(),
+    let parts: Vec<&str> = trimmed.split('/').collect();
+    match parts.len() {
+        1 => Ok(trimmed.to_string()),
+        3 => {
+            if parts.iter().any(|p| p.is_empty()) {
+                return Err(zb_core::Error::InvalidTap {
+                    tap: trimmed.to_string(),
                 });
             }
-            return Ok(formula.to_string());
+            Ok(trimmed.to_string())
         }
-        return Err(zb_core::Error::UnsupportedTap {
-            name: trimmed.to_string(),
-        });
+        _ => Err(zb_core::Error::InvalidTap {
+            tap: trimmed.to_string(),
+        }),
     }
-
-    Ok(trimmed.to_string())
 }
 
 pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {

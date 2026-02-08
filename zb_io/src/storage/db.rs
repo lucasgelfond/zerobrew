@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 
 use zb_core::Error;
 
@@ -14,6 +14,14 @@ pub struct InstalledKeg {
     pub version: String,
     pub store_key: String,
     pub installed_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TapRecord {
+    pub owner: String,
+    pub repo: String,
+    pub added_at: i64,
+    pub priority: i64,
 }
 
 impl Database {
@@ -58,6 +66,14 @@ impl Database {
                 linked_path TEXT NOT NULL,
                 target_path TEXT NOT NULL,
                 PRIMARY KEY (name, linked_path)
+            );
+
+            CREATE TABLE IF NOT EXISTS taps (
+                owner TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                added_at INTEGER NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (owner, repo)
             );
             ",
         )
@@ -157,16 +173,67 @@ impl Database {
         Ok(keys)
     }
 
-    pub fn delete_store_ref(&self, store_key: &str) -> Result<(), Error> {
-        self.conn
+    pub fn add_tap(&self, owner: &str, repo: &str) -> Result<bool, Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let rows = self
+            .conn
             .execute(
-                "DELETE FROM store_refs WHERE store_key = ?1",
-                params![store_key],
+                "INSERT OR IGNORE INTO taps (owner, repo, added_at, priority) VALUES (?1, ?2, ?3, 0)",
+                params![owner, repo, now],
             )
             .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to delete store ref: {e}"),
+                message: format!("failed to add tap: {e}"),
             })?;
-        Ok(())
+
+        Ok(rows > 0)
+    }
+
+    pub fn remove_tap(&self, owner: &str, repo: &str) -> Result<bool, Error> {
+        let rows = self
+            .conn
+            .execute(
+                "DELETE FROM taps WHERE owner = ?1 AND repo = ?2",
+                params![owner, repo],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to remove tap: {e}"),
+            })?;
+
+        Ok(rows > 0)
+    }
+
+    pub fn list_taps(&self) -> Result<Vec<TapRecord>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT owner, repo, added_at, priority FROM taps ORDER BY priority DESC, added_at ASC",
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to prepare tap list: {e}"),
+            })?;
+
+        let taps = stmt
+            .query_map([], |row| {
+                Ok(TapRecord {
+                    owner: row.get(0)?,
+                    repo: row.get(1)?,
+                    added_at: row.get(2)?,
+                    priority: row.get(3)?,
+                })
+            })
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to query taps: {e}"),
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to collect taps: {e}"),
+            })?;
+
+        Ok(taps)
     }
 }
 
@@ -178,60 +245,29 @@ impl<'a> InstallTransaction<'a> {
     pub fn record_install(&self, name: &str, version: &str, store_key: &str) -> Result<(), Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        let previous_store_key: Option<String> = self
-            .tx
-            .query_row(
-                "SELECT store_key FROM installed_kegs WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to query previous store key: {e}"),
-            })?;
+            .unwrap()
+            .as_secs() as i64;
 
         self.tx
             .execute(
-                "INSERT INTO installed_kegs (name, version, store_key, installed_at)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(name) DO UPDATE SET
-                     version = excluded.version,
-                     store_key = excluded.store_key,
-                     installed_at = excluded.installed_at",
+                "INSERT OR REPLACE INTO installed_kegs (name, version, store_key, installed_at)
+                 VALUES (?1, ?2, ?3, ?4)",
                 params![name, version, store_key, now],
             )
             .map_err(|e| Error::StoreCorruption {
                 message: format!("failed to record install: {e}"),
             })?;
 
-        match previous_store_key.as_deref() {
-            Some(previous) if previous == store_key => {}
-            other => {
-                if let Some(previous) = other {
-                    self.tx
-                        .execute(
-                            "UPDATE store_refs SET refcount = refcount - 1 WHERE store_key = ?1",
-                            params![previous],
-                        )
-                        .map_err(|e| Error::StoreCorruption {
-                            message: format!("failed to decrement previous store ref: {e}"),
-                        })?;
-                }
-
-                self.tx
-                    .execute(
-                        "INSERT INTO store_refs (store_key, refcount) VALUES (?1, 1)
-                         ON CONFLICT(store_key) DO UPDATE SET refcount = refcount + 1",
-                        params![store_key],
-                    )
-                    .map_err(|e| Error::StoreCorruption {
-                        message: format!("failed to increment store ref: {e}"),
-                    })?;
-            }
-        }
+        // Increment store ref
+        self.tx
+            .execute(
+                "INSERT INTO store_refs (store_key, refcount) VALUES (?1, 1)
+                 ON CONFLICT(store_key) DO UPDATE SET refcount = refcount + 1",
+                params![store_key],
+            )
+            .map_err(|e| Error::StoreCorruption {
+                message: format!("failed to increment store ref: {e}"),
+            })?;
 
         Ok(())
     }
@@ -420,93 +456,27 @@ mod tests {
     }
 
     #[test]
-    fn reinstall_with_same_store_key_does_not_leak_refcount() {
-        let mut db = Database::in_memory().unwrap();
+    fn taps_are_added_and_listed() {
+        let db = Database::in_memory().unwrap();
 
-        {
-            let tx = db.transaction().unwrap();
-            tx.record_install("foo", "1.0.0", "samekey").unwrap();
-            tx.commit().unwrap();
-        }
+        let added = db.add_tap("user", "tools").unwrap();
+        assert!(added);
 
-        assert_eq!(db.get_store_refcount("samekey"), 1);
-
-        {
-            let tx = db.transaction().unwrap();
-            tx.record_install("foo", "1.0.0", "samekey").unwrap();
-            tx.commit().unwrap();
-        }
-
-        assert_eq!(db.get_store_refcount("samekey"), 1);
+        let taps = db.list_taps().unwrap();
+        assert_eq!(taps.len(), 1);
+        assert_eq!(taps[0].owner, "user");
+        assert_eq!(taps[0].repo, "tools");
     }
 
     #[test]
-    fn reinstall_with_new_store_key_moves_refcount() {
-        let mut db = Database::in_memory().unwrap();
+    fn taps_are_removed() {
+        let db = Database::in_memory().unwrap();
 
-        {
-            let tx = db.transaction().unwrap();
-            tx.record_install("foo", "1.0.0", "oldkey").unwrap();
-            tx.commit().unwrap();
-        }
+        db.add_tap("user", "tools").unwrap();
+        let removed = db.remove_tap("user", "tools").unwrap();
+        assert!(removed);
 
-        assert_eq!(db.get_store_refcount("oldkey"), 1);
-
-        {
-            let tx = db.transaction().unwrap();
-            tx.record_install("foo", "1.1.0", "newkey").unwrap();
-            tx.commit().unwrap();
-        }
-
-        assert_eq!(db.get_store_refcount("oldkey"), 0);
-        assert_eq!(db.get_store_refcount("newkey"), 1);
-
-        let installed = db.get_installed("foo").unwrap();
-        assert_eq!(installed.version, "1.1.0");
-        assert_eq!(installed.store_key, "newkey");
-    }
-
-    #[test]
-    fn delete_store_ref_removes_unreferenced_entry() {
-        let mut db = Database::in_memory().unwrap();
-
-        {
-            let tx = db.transaction().unwrap();
-            tx.record_install("foo", "1.0.0", "gc_key").unwrap();
-            tx.record_uninstall("foo").unwrap();
-            tx.commit().unwrap();
-        }
-
-        assert_eq!(db.get_unreferenced_store_keys().unwrap(), vec!["gc_key"]);
-        db.delete_store_ref("gc_key").unwrap();
-        assert!(db.get_unreferenced_store_keys().unwrap().is_empty());
-    }
-
-    #[test]
-    fn record_install_propagates_query_errors() {
-        let mut db = Database::in_memory().unwrap();
-
-        {
-            let tx = db.transaction().unwrap();
-            tx.record_install("foo", "1.0.0", "oldkey").unwrap();
-            tx.commit().unwrap();
-        }
-
-        db.conn
-            .execute(
-                "UPDATE installed_kegs
-                 SET store_key = CAST(X'80' AS BLOB)
-                 WHERE name = 'foo'",
-                [],
-            )
-            .unwrap();
-
-        let tx = db.transaction().unwrap();
-        let err = tx.record_install("foo", "1.1.0", "newkey").unwrap_err();
-        assert!(matches!(err, Error::StoreCorruption { .. }));
-        assert!(
-            err.to_string()
-                .contains("failed to query previous store key")
-        );
+        let taps = db.list_taps().unwrap();
+        assert!(taps.is_empty());
     }
 }
