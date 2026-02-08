@@ -170,6 +170,57 @@ fn add_to_path(
         let config_content = format!(
             r#"
 # zerobrew
+source "{root}/zb_env"
+"#,
+            root = root.display()
+        );
+
+        let write_result = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&config_file)
+            .and_then(|mut f| f.write_all(config_content.as_bytes()));
+        if let Err(e) = write_result {
+            println!(
+                "{} Could not write to {} due to error: {}",
+                style("Warning:").yellow().bold(),
+                config_file,
+                e
+            );
+            println!(
+                "{} Please add the following to {}:",
+                style("Info:").cyan().bold(),
+                config_file
+            );
+            println!("{}", config_content);
+        } else {
+            println!(
+                "    {} Added zerobrew configuration to {}",
+                style("✓").green(),
+                config_file
+            );
+            println!(
+                "    {} Added {} and {} to PATH",
+                style("✓").green(),
+                zerobrew_bin,
+                prefix_bin.display()
+            );
+        }
+    }
+
+    let env_file = format!("{}/zb_env", root.display());
+
+    // Check if zerobrew is already configured in env_file
+    let already_added = if let Ok(contents) = std::fs::read_to_string(&env_file) {
+        contents.contains("# zerobrew")
+    } else {
+        false
+    };
+
+    if !no_modify_path && !already_added {
+        let config_content = format!(
+            r#"
+# zerobrew
 export ZEROBREW_DIR={zerobrew_dir}
 export ZEROBREW_BIN={zerobrew_bin}
 export ZEROBREW_ROOT={root}
@@ -215,27 +266,27 @@ _zb_path_append "$ZEROBREW_PREFIX/bin"
         let write_result = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&config_file)
+            .open(&env_file)
             .and_then(|mut f| f.write_all(config_content.as_bytes()));
 
         if let Err(e) = write_result {
             println!(
                 "{} Could not write to {} due to error: {}",
                 style("Warning:").yellow().bold(),
-                config_file,
+                env_file,
                 e
             );
             println!(
                 "{} Please add the following to {}:",
                 style("Info:").cyan().bold(),
-                config_file
+                env_file
             );
             println!("{}", config_content);
         } else {
             println!(
                 "    {} Added zerobrew configuration to {}",
                 style("✓").green(),
-                config_file
+                env_file
             );
             println!(
                 "    {} Added {} and {} to PATH",
