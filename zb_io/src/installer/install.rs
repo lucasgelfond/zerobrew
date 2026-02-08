@@ -490,8 +490,37 @@ impl Installer {
 
     /// Convenience method to plan and execute in one call
     pub async fn install(&mut self, names: &[String], link: bool) -> Result<ExecuteResult, Error> {
-        let plan = self.plan(names).await?;
-        self.execute(plan, link).await
+        let (casks, formulas): (Vec<_>, Vec<_>) = names
+            .iter()
+            .cloned()
+            .partition(|name| name.starts_with("cask:"));
+
+        let mut installed = 0usize;
+
+        if !formulas.is_empty() {
+            let plan = self.plan(&formulas).await?;
+            installed += self.execute(plan, link).await?.installed;
+        }
+
+        if !casks.is_empty() {
+            installed += self.install_casks(&casks, link).await?.installed;
+        }
+
+        Ok(ExecuteResult { installed })
+    }
+
+    pub async fn install_casks(
+        &mut self,
+        names: &[String],
+        link: bool,
+    ) -> Result<ExecuteResult, Error> {
+        let mut installed = 0usize;
+        for name in names {
+            let token = name.strip_prefix("cask:").unwrap_or(name);
+            self.install_single_cask(token, link).await?;
+            installed += 1;
+        }
+        Ok(ExecuteResult { installed })
     }
 
     /// Uninstall a formula
