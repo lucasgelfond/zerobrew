@@ -153,7 +153,15 @@ fn build_rustls_config() -> Option<rustls::ClientConfig> {
     }
 
     let builder = rustls::ClientConfig::builder_with_provider(provider.into());
-    let builder = builder.with_safe_default_protocol_versions().ok()?;
+    let builder = match builder.with_safe_default_protocol_versions() {
+        Ok(builder) => builder,
+        Err(e) => {
+            eprintln!(
+                "warning: failed to configure rustls protocol versions: {e}; falling back to reqwest default TLS"
+            );
+            return None;
+        }
+    };
 
     Some(
         builder
