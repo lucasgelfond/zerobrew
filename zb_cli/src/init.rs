@@ -218,6 +218,33 @@ export ZEROBREW_ROOT={root}
 export ZEROBREW_PREFIX={prefix}
 export PKG_CONFIG_PATH="$ZEROBREW_PREFIX/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}"
 
+# SSL/TLS certificates (only if ca-certificates is installed)
+if [ -z "${{CURL_CA_BUNDLE:-}}" ] || [ -z "${{SSL_CERT_FILE:-}}" ]; then
+  if [ -f "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem" ]; then
+    [ -z "${{CURL_CA_BUNDLE:-}}" ] && export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+    [ -z "${{SSL_CERT_FILE:-}}" ] && export SSL_CERT_FILE="$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+  elif [ -f "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem" ]; then
+    [ -z "${{CURL_CA_BUNDLE:-}}" ] && export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+    [ -z "${{SSL_CERT_FILE:-}}" ] && export SSL_CERT_FILE="$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+  elif [ -f "$ZEROBREW_PREFIX/etc/openssl/cert.pem" ]; then
+    [ -z "${{CURL_CA_BUNDLE:-}}" ] && export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/etc/openssl/cert.pem"
+    [ -z "${{SSL_CERT_FILE:-}}" ] && export SSL_CERT_FILE="$ZEROBREW_PREFIX/etc/openssl/cert.pem"
+  elif [ -f "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem" ]; then
+    [ -z "${{CURL_CA_BUNDLE:-}}" ] && export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+    [ -z "${{SSL_CERT_FILE:-}}" ] && export SSL_CERT_FILE="$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+  fi
+fi
+
+if [ -z "${{SSL_CERT_DIR:-}}" ]; then
+  if [ -d "$ZEROBREW_PREFIX/etc/ca-certificates" ]; then
+    export SSL_CERT_DIR="$ZEROBREW_PREFIX/etc/ca-certificates"
+  elif [ -d "$ZEROBREW_PREFIX/etc/openssl/certs" ]; then
+    export SSL_CERT_DIR="$ZEROBREW_PREFIX/etc/openssl/certs"
+  elif [ -d "$ZEROBREW_PREFIX/share/ca-certificates" ]; then
+    export SSL_CERT_DIR="$ZEROBREW_PREFIX/share/ca-certificates"
+  fi
+fi
+
 # Helper function to safely append to PATH
 _zb_path_append() {{
     local argpath="$1"
@@ -243,6 +270,33 @@ set -gx ZEROBREW_BIN "{zerobrew_bin}"
 set -gx ZEROBREW_ROOT "{root}"
 set -gx ZEROBREW_PREFIX "{prefix}"
 set -gx PKG_CONFIG_PATH "$ZEROBREW_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+# SSL/TLS certificates (only if ca-certificates is installed)
+if not set -q CURL_CA_BUNDLE; or not set -q SSL_CERT_FILE
+    if test -f "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+        set -q CURL_CA_BUNDLE; or set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+        set -q SSL_CERT_FILE; or set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+    else if test -f "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+        set -q CURL_CA_BUNDLE; or set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+        set -q SSL_CERT_FILE; or set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+    else if test -f "$ZEROBREW_PREFIX/etc/openssl/cert.pem"
+        set -q CURL_CA_BUNDLE; or set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/etc/openssl/cert.pem"
+        set -q SSL_CERT_FILE; or set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/etc/openssl/cert.pem"
+    else if test -f "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+        set -q CURL_CA_BUNDLE; or set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+        set -q SSL_CERT_FILE; or set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+    end
+end
+
+if not set -q SSL_CERT_DIR
+    if test -d "$ZEROBREW_PREFIX/etc/ca-certificates"
+        set -gx SSL_CERT_DIR "$ZEROBREW_PREFIX/etc/ca-certificates"
+    else if test -d "$ZEROBREW_PREFIX/etc/openssl/certs"
+        set -gx SSL_CERT_DIR "$ZEROBREW_PREFIX/etc/openssl/certs"
+    else if test -d "$ZEROBREW_PREFIX/share/ca-certificates"
+        set -gx SSL_CERT_DIR "$ZEROBREW_PREFIX/share/ca-certificates"
+    end
+end
 
 if not contains -- "$ZEROBREW_BIN" $PATH
     set -gx PATH "$ZEROBREW_BIN" $PATH
@@ -453,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn add_to_path_writes_core_env_vars_without_global_ca_override() {
+    fn add_to_path_writes_core_env_vars_with_guarded_ca_setup() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -484,9 +538,17 @@ mod tests {
         assert!(content.contains(&format!("export ZEROBREW_PREFIX={}", prefix.display())));
         assert!(content.contains("export PKG_CONFIG_PATH="));
         assert!(content.contains("/lib/pkgconfig"));
-        assert!(!content.contains("CURL_CA_BUNDLE"));
-        assert!(!content.contains("SSL_CERT_FILE"));
-        assert!(!content.contains("SSL_CERT_DIR"));
+        assert!(
+            content.contains(
+                "if [ -z \"${CURL_CA_BUNDLE:-}\" ] || [ -z \"${SSL_CERT_FILE:-}\" ]; then"
+            )
+        );
+        assert!(content.contains("if [ -z \"${SSL_CERT_DIR:-}\" ]; then"));
+        assert!(content.contains("CURL_CA_BUNDLE"));
+        assert!(content.contains("SSL_CERT_FILE"));
+        assert!(content.contains("SSL_CERT_DIR"));
+        assert!(content.contains("$ZEROBREW_PREFIX/etc/openssl/cert.pem"));
+        assert!(content.contains("$ZEROBREW_PREFIX/etc/openssl/certs"));
     }
 
     #[test]
@@ -789,9 +851,12 @@ mod tests {
         let content = fs::read_to_string(&fish_config).unwrap();
         assert!(content.contains("# zerobrew"));
         assert!(content.contains("set -gx ZEROBREW_DIR"));
-        assert!(!content.contains("CURL_CA_BUNDLE"));
-        assert!(!content.contains("SSL_CERT_FILE"));
-        assert!(!content.contains("SSL_CERT_DIR"));
+        assert!(content.contains("if not set -q CURL_CA_BUNDLE; or not set -q SSL_CERT_FILE"));
+        assert!(content.contains("if not set -q SSL_CERT_DIR"));
+        assert!(content.contains("set -q CURL_CA_BUNDLE; or set -gx CURL_CA_BUNDLE"));
+        assert!(content.contains("set -q SSL_CERT_FILE; or set -gx SSL_CERT_FILE"));
+        assert!(content.contains("$ZEROBREW_PREFIX/etc/openssl/cert.pem"));
+        assert!(content.contains("$ZEROBREW_PREFIX/etc/openssl/certs"));
     }
 
     #[test]
