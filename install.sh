@@ -10,11 +10,36 @@ NC=$'\033[0m'
 
 # Error handler (defined early so it can be used during initialization)
 error_exit() {
-    local msg="$1"
-    local exit_code="${2:-1}"
+    local format="$1"
+    shift || true
+
+    local exit_code=1
+    local last_arg=""
+    local arg=""
+    for arg in "$@"; do
+        last_arg="$arg"
+    done
+    case "$last_arg" in
+    '' | *[!0-9]*)
+        ;;
+    *)
+        exit_code="$last_arg"
+        set -- "${@:1:$(($# - 1))}"
+        ;;
+    esac
+
+    if [[ $# -gt 0 ]]; then
+        local msg
+        printf -v msg "$format" "$@"
+        printf "\r\033[K"
+        printf '\033[?25h'
+        printf "%b[✗]%b %b\n" "$RED" "$NC" "$msg" >&2
+        exit "$exit_code"
+    fi
+
     printf "\r\033[K"
     printf '\033[?25h'
-    printf "%b[✗]%b %b\n" "$RED" "$NC" "$msg" >&2
+    printf "%b[✗]%b %b\n" "$RED" "$NC" "$format" >&2
     exit "$exit_code"
 }
 
