@@ -178,8 +178,8 @@ impl<'a> InstallTransaction<'a> {
     pub fn record_install(&self, name: &str, version: &str, store_key: &str) -> Result<(), Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
 
         let previous_store_key: Option<String> = self
             .tx

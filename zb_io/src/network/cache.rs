@@ -58,8 +58,8 @@ impl ApiCache {
     pub fn put(&self, url: &str, entry: &CacheEntry) -> Result<(), rusqlite::Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
 
         self.conn.execute(
             "INSERT OR REPLACE INTO api_cache (url, etag, last_modified, body, cached_at)
