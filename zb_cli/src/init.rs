@@ -208,24 +208,6 @@ export ZEROBREW_ROOT={root}
 export ZEROBREW_PREFIX={prefix}
 export PKG_CONFIG_PATH="$ZEROBREW_PREFIX/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}"
 
-# SSL/TLS certificates (only if ca-certificates is installed)
-if [ -f "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem" ]; then
-  export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
-  export SSL_CERT_FILE="$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
-elif [ -f "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem" ]; then
-  export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
-  export SSL_CERT_FILE="$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
-elif [ -f "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem" ]; then
-  export CURL_CA_BUNDLE="$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
-  export SSL_CERT_FILE="$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
-fi
-
-if [ -d "$ZEROBREW_PREFIX/etc/ca-certificates" ]; then
-  export SSL_CERT_DIR="$ZEROBREW_PREFIX/etc/ca-certificates"
-elif [ -d "$ZEROBREW_PREFIX/share/ca-certificates" ]; then
-  export SSL_CERT_DIR="$ZEROBREW_PREFIX/share/ca-certificates"
-fi
-
 # Helper function to safely append to PATH
 _zb_path_append() {{
     local argpath="$1"
@@ -251,24 +233,6 @@ set -gx ZEROBREW_BIN "{zerobrew_bin}"
 set -gx ZEROBREW_ROOT "{root}"
 set -gx ZEROBREW_PREFIX "{prefix}"
 set -gx PKG_CONFIG_PATH "$ZEROBREW_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
-
-# SSL/TLS certificates (only if ca-certificates is installed)
-if test -f "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
-    set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
-    set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
-else if test -f "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
-    set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
-    set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
-else if test -f "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
-    set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
-    set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
-end
-
-if test -d "$ZEROBREW_PREFIX/etc/ca-certificates"
-    set -gx SSL_CERT_DIR "$ZEROBREW_PREFIX/etc/ca-certificates"
-else if test -d "$ZEROBREW_PREFIX/share/ca-certificates"
-    set -gx SSL_CERT_DIR "$ZEROBREW_PREFIX/share/ca-certificates"
-end
 
 if not contains -- "$ZEROBREW_BIN" $PATH
     set -gx PATH "$ZEROBREW_BIN" $PATH
@@ -479,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn add_to_path_writes_all_env_vars() {
+    fn add_to_path_writes_core_env_vars_without_global_ca_override() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -510,17 +474,9 @@ mod tests {
         assert!(content.contains(&format!("export ZEROBREW_PREFIX={}", prefix.display())));
         assert!(content.contains("export PKG_CONFIG_PATH="));
         assert!(content.contains("/lib/pkgconfig"));
-        assert!(content.contains("if [ -f"));
-        assert!(content.contains("CURL_CA_BUNDLE"));
-        assert!(content.contains("SSL_CERT_FILE"));
-        assert!(content.contains("SSL_CERT_DIR"));
-        assert!(content.contains("export CURL_CA_BUNDLE="));
-        assert!(content.contains("export SSL_CERT_FILE="));
-        assert!(content.contains("export SSL_CERT_DIR="));
-        assert!(
-            content
-                .contains("$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem")
-        );
+        assert!(!content.contains("CURL_CA_BUNDLE"));
+        assert!(!content.contains("SSL_CERT_FILE"));
+        assert!(!content.contains("SSL_CERT_DIR"));
     }
 
     #[test]
@@ -825,6 +781,9 @@ mod tests {
         let content = fs::read_to_string(&fish_config).unwrap();
         assert!(content.contains("# zerobrew"));
         assert!(content.contains("set -gx ZEROBREW_DIR"));
+        assert!(!content.contains("CURL_CA_BUNDLE"));
+        assert!(!content.contains("SSL_CERT_FILE"));
+        assert!(!content.contains("SSL_CERT_DIR"));
     }
 
     #[test]
