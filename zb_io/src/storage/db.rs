@@ -169,26 +169,63 @@ impl<'a> InstallTransaction<'a> {
             .unwrap()
             .as_secs() as i64;
 
+        let previous_store_key: Option<String> = self
+            .tx
+            .query_row(
+                "SELECT store_key FROM installed_kegs WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .ok();
+
         self.tx
             .execute(
-                "INSERT OR REPLACE INTO installed_kegs (name, version, store_key, installed_at)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO installed_kegs (name, version, store_key, installed_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(name) DO UPDATE SET
+                     version = excluded.version,
+                     store_key = excluded.store_key,
+                     installed_at = excluded.installed_at",
                 params![name, version, store_key, now],
             )
             .map_err(|e| Error::StoreCorruption {
                 message: format!("failed to record install: {e}"),
             })?;
 
-        // Increment store ref
-        self.tx
-            .execute(
-                "INSERT INTO store_refs (store_key, refcount) VALUES (?1, 1)
-                 ON CONFLICT(store_key) DO UPDATE SET refcount = refcount + 1",
-                params![store_key],
-            )
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to increment store ref: {e}"),
-            })?;
+        match previous_store_key.as_deref() {
+            Some(previous) if previous == store_key => {}
+            Some(previous) => {
+                self.tx
+                    .execute(
+                        "UPDATE store_refs SET refcount = refcount - 1 WHERE store_key = ?1",
+                        params![previous],
+                    )
+                    .map_err(|e| Error::StoreCorruption {
+                        message: format!("failed to decrement previous store ref: {e}"),
+                    })?;
+
+                self.tx
+                    .execute(
+                        "INSERT INTO store_refs (store_key, refcount) VALUES (?1, 1)
+                         ON CONFLICT(store_key) DO UPDATE SET refcount = refcount + 1",
+                        params![store_key],
+                    )
+                    .map_err(|e| Error::StoreCorruption {
+                        message: format!("failed to increment store ref: {e}"),
+                    })?;
+            }
+            None => {
+                self.tx
+                    .execute(
+                        "INSERT INTO store_refs (store_key, refcount) VALUES (?1, 1)
+                         ON CONFLICT(store_key) DO UPDATE SET refcount = refcount + 1",
+                        params![store_key],
+                    )
+                    .map_err(|e| Error::StoreCorruption {
+                        message: format!("failed to increment store ref: {e}"),
+                    })?;
+            }
+        }
 
         Ok(())
     }
@@ -374,5 +411,52 @@ mod tests {
         }
 
         assert!(db.get_installed("foo").is_none());
+    }
+
+    #[test]
+    fn reinstall_with_same_store_key_does_not_leak_refcount() {
+        let mut db = Database::in_memory().unwrap();
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_install("foo", "1.0.0", "samekey").unwrap();
+            tx.commit().unwrap();
+        }
+
+        assert_eq!(db.get_store_refcount("samekey"), 1);
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_install("foo", "1.0.0", "samekey").unwrap();
+            tx.commit().unwrap();
+        }
+
+        assert_eq!(db.get_store_refcount("samekey"), 1);
+    }
+
+    #[test]
+    fn reinstall_with_new_store_key_moves_refcount() {
+        let mut db = Database::in_memory().unwrap();
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_install("foo", "1.0.0", "oldkey").unwrap();
+            tx.commit().unwrap();
+        }
+
+        assert_eq!(db.get_store_refcount("oldkey"), 1);
+
+        {
+            let tx = db.transaction().unwrap();
+            tx.record_install("foo", "1.1.0", "newkey").unwrap();
+            tx.commit().unwrap();
+        }
+
+        assert_eq!(db.get_store_refcount("oldkey"), 0);
+        assert_eq!(db.get_store_refcount("newkey"), 1);
+
+        let installed = db.get_installed("foo").unwrap();
+        assert_eq!(installed.version, "1.1.0");
+        assert_eq!(installed.store_key, "newkey");
     }
 }
