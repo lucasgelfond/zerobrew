@@ -1,0 +1,45 @@
++++
+title = "init"
+description = "Initialize zerobrew directories"
+weight = 9
++++
+
+## Usage
+
+```bash
+zb init
+```
+
+## Description
+
+Creates the zerobrew directory structure and initializes the database. This is automatically run by the install script, but can be run manually if needed.
+
+## What It Creates
+
+```
+/opt/zerobrew/
+├── store/      # Content-addressable package storage
+├── db/         # SQLite database
+├── cache/      # Downloaded bottles
+├── locks/      # File locks
+└── prefix/
+    ├── bin/
+    ├── Cellar/
+    ├── lib/
+    ├── include/
+    ├── share/
+    └── opt/
+```
+
+## When to Use
+
+You typically don't need to run this manually. It's useful for:
+
+- Resetting after a corrupted installation
+- Setting up zerobrew in a custom location
+- CI/CD environments
+
+```bash
+# Initialize with custom root
+ZEROBREW_ROOT=/custom/path zb init
+```

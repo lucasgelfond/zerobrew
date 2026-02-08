@@ -196,6 +196,11 @@ lint:
 test:
     cargo test --workspace -- --include-ignored
 
+[doc('Serve Zola site with live reload')]
+[group('web')]
+serve:
+    zola --root "zb_web" serve --port 2222
+
 [doc('Run benchmark comparing zerobrew vs homebrew')]
 [group('benchmark')]
 [positional-arguments]

@@ -1,0 +1,95 @@
++++
+title = "reset"
+description = "Uninstall all packages and clear the store"
+weight = 8
++++
+
+## Usage
+
+```bash
+zb reset [OPTIONS]
+```
+
+## Description
+
+Removes all installed packages, clears the store, and resets zerobrew to a clean state. This is a destructive operation.
+
+## Options
+
+{% param_field(path="-y, --yes", type="boolean") %}
+Skip confirmation prompt.
+{% end %}
+
+## Example
+
+```bash
+zb reset
+```
+
+Output:
+```
+This will remove all zerobrew packages and clear the store.
+
+The following directories will be cleared:
+  /opt/zerobrew/store/
+  /opt/zerobrew/prefix/Cellar/
+  /opt/zerobrew/prefix/opt/
+
+Continue? [y/N] y
+
+==> Removing all packages...
+==> Clearing store...
+==> Reset complete
+```
+
+## What Gets Removed
+
+| Removed | Kept |
+|---------|------|
+| All store entries | zerobrew binary (`~/.local/bin/zb`) |
+| All Cellar packages | Source code (`~/.zerobrew/`) |
+| All symlinks | Configuration in shell rc files |
+| Database contents | Empty directory structure |
+
+## Non-Interactive Mode
+
+```bash
+zb reset -y
+```
+
+{% warning() %}
+This permanently deletes all packages with no confirmation. Use carefully.
+{% end %}
+
+## Reinstalling After Reset
+
+After reset, you can reinstall packages normally:
+
+```bash
+zb reset -y
+zb install git wget jq
+```
+
+Or migrate from Homebrew again:
+
+```bash
+zb reset -y
+zb migrate
+```
+
+## Full Uninstall
+
+To completely remove zerobrew from your system:
+
+```bash
+# Reset all packages
+zb reset -y
+
+# Remove directories
+rm -rf ~/.zerobrew
+sudo rm -rf /opt/zerobrew
+rm ~/.local/bin/zb
+
+# Remove from shell config
+# Edit ~/.zshrc or ~/.bashrc and remove the zerobrew section
+```

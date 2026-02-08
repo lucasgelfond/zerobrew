@@ -1,0 +1,27 @@
+{% set docs = get_section(path="docs/_index.md") %}
+{% set current = current_url | default(value="") %}
+<div class="docs-nav">
+  <div class="docs-nav-top">
+    <a class="docs-nav-title" href="{{ docs.permalink }}">Docs</a>
+    <button class="docs-nav-toggle" type="button" aria-expanded="false" aria-controls="docs-nav-groups">
+      Menu
+    </button>
+  </div>
+  <div class="docs-nav-groups" id="docs-nav-groups">
+    {% for group in docs.extra.nav %}
+      <div class="docs-nav-group">
+        <div class="docs-nav-heading">{{ group.title }}</div>
+        <ul>
+          {% for page_path in group.pages %}
+            {% set nav_page = get_page(path=page_path) %}
+            <li>
+              <a class="{% if nav_page.permalink == current %}is-active{% endif %}" href="{{ nav_page.permalink }}">
+                {{ nav_page.title }}
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endfor %}
+  </div>
+</div>

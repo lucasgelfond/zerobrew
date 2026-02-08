@@ -1,0 +1,6 @@
+<a class="docs-card" href="{{ href | default(value="#") }}">
+  <div class="docs-card-body">
+    <div class="docs-card-title">{{ title | default(value="") }}</div>
+    <div class="docs-card-text">{{ body | markdown | safe }}</div>
+  </div>
+</a>

@@ -1,0 +1,69 @@
++++
+title = "uninstall"
+description = "Remove an installed package"
+weight = 3
++++
+
+## Usage
+
+```bash
+zb uninstall [formula]
+```
+
+## Description
+
+Removes a package from the Cellar and unlinks its executables. The package remains in the store for fast reinstallation later.
+
+## Arguments
+
+{% param_field(path="formula", type="string") %}
+The name of the package to uninstall. If omitted, shows installed packages.
+{% end %}
+
+## Examples
+
+### Uninstall a package
+
+```bash
+zb uninstall jq
+```
+
+### Check what's installed first
+
+```bash
+zb uninstall
+# Shows list of installed packages
+```
+
+## What Gets Removed
+
+When you uninstall a package:
+
+| Removed | Kept |
+|---------|------|
+| Cellar entry (`/opt/zerobrew/prefix/Cellar/jq/`) | Store entry (`/opt/zerobrew/store/{sha256}/`) |
+| Symlinks in `bin/`, `lib/`, etc. | Database record (marked uninstalled) |
+| Opt symlink (`/opt/zerobrew/prefix/opt/jq`) | Cache files |
+
+{% info() %}
+The store entry is kept so reinstallation is instant. Use `zb gc` to clean up unused store entries.
+{% end %}
+
+## Uninstall vs Reset
+
+| Command | Effect |
+|---------|--------|
+| `zb uninstall <pkg>` | Removes one package |
+| `zb reset` | Removes all packages and clears the store |
+
+## Dependencies
+
+Uninstalling a package does **not** automatically remove its dependencies. This is intentional — other packages may depend on them.
+
+To clean up orphaned dependencies:
+
+```bash
+zb gc
+```
+
+This removes store entries that are no longer needed by any installed package.

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block main %}
+  {% set breadcrumb = "Docs" %}
+  {% set docs = get_section(path="docs/_index.md") %}
+  {% set docs_nav = docs.extra.nav %}
+  {% set title = section.title | capitalize %}
+  {% set description = section.description %}
+  {% set body = section.content %}
+  {% set section_pages = section.pages %}
+  {% include "partials/docs_shell.html" %}
+  <script src="/js/docs.js" defer></script>
+{% endblock %}

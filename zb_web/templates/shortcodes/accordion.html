@@ -1,0 +1,9 @@
+<div class="docs-accordion-item">
+  <button class="docs-accordion-trigger" type="button" aria-expanded="false">
+    <span>{{ title | default(value="") }}</span>
+    <span aria-hidden="true">+</span>
+  </button>
+  <div class="docs-accordion-panel">
+    {{ body | markdown | safe }}
+  </div>
+</div>

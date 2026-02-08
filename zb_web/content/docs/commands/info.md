@@ -1,0 +1,55 @@
++++
+title = "info"
+description = "Display detailed information about a package"
+weight = 5
++++
+
+## Usage
+
+```bash
+zb info <formula>
+```
+
+## Description
+
+Shows detailed information about a package, including version, dependencies, and installation status.
+
+## Arguments
+
+{% param_field(path="formula", type="string", required=true) %}
+The name of the package to inspect.
+{% end %}
+
+## Example
+
+```bash
+zb info sqlite
+```
+
+Output:
+```
+sqlite 3.45.0
+  Description: Command-line interface for SQLite
+  Homepage: https://sqlite.org/
+  License: blessing
+
+  Dependencies:
+    readline
+
+  Installed: Yes
+  Store: /opt/zerobrew/store/a1b2c3d4.../
+  Cellar: /opt/zerobrew/prefix/Cellar/sqlite/3.45.0
+```
+
+## Information Displayed
+
+| Field | Description |
+|-------|-------------|
+| Name & Version | Package name and stable version |
+| Description | Brief package description |
+| Homepage | Project website |
+| License | Software license |
+| Dependencies | Required packages |
+| Installed | Whether currently installed |
+| Store | Path to store entry (if cached) |
+| Cellar | Path to installed location (if installed) |

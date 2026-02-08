@@ -1,0 +1,64 @@
++++
+title = "gc"
+description = "Garbage collect unused store entries"
+weight = 7
++++
+
+## Usage
+
+```bash
+zb gc
+```
+
+## Description
+
+Removes store entries that are no longer needed by any installed package. This reclaims disk space from packages that were uninstalled or updated.
+
+## Example
+
+```bash
+zb gc
+```
+
+Output:
+```
+==> Scanning store for unused entries...
+    Found 5 unused entries (245 MB)
+
+==> Removing unused entries...
+    ✓ Removed a1b2c3d4... (sqlite 3.44.0)
+    ✓ Removed e5f6g7h8... (jq 1.6)
+    ...
+
+==> Garbage collection complete
+    Freed 245 MB
+```
+
+## When to Run
+
+Run `zb gc` after:
+
+- Uninstalling packages
+- Updating packages to new versions
+- Migrating from Homebrew (to clean old versions)
+
+{% tip() %}
+zerobrew keeps old versions in the store for fast rollback. Only run `gc` when you need to reclaim disk space.
+{% end %}
+
+## What Gets Removed
+
+| Removed | Kept |
+|---------|------|
+| Store entries not referenced by installed packages | Store entries for currently installed packages |
+| Old versions of updated packages | Cache files (bottles) |
+| Dependencies of uninstalled packages | Database |
+
+## Disk Usage
+
+To check how much space zerobrew is using:
+
+```bash
+du -sh /opt/zerobrew/store
+du -sh /opt/zerobrew/cache
+```

@@ -1,0 +1,61 @@
+<section class="docs-wrap">
+  <div class="docs-inner">
+    <div class="docs-shell">
+      <aside class="docs-sidebar">
+        {% include "partials/docs_nav.html" %}
+      </aside>
+      <article class="docs-content">
+        <div class="docs-breadcrumb">
+          <a href="/docs/">{{ breadcrumb }}</a>
+        </div>
+        <header class="docs-header">
+          <h1>{{ title }}</h1>
+          {% if description %}
+            <p>{{ description }}</p>
+          {% endif %}
+        </header>
+        <div class="docs-body">
+          {{ body | safe }}
+          {% if section_pages and section_pages | length > 0 %}
+            <div class="docs-section-list">
+              {% for page in section_pages %}
+                <a class="docs-section-card" href="{{ page.permalink }}">
+                  <div class="docs-section-card-title">{{ page.title }}</div>
+                  {% if page.description %}
+                    <div class="docs-section-card-text">{{ page.description }}</div>
+                  {% endif %}
+                </a>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+{% if docs_nav %}
+  <script type="application/json" data-docs-nav-map>
+    {{ docs_nav | json_encode | safe }}
+  </script>
+{% endif %}
+<div class="docs-search" data-docs-search>
+  <div class="docs-search-overlay" data-docs-search-close></div>
+  <div class="docs-search-panel" role="dialog" aria-modal="true" aria-label="Search docs">
+    <div class="docs-search-header">
+      <input
+        class="docs-search-input"
+        type="search"
+        placeholder="Search docs"
+        aria-label="Search docs"
+        data-docs-search-input
+      />
+      <button class="docs-search-close" type="button" data-docs-search-close>
+        Esc
+      </button>
+    </div>
+    <div class="docs-search-meta" data-docs-search-meta>
+      Start typing to search the docs.
+    </div>
+    <div class="docs-search-results" role="listbox" data-docs-search-results></div>
+  </div>
+</div>

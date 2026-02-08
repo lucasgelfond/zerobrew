@@ -1,0 +1,17 @@
+<div class="docs-param">
+  <div class="docs-param-header">
+    <span class="docs-param-path">{{ path | default(value="") }}</span>
+    {% if required %}
+      <span class="docs-param-flag">required</span>
+    {% endif %}
+  </div>
+  <div class="docs-param-meta">
+    {% if type %}
+      <span class="docs-param-meta-type">type: {{ type }}</span>
+    {% endif %}
+    {% if default %}
+      <span class="docs-param-meta-default">default: {{ default }}</span>
+    {% endif %}
+  </div>
+  <div class="docs-param-body">{{ body | markdown | safe }}</div>
+</div>

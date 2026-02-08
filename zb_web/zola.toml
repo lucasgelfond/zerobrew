@@ -1,0 +1,17 @@
+base_url = "https://zerobrew.rs"
+title = "Zerobrew"
+description = "A drop-in, 5-20x faster, experimental Homebrew alternative"
+compile_sass = false
+minify_html = true
+build_search_index = true
+
+[markdown]
+external_links_target_blank = true
+lazy_async_image = true
+
+[extra]
+links = [
+    { url = "https://github.com/lucasgelfond/zerobrew", key = "Github" },
+    { url = "/docs/",                key = "Docs" },
+    { url = "/discord",              key = "Community" }
+]

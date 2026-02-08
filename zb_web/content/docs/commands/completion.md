@@ -1,0 +1,92 @@
++++
+title = "completion"
+description = "Generate shell completion scripts"
+weight = 10
++++
+
+## Usage
+
+```bash
+zb completion <shell>
+```
+
+## Description
+
+Generates shell completion scripts for tab-completion of zerobrew commands.
+
+## Arguments
+
+{% param_field(path="shell", type="string", required=true) %}
+The shell to generate completions for. One of: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+{% end %}
+
+## Setup by Shell
+
+{% tabs() %}
+{% tab(title="zsh") %}
+```bash
+# Create completions directory if needed
+mkdir -p ~/.zsh/completions
+
+# Generate completions
+zb completion zsh > ~/.zsh/completions/_zb
+
+# Add to ~/.zshrc (if not already present)
+echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
+echo 'autoload -Uz compinit && compinit' >> ~/.zshrc
+
+# Reload
+source ~/.zshrc
+```
+{% end %}
+{% tab(title="bash") %}
+```bash
+# Create completions directory
+mkdir -p ~/.local/share/bash-completion/completions
+
+# Generate completions
+zb completion bash > ~/.local/share/bash-completion/completions/zb
+
+# Reload (or restart terminal)
+source ~/.local/share/bash-completion/completions/zb
+```
+{% end %}
+{% tab(title="fish") %}
+```bash
+# Generate completions
+zb completion fish > ~/.config/fish/completions/zb.fish
+
+# Fish automatically loads completions from this directory
+```
+{% end %}
+{% tab(title="elvish") %}
+```bash
+# Generate and add to rc.elv
+zb completion elvish >> ~/.elvish/rc.elv
+```
+{% end %}
+{% tab(title="PowerShell") %}
+```powershell
+# Generate and add to profile
+zb completion powershell >> $PROFILE
+```
+{% end %}
+{% end %}
+
+## What Gets Completed
+
+After setup, you can tab-complete:
+
+- Commands: `zb ins<TAB>``zb install`
+- Subcommands: `zb completion <TAB>` → shows `bash`, `zsh`, etc.
+- Options: `zb install --<TAB>` → shows `--no-link`
+
+## Automated Setup
+
+You can also use the install script for completions:
+
+```bash
+./install-completions.sh
+```
+
+This detects your shell and installs completions automatically.

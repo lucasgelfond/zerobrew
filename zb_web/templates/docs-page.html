@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block main %}
+  {% set_global breadcrumb = "Docs" %}
+  {% set docs = get_section(path="docs/_index.md") %}
+  {% set docs_nav = docs.extra.nav %}
+  {% for group in docs.extra.nav %}
+    {% for page_path in group.pages %}
+      {% set nav_page = get_page(path=page_path) %}
+      {% if nav_page.permalink == page.permalink %}
+        {% set_global breadcrumb = group.title %}
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  {% set title = page.title | capitalize %}
+  {% set description = page.description %}
+  {% set body = page.content %}
+  {% set section_pages = [] %}
+  {% include "partials/docs_shell.html" %}
+  <script src="/js/docs.js" defer></script>
+{% endblock %}

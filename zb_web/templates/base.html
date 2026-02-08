@@ -1,0 +1,45 @@
+<html lang="en">
+  {% set context = page | default(value=section) %}
+  {% set is_home = context.path == "/" %}
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+    <link rel="shortcut icon" href="/assets/favicon.svg" />
+    <link rel="mask-icon" href="/assets/favicon.svg" />
+    <title>
+      {% block title %}{% if context.title != "" %}{{ config.title }} ~
+      {{context.title}}{% else %}{{ config.title }}{% endif %}{%endblock%}
+    </title>
+    {% if is_home %}
+      <link rel="preload" as="image" href="/assets/wave.svg" type="image/svg+xml" />
+      <link rel="preload" as="image" href="/assets/ferris.svg" type="image/svg+xml" />
+    {% endif %}
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  {% set is_docs = context.permalink and context.permalink is containing("/docs/") %}
+  <body class="{% if is_docs %}docs-page{% endif %}">
+    <header>
+      <nav>
+        <a href="/">zerobrew</a>
+        <ul>
+            {% if config.extra.links %} {% for link in config.extra.links %}
+                <li>
+                    <a href="{{ link.url }}">{{ link.key }}</a>
+                </li>
+            {% endfor %} {% endif %}
+        </ul>
+      </nav>
+    </header>
+    {% block main %}
+        {{ context.content | safe }}
+    {% endblock %}
+    <footer class="site-footer site-footer{% if is_home %}--home{% else %}--docs{% endif %}">
+      <div class="footer-inner">
+        <span>{{ config.description }}</span>
+        <span>© Zerobrew</span>
+      </div>
+    </footer>
+  </body>
+</html>

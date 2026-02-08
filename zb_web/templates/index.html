@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block main %}
+    <section class="hero-wrap">
+        <div class="hero-inner">
+            <div class="hero-row">
+                <img class="hero-ferris" src="/assets/ferris.svg" alt="" />
+                <div class="hero">
+                    {{ section.extra.hero.title | markdown | safe }}
+                </div>
+            </div>
+        </div>
+        <img class="wave" src="/assets/wave.svg" alt="" />
+    </section>
+    <section class="wave-fill">
+        <div class="wave-fill-inner">
+            <div class="info-grid">
+                <div class="install-panel" id="install">
+                    <div class="install-tabs">
+                        <div class="install-tab-group">
+                            {% for tab in section.extra.installs.tabs %}
+                                <button class="install-tab card-shadow" data-command="{{ tab.command }}">{{ tab.name }}</button>
+                            {% endfor %}
+                        </div>
+                        <button class="install-copy card-shadow" type="button" aria-label="Copy install command">
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <rect class="copy-front" x="8" y="8" width="13" height="13" rx="2"></rect>
+                                <rect x="3" y="3" width="13" height="13" rx="2"></rect>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="install-command card-shadow">
+                        <code>{{ section.extra.installs.tabs[0].command }}</code>
+                    </div>
+                    <p class="install-paragraph">{{ section.extra.installs.install_paragraph }}</p>
+                </div>
+                <div class="bench-panel" id="benchmarks">
+                    <div class="bench-card card-shadow" data-bench-count="{{ section.extra.bench.benchmarks | length }}">
+                        <div class="bench-header">
+                            <div class="bench-title">
+                                {% for bench in section.extra.bench.benchmarks %}
+                                    <span class="bench-title-item" data-bench-index="{{ loop.index0 }}">
+                                        {{ bench.title }}
+                                    </span>
+                                {% endfor %}
+                            </div>
+                            <div class="bench-controls">
+                                <button class="bench-arrow" type="button" data-direction="prev" aria-label="Previous benchmark">
+                                    <span aria-hidden="true">‹</span>
+                                </button>
+                                <button class="bench-arrow" type="button" data-direction="next" aria-label="Next benchmark">
+                                    <span aria-hidden="true">›</span>
+                                </button>
+                            </div>
+                        </div>
+                        {% for bench in section.extra.bench.benchmarks %}
+                            <div class="bench-list" data-bench-index="{{ loop.index0 }}">
+                                {% for item in bench.items %}
+                                    <div class="bench-row" style="--bench-color: {{ item.color }};">
+                                        <div class="bench-label">
+                                            <span class="bench-name">{{ item.label }}</span>
+                                            {% if item.tag != "" %}
+                                                <span class="bench-tag">{{ item.tag }}</span>
+                                            {% endif %}
+                                        </div>
+                                        <div class="bench-bar">
+                                            <span class="bench-fill" style="width: {{ item.value }}%;"></span>
+                                            {% if item.speedup %}
+                                                <span class="bench-speedup-text">{{ item.speedup }}</span>
+                                            {% endif %}
+                                        </div>
+                                        <div class="bench-time">{{ item.time }}</div>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {{ section.content | safe }}
+        </div>
+    </section>
+    <script src="/js/home.js" defer></script>
+{% endblock %}
