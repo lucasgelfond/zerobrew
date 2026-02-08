@@ -189,7 +189,12 @@ fn add_to_path(
             (home_zshrc, ShellConfigKind::Posix)
         }
     } else if shell.contains("bash") {
-        (format!("{}/.bashrc", home), ShellConfigKind::Posix)
+        let bash_profile = format!("{}/.bash_profile", home);
+        if std::path::Path::new(&bash_profile).exists() {
+            (bash_profile, ShellConfigKind::Posix)
+        } else {
+            (format!("{}/.bashrc", home), ShellConfigKind::Posix)
+        }
     } else if shell.contains("fish") {
         (
             format!("{}/.config/fish/conf.d/zerobrew.fish", home),
@@ -668,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn add_to_path_uses_bashrc_even_when_profile_exists() {
+    fn add_to_path_prefers_bash_profile_when_exists() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -681,7 +686,7 @@ mod tests {
         fs::create_dir(&prefix).unwrap();
         fs::create_dir(&root).unwrap();
 
-        // Create .bash_profile first - add_to_path should still target .bashrc
+        // Create .bash_profile first
         fs::write(&bash_profile, "# existing bash_profile\n").unwrap();
 
         unsafe {
@@ -695,10 +700,8 @@ mod tests {
 
         assert!(bash_profile.exists());
         let profile_content = fs::read_to_string(&bash_profile).unwrap();
-        assert!(!profile_content.contains("# zerobrew"));
-        assert!(bashrc.exists());
-        let bashrc_content = fs::read_to_string(&bashrc).unwrap();
-        assert!(bashrc_content.contains("# zerobrew"));
+        assert!(profile_content.contains("# zerobrew"));
+        assert!(!bashrc.exists());
     }
 
     #[test]
