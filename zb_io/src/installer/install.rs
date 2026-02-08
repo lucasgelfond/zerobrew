@@ -278,9 +278,12 @@ impl Installer {
                 Ok(download) => {
                     let idx = download.index;
                     let (formula, bottle) = &to_install[idx];
+                    let processed_name = formula.name.clone();
+                    let processed_version = formula.effective_version();
+                    let processed_store_key = bottle.sha256.clone();
 
                     report(InstallProgress::UnpackStarted {
-                        name: formula.name.clone(),
+                        name: processed_name.clone(),
                     });
 
                     // Try extraction with retry logic for corrupted downloads
@@ -298,8 +301,8 @@ impl Installer {
                     // Materialize to cellar
                     // Use effective_version() which includes rebuild suffix if applicable
                     let keg_path = match self.cellar.materialize(
-                        &formula.name,
-                        &formula.effective_version(),
+                        &processed_name,
+                        &processed_version,
                         &store_entry,
                     ) {
                         Ok(path) => path,
@@ -310,22 +313,30 @@ impl Installer {
                     };
 
                     report(InstallProgress::UnpackCompleted {
-                        name: formula.name.clone(),
+                        name: processed_name.clone(),
                     });
 
                     // Link executables if requested
                     let linked_files = if link {
                         report(InstallProgress::LinkStarted {
-                            name: formula.name.clone(),
+                            name: processed_name.clone(),
                         });
                         match self.linker.link_keg(&keg_path) {
                             Ok(files) => {
                                 report(InstallProgress::LinkCompleted {
-                                    name: formula.name.clone(),
+                                    name: processed_name.clone(),
                                 });
                                 files
                             }
                             Err(e) => {
+                                Self::cleanup_failed_install(
+                                    &self.linker,
+                                    &self.cellar,
+                                    &processed_name,
+                                    &processed_version,
+                                    &keg_path,
+                                    true,
+                                );
                                 error = Some(e);
                                 continue;
                             }
@@ -336,19 +347,25 @@ impl Installer {
 
                     // Report installation completed for this package
                     report(InstallProgress::InstallCompleted {
-                        name: formula.name.clone(),
+                        name: processed_name.clone(),
                     });
 
-                    let processed_name = formula.name.clone();
-                    let processed_version = formula.effective_version();
-                    let processed_store_key = bottle.sha256.clone();
                     let processed_links = linked_files;
 
                     // Persist successful package immediately so one later failure
                     // does not erase already completed work from DB metadata.
-                    let tx = match self.db.transaction() {
+                    let tx_result = self.db.transaction();
+                    let tx = match tx_result {
                         Ok(tx) => tx,
                         Err(e) => {
+                            Self::cleanup_failed_install(
+                                &self.linker,
+                                &self.cellar,
+                                &processed_name,
+                                &processed_version,
+                                &keg_path,
+                                link,
+                            );
                             error = Some(e);
                             continue;
                         }
@@ -357,6 +374,15 @@ impl Installer {
                     if let Err(e) =
                         tx.record_install(&processed_name, &processed_version, &processed_store_key)
                     {
+                        drop(tx);
+                        Self::cleanup_failed_install(
+                            &self.linker,
+                            &self.cellar,
+                            &processed_name,
+                            &processed_version,
+                            &keg_path,
+                            link,
+                        );
                         error = Some(e);
                         continue;
                     }
@@ -375,11 +401,28 @@ impl Installer {
                     }
 
                     if let Some(e) = link_error {
+                        drop(tx);
+                        Self::cleanup_failed_install(
+                            &self.linker,
+                            &self.cellar,
+                            &processed_name,
+                            &processed_version,
+                            &keg_path,
+                            link,
+                        );
                         error = Some(e);
                         continue;
                     }
 
                     if let Err(e) = tx.commit() {
+                        Self::cleanup_failed_install(
+                            &self.linker,
+                            &self.cellar,
+                            &processed_name,
+                            &processed_version,
+                            &keg_path,
+                            link,
+                        );
                         error = Some(e);
                         continue;
                     }
@@ -398,6 +441,29 @@ impl Installer {
         }
 
         Ok(ExecuteResult { installed })
+    }
+
+    fn cleanup_failed_install(
+        linker: &Linker,
+        cellar: &Cellar,
+        name: &str,
+        version: &str,
+        keg_path: &Path,
+        unlink: bool,
+    ) {
+        if unlink && let Err(e) = linker.unlink_keg(keg_path) {
+            eprintln!(
+                "warning: failed to clean up links for {}@{} after install error: {}",
+                name, version, e
+            );
+        }
+
+        if let Err(e) = cellar.remove_keg(name, version) {
+            eprintln!(
+                "warning: failed to remove keg for {}@{} after install error: {}",
+                name, version, e
+            );
+        }
     }
 
     /// Convenience method to plan and execute in one call
@@ -1130,6 +1196,79 @@ mod tests {
         assert!(installer.db.get_installed("goodpkg").is_some());
         assert!(installer.db.get_installed("badpkg").is_none());
         assert!(root.join("cellar/goodpkg/1.0.0").exists());
+    }
+
+    #[tokio::test]
+    async fn db_persist_failure_cleans_materialized_and_linked_files() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let bottle = create_bottle_tarball("rollbackme");
+        let bottle_sha = sha256_hex(&bottle);
+
+        let tag = get_test_bottle_tag();
+        let formula_json = format!(
+            r#"{{
+                "name": "rollbackme",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "{}": {{
+                                "url": "{}/bottles/rollbackme-1.0.0.{}.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            tag,
+            mock_server.uri(),
+            tag,
+            bottle_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/rollbackme.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/bottles/rollbackme-1.0.0.{}.bottle.tar.gz",
+                tag
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let db_path = root.join("db/zb.sqlite3");
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&db_path).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+
+        // Force metadata persistence to fail after filesystem work is done.
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute("DROP TABLE installed_kegs", []).unwrap();
+
+        let result = installer.install(&["rollbackme".to_string()], true).await;
+        assert!(result.is_err());
+
+        assert!(!root.join("cellar/rollbackme/1.0.0").exists());
+        assert!(!prefix.join("bin/rollbackme").exists());
+        assert!(!prefix.join("opt/rollbackme").exists());
+        assert!(root.join("store").join(&bottle_sha).exists());
     }
 
     #[tokio::test]
