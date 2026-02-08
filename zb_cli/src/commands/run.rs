@@ -1,6 +1,6 @@
 use console::style;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use zb_io::Installer;
 
@@ -71,9 +71,7 @@ pub async fn execute(
     let mut cmd = Command::new(&bin_path);
     cmd.args(&args);
 
-    if let Ok(prefix_str) = std::env::var("ZEROBREW_PREFIX") {
-        let prefix_path = PathBuf::from(&prefix_str);
-
+    if let Some(prefix_path) = detect_runtime_prefix(&bin_path) {
         if let Some(ca_bundle) = zb_io::find_ca_bundle_from_prefix(&prefix_path) {
             cmd.env("CURL_CA_BUNDLE", &ca_bundle);
             cmd.env("SSL_CERT_FILE", &ca_bundle);
@@ -99,6 +97,28 @@ pub async fn execute(
     Err(zb_core::Error::ExecutionError {
         message: format!("failed to execute '{}': {}", formula, err),
     })
+}
+
+fn detect_runtime_prefix(bin_path: &Path) -> Option<PathBuf> {
+    let env_prefix = std::env::var("ZEROBREW_PREFIX").ok();
+    detect_runtime_prefix_with_env(bin_path, env_prefix.as_deref())
+}
+
+fn detect_runtime_prefix_with_env(bin_path: &Path, env_prefix: Option<&str>) -> Option<PathBuf> {
+    if let Some(prefix) = env_prefix {
+        return Some(PathBuf::from(prefix));
+    }
+
+    for ancestor in bin_path.ancestors() {
+        let Some(name) = ancestor.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name == "Cellar" || name == "cellar" {
+            return ancestor.parent().map(Path::to_path_buf);
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -343,5 +363,26 @@ mod tests {
             "/opt/test/prefix/opt/ca-certificates/share/ca-certificates/cacert.pem"
         );
         assert_eq!(ca_dir, "/opt/test/prefix/etc/ca-certificates");
+    }
+
+    #[test]
+    fn detect_runtime_prefix_prefers_env_var() {
+        let bin_path = PathBuf::from("/tmp/prefix/Cellar/foo/1.0.0/bin/foo");
+        let detected = detect_runtime_prefix_with_env(&bin_path, Some("/env/prefix"));
+        assert_eq!(detected, Some(PathBuf::from("/env/prefix")));
+    }
+
+    #[test]
+    fn detect_runtime_prefix_from_cellar_path() {
+        let bin_path = PathBuf::from("/opt/zerobrew/prefix/Cellar/foo/1.0.0/bin/foo");
+        let detected = detect_runtime_prefix_with_env(&bin_path, None);
+        assert_eq!(detected, Some(PathBuf::from("/opt/zerobrew/prefix")));
+    }
+
+    #[test]
+    fn detect_runtime_prefix_from_lowercase_cellar_path() {
+        let bin_path = PathBuf::from("/opt/zerobrew/cellar/foo/1.0.0/bin/foo");
+        let detected = detect_runtime_prefix_with_env(&bin_path, None);
+        assert_eq!(detected, Some(PathBuf::from("/opt/zerobrew")));
     }
 }
