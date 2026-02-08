@@ -134,7 +134,12 @@ fn upsert_managed_block(existing: &str, managed_block: &str) -> String {
     if let Some(start_idx) = existing.find(ZB_BLOCK_START)
         && let Some(end_rel_idx) = existing[start_idx..].find(ZB_BLOCK_END)
     {
-        let end_idx = start_idx + end_rel_idx + ZB_BLOCK_END.len();
+        let mut end_idx = start_idx + end_rel_idx + ZB_BLOCK_END.len();
+        if existing[end_idx..].starts_with("\r\n") {
+            end_idx += 2;
+        } else if existing[end_idx..].starts_with('\n') {
+            end_idx += 1;
+        }
         let mut out = String::with_capacity(existing.len() + managed_block.len());
         out.push_str(&existing[..start_idx]);
         out.push_str(managed_block);
@@ -814,5 +819,21 @@ mod tests {
         assert!(home_zshrc.exists());
         let content = fs::read_to_string(&home_zshrc).unwrap();
         assert!(content.contains("# zerobrew"));
+    }
+
+    #[test]
+    fn upsert_managed_block_replacement_consumes_trailing_newline() {
+        let managed_block =
+            format!("{ZB_BLOCK_START}\n# zerobrew\nexport ZEROBREW_DIR=/new\n{ZB_BLOCK_END}\n");
+        let existing = format!(
+            "prefix\n{ZB_BLOCK_START}\n# zerobrew\nexport ZEROBREW_DIR=/old\n{ZB_BLOCK_END}\npostfix\n"
+        );
+
+        let first = upsert_managed_block(&existing, &managed_block);
+        let second = upsert_managed_block(&first, &managed_block);
+
+        assert_eq!(first, second);
+        assert!(first.contains("# <<< zerobrew <<<\npostfix\n"));
+        assert!(!first.contains("# <<< zerobrew <<<\n\npostfix\n"));
     }
 }
