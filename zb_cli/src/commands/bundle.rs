@@ -46,8 +46,10 @@ fn load_manifest(path: &Path) -> Result<Vec<String>, zb_core::Error> {
             continue;
         }
 
-        if seen.insert(entry.to_string()) {
-            formulas.push(entry.to_string());
+        if let Some(parsed) = parse_brewfile_entry(entry)
+            && seen.insert(parsed.clone())
+        {
+            formulas.push(parsed);
         }
     }
 
@@ -58,6 +60,38 @@ fn load_manifest(path: &Path) -> Result<Vec<String>, zb_core::Error> {
     }
 
     Ok(formulas)
+}
+
+fn parse_brewfile_entry(line: &str) -> Option<String> {
+    if line.starts_with("tap ") {
+        return None;
+    }
+
+    if let Some(token) = parse_quoted_directive(line, "cask") {
+        return Some(format!("cask:{token}"));
+    }
+
+    if let Some(formula) = parse_quoted_directive(line, "brew") {
+        return Some(formula.to_string());
+    }
+
+    Some(line.to_string())
+}
+
+fn parse_quoted_directive<'a>(line: &'a str, directive: &str) -> Option<&'a str> {
+    if !line.starts_with(directive) {
+        return None;
+    }
+
+    let rest = line[directive.len()..].trim_start();
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+
+    let tail = &rest[1..];
+    let end = tail.find(quote)?;
+    Some(&tail[..end])
 }
 
 #[cfg(test)]
@@ -117,5 +151,18 @@ mod tests {
             }
             other => panic!("expected file error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn load_manifest_parses_brewfile_cask_and_brew_entries() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "tap \"homebrew/cask\"\nbrew \"wget\"\ncask \"docker-desktop\"\n"
+        )
+        .unwrap();
+
+        let entries = load_manifest(file.path()).unwrap();
+        assert_eq!(entries, vec!["wget", "cask:docker-desktop"]);
     }
 }

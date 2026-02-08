@@ -4,6 +4,7 @@ use zb_core::{Error, Formula};
 
 pub struct ApiClient {
     base_url: String,
+    cask_base_url: String,
     tap_raw_base_url: String,
     client: reqwest::Client,
     cache: Option<ApiCache>,
@@ -24,6 +25,7 @@ impl ApiClient {
 
         Self {
             base_url,
+            cask_base_url: "https://formulae.brew.sh/api/cask".to_string(),
             tap_raw_base_url: "https://raw.githubusercontent.com".to_string(),
             client,
             cache: None,
@@ -33,6 +35,12 @@ impl ApiClient {
     #[cfg(test)]
     pub fn with_tap_raw_base_url(mut self, tap_raw_base_url: String) -> Self {
         self.tap_raw_base_url = tap_raw_base_url;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_cask_base_url(mut self, cask_base_url: String) -> Self {
+        self.cask_base_url = cask_base_url;
         self
     }
 
@@ -117,6 +125,37 @@ impl ApiClient {
         })?;
 
         Ok(formula)
+    }
+
+    pub async fn get_cask(&self, token: &str) -> Result<serde_json::Value, Error> {
+        let url = format!("{}/{}.json", self.cask_base_url, token);
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(Error::MissingFormula {
+                name: format!("cask:{token}"),
+            });
+        }
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("HTTP {}", response.status()),
+            });
+        }
+
+        response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: format!("failed to parse cask JSON: {e}"),
+            })
     }
 
     async fn get_tap_formula(
@@ -379,5 +418,29 @@ end
         assert_eq!(formula.versions.stable, "1.10.0");
         assert!(formula.dependencies.contains(&"go".to_string()));
         assert!(formula.bottle.stable.files.contains_key("arm64_sonoma"));
+    }
+
+    #[tokio::test]
+    async fn fetches_cask_json() {
+        let mock_server = MockServer::start().await;
+        let cask_json = r#"{
+  "token": "iterm2",
+  "version": "3.5.0",
+  "url": "https://example.com/iterm2.zip",
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "artifacts": [{"app":["iTerm.app"]}]
+}"#;
+
+        Mock::given(method("GET"))
+            .and(path("/iterm2.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(cask_json))
+            .mount(&mock_server)
+            .await;
+
+        let client =
+            ApiClient::with_base_url(mock_server.uri()).with_cask_base_url(mock_server.uri());
+        let cask = client.get_cask("iterm2").await.unwrap();
+        assert_eq!(cask["token"], "iterm2");
+        assert_eq!(cask["version"], "3.5.0");
     }
 }

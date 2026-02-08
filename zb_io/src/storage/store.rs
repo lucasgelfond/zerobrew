@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use fs4::fs_std::FileExt;
 
-use crate::extraction::extract::extract_tarball;
+use crate::extraction::extract::extract_archive;
 use zb_core::Error;
 
 pub struct Store {
@@ -75,8 +75,8 @@ impl Store {
             message: format!("failed to create temp directory: {e}"),
         })?;
 
-        // Extract the tarball
-        if let Err(e) = extract_tarball(blob_path, &tmp_dir) {
+        // Extract the archive
+        if let Err(e) = extract_archive(blob_path, &tmp_dir) {
             // Clean up temp directory on failure
             let _ = fs::remove_dir_all(&tmp_dir);
             return Err(e);

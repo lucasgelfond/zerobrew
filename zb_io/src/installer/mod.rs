@@ -1,3 +1,4 @@
+mod cask;
 pub mod homebrew;
 pub mod install;
 

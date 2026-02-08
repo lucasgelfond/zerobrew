@@ -23,6 +23,7 @@ fs4.workspace = true
 walkdir.workspace = true
 xz2.workspace = true
 zstd.workspace = true
+zip.workspace = true
 zb_core = { path = "../zb_core" }
 arwen = "0.0.5"
 object = "0.38.1"

@@ -1,3 +1,4 @@
+use crate::utils::normalize_formula_name;
 use console::style;
 
 pub fn execute(
@@ -13,7 +14,11 @@ pub fn execute(
         }
         installed.into_iter().map(|k| k.name).collect()
     } else {
-        formulas
+        let mut normalized = Vec::with_capacity(formulas.len());
+        for formula in formulas {
+            normalized.push(normalize_formula_name(&formula)?);
+        }
+        normalized
     };
 
     println!(
