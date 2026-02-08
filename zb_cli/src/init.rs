@@ -134,27 +134,36 @@ fn add_to_path(
     root: &Path,
     no_modify_path: bool,
 ) -> Result<(), InitError> {
+    enum ShellConfigKind {
+        Posix,
+        Fish,
+    }
+
     let shell = std::env::var("SHELL").unwrap_or_default();
     let home = std::env::var("HOME").map_err(|_| InitError::Message("HOME not set".to_string()))?;
 
-    let config_file = if shell.contains("zsh") {
+    let (config_file, shell_kind) = if shell.contains("zsh") {
         let zdotdir = std::env::var("ZDOTDIR").unwrap_or_else(|_| home.clone());
         let zshenv = format!("{}/.zshenv", zdotdir);
+        let zshrc = format!("{}/.zshrc", zdotdir);
+        let home_zshrc = format!("{}/.zshrc", home);
 
         if std::path::Path::new(&zshenv).exists() {
-            zshenv
+            (zshenv, ShellConfigKind::Posix)
+        } else if std::path::Path::new(&zshrc).exists() {
+            (zshrc, ShellConfigKind::Posix)
         } else {
-            format!("{}/.zshrc", zdotdir)
+            (home_zshrc, ShellConfigKind::Posix)
         }
     } else if shell.contains("bash") {
-        let bash_profile = format!("{}/.bash_profile", home);
-        if std::path::Path::new(&bash_profile).exists() {
-            bash_profile
-        } else {
-            format!("{}/.bashrc", home)
-        }
+        (format!("{}/.bashrc", home), ShellConfigKind::Posix)
+    } else if shell.contains("fish") {
+        (
+            format!("{}/.config/fish/conf.d/zerobrew.fish", home),
+            ShellConfigKind::Fish,
+        )
     } else {
-        format!("{}/.profile", home)
+        (format!("{}/.profile", home), ShellConfigKind::Posix)
     };
 
     let prefix_bin = prefix.join("bin");
@@ -167,8 +176,9 @@ fn add_to_path(
     };
 
     if !no_modify_path && !already_added {
-        let config_content = format!(
-            r#"
+        let config_content = match shell_kind {
+            ShellConfigKind::Posix => format!(
+                r#"
 # zerobrew
 export ZEROBREW_DIR={zerobrew_dir}
 export ZEROBREW_BIN={zerobrew_bin}
@@ -206,11 +216,61 @@ _zb_path_append() {{
 _zb_path_append "$ZEROBREW_BIN"
 _zb_path_append "$ZEROBREW_PREFIX/bin"
 "#,
-            zerobrew_dir = zerobrew_dir,
-            zerobrew_bin = zerobrew_bin,
-            root = root.display(),
-            prefix = prefix.display()
-        );
+                zerobrew_dir = zerobrew_dir,
+                zerobrew_bin = zerobrew_bin,
+                root = root.display(),
+                prefix = prefix.display()
+            ),
+            ShellConfigKind::Fish => format!(
+                r#"
+# zerobrew
+set -gx ZEROBREW_DIR "{zerobrew_dir}"
+set -gx ZEROBREW_BIN "{zerobrew_bin}"
+set -gx ZEROBREW_ROOT "{root}"
+set -gx ZEROBREW_PREFIX "{prefix}"
+set -gx PKG_CONFIG_PATH "$ZEROBREW_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+# SSL/TLS certificates (only if ca-certificates is installed)
+if test -f "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+    set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+    set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/opt/ca-certificates/share/ca-certificates/cacert.pem"
+else if test -f "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+    set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+    set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/etc/ca-certificates/cacert.pem"
+else if test -f "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+    set -gx CURL_CA_BUNDLE "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+    set -gx SSL_CERT_FILE "$ZEROBREW_PREFIX/share/ca-certificates/cacert.pem"
+end
+
+if test -d "$ZEROBREW_PREFIX/etc/ca-certificates"
+    set -gx SSL_CERT_DIR "$ZEROBREW_PREFIX/etc/ca-certificates"
+else if test -d "$ZEROBREW_PREFIX/share/ca-certificates"
+    set -gx SSL_CERT_DIR "$ZEROBREW_PREFIX/share/ca-certificates"
+end
+
+if not contains -- "$ZEROBREW_BIN" $PATH
+    set -gx PATH "$ZEROBREW_BIN" $PATH
+end
+if not contains -- "$ZEROBREW_PREFIX/bin" $PATH
+    set -gx PATH "$ZEROBREW_PREFIX/bin" $PATH
+end
+"#,
+                zerobrew_dir = zerobrew_dir,
+                zerobrew_bin = zerobrew_bin,
+                root = root.display(),
+                prefix = prefix.display()
+            ),
+        };
+
+        if let Some(parent) = std::path::Path::new(&config_file).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                InitError::Message(format!(
+                    "Failed to create shell config directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
 
         let write_result = std::fs::OpenOptions::new()
             .create(true)
@@ -611,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn add_to_path_uses_bash_profile_when_exists() {
+    fn add_to_path_uses_bashrc_even_when_profile_exists() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -624,7 +684,7 @@ mod tests {
         fs::create_dir(&prefix).unwrap();
         fs::create_dir(&root).unwrap();
 
-        // Create .bash_profile first
+        // Create .bash_profile first - add_to_path should still target .bashrc
         fs::write(&bash_profile, "# existing bash_profile\n").unwrap();
 
         unsafe {
@@ -636,11 +696,12 @@ mod tests {
 
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
 
-        // Should write to .bash_profile, not .bashrc
         assert!(bash_profile.exists());
         let profile_content = fs::read_to_string(&bash_profile).unwrap();
-        assert!(profile_content.contains("# zerobrew"));
-        assert!(!bashrc.exists());
+        assert!(!profile_content.contains("# zerobrew"));
+        assert!(bashrc.exists());
+        let bashrc_content = fs::read_to_string(&bashrc).unwrap();
+        assert!(bashrc_content.contains("# zerobrew"));
     }
 
     #[test]
@@ -660,7 +721,7 @@ mod tests {
             std::env::set_var("HOME", home.to_str().unwrap());
         }
         unsafe {
-            std::env::set_var("SHELL", "/bin/fish");
+            std::env::set_var("SHELL", "/bin/sh");
         }
 
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
@@ -684,6 +745,7 @@ mod tests {
         fs::create_dir(&zdotdir).unwrap();
         fs::create_dir(&prefix).unwrap();
         fs::create_dir(&root).unwrap();
+        fs::write(&shell_config, "# existing zshrc\n").unwrap();
 
         unsafe {
             std::env::set_var("HOME", home.to_str().unwrap());
@@ -697,9 +759,65 @@ mod tests {
 
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
 
-        // Should write to $ZDOTDIR/.zshrc
+        // Should write to $ZDOTDIR/.zshrc when it exists
         assert!(shell_config.exists());
         let content = fs::read_to_string(&shell_config).unwrap();
+        assert!(content.contains("# zerobrew"));
+    }
+
+    #[test]
+    fn add_to_path_uses_fish_conf_d_for_fish() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let prefix = tmp.path().join("prefix");
+        let root = tmp.path().join("root");
+        let fish_config = home.join(".config/fish/conf.d/zerobrew.fish");
+        let zerobrew_dir = "/home/user/.zerobrew";
+        let zerobrew_bin = "/home/user/.zerobrew/bin";
+
+        fs::create_dir(&prefix).unwrap();
+        fs::create_dir(&root).unwrap();
+
+        unsafe {
+            std::env::set_var("HOME", home.to_str().unwrap());
+            std::env::set_var("SHELL", "/usr/bin/fish");
+        }
+
+        add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
+
+        assert!(fish_config.exists());
+        let content = fs::read_to_string(&fish_config).unwrap();
+        assert!(content.contains("# zerobrew"));
+        assert!(content.contains("set -gx ZEROBREW_DIR"));
+    }
+
+    #[test]
+    fn add_to_path_falls_back_to_home_zshrc_when_zdotdir_files_missing() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let zdotdir = tmp.path().join("zsh_config");
+        let prefix = tmp.path().join("prefix");
+        let root = tmp.path().join("root");
+        let zdotdir_zshrc = zdotdir.join(".zshrc");
+        let home_zshrc = home.join(".zshrc");
+        let zerobrew_dir = "/home/user/.zerobrew";
+        let zerobrew_bin = "/home/user/.zerobrew/bin";
+
+        fs::create_dir(&zdotdir).unwrap();
+        fs::create_dir(&prefix).unwrap();
+        fs::create_dir(&root).unwrap();
+
+        unsafe {
+            std::env::set_var("HOME", home.to_str().unwrap());
+            std::env::set_var("SHELL", "/bin/zsh");
+            std::env::set_var("ZDOTDIR", zdotdir.to_str().unwrap());
+        }
+
+        add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
+
+        assert!(!zdotdir_zshrc.exists());
+        assert!(home_zshrc.exists());
+        let content = fs::read_to_string(&home_zshrc).unwrap();
         assert!(content.contains("# zerobrew"));
     }
 }
