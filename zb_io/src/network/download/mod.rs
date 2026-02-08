@@ -127,20 +127,24 @@ struct CachedToken {
 
 type TokenCache = Arc<RwLock<HashMap<String, CachedToken>>>;
 
-fn build_rustls_config() -> rustls::ClientConfig {
+fn build_rustls_config() -> Option<rustls::ClientConfig> {
     let provider = rustls::crypto::aws_lc_rs::default_provider();
 
     let mut root_store = rustls::RootCertStore::empty();
 
-    for cert in rustls_native_certs::load_native_certs().expect("failed to load native certs") {
-        root_store.add(cert).ok();
+    let cert_result = rustls_native_certs::load_native_certs();
+    for cert in cert_result.certs {
+        let _ = root_store.add(cert);
     }
 
-    rustls::ClientConfig::builder_with_provider(provider.into())
-        .with_safe_default_protocol_versions()
-        .expect("failed to set protocol versions")
-        .with_root_certificates(root_store)
-        .with_no_client_auth()
+    let builder = rustls::ClientConfig::builder_with_provider(provider.into());
+    let builder = builder.with_safe_default_protocol_versions().ok()?;
+
+    Some(
+        builder
+            .with_root_certificates(root_store)
+            .with_no_client_auth(),
+    )
 }
 
 pub struct Downloader {
@@ -148,7 +152,7 @@ pub struct Downloader {
     blob_cache: BlobCache,
     token_cache: TokenCache,
     global_semaphore: Option<Arc<Semaphore>>,
-    tls_config: Arc<rustls::ClientConfig>,
+    tls_config: Option<Arc<rustls::ClientConfig>>,
 }
 
 impl Downloader {
@@ -158,7 +162,7 @@ impl Downloader {
 
     pub fn with_semaphore(blob_cache: BlobCache, semaphore: Option<Arc<Semaphore>>) -> Self {
         // Use HTTP/2 with connection pooling for better performance
-        let tls_config = Arc::new(build_rustls_config());
+        let tls_config = build_rustls_config().map(Arc::new);
 
         Self {
             client: reqwest::Client::builder()
@@ -182,9 +186,12 @@ impl Downloader {
 
     // FIXME: extract timeout and HTTP/2 window size constants to config file
     fn create_isolated_client(&self) -> reqwest::Client {
-        reqwest::Client::builder()
-            .user_agent("zerobrew/0.1")
-            .use_preconfigured_tls(self.tls_config.clone())
+        let mut builder = reqwest::Client::builder().user_agent("zerobrew/0.1");
+        if let Some(tls_config) = &self.tls_config {
+            builder = builder.use_preconfigured_tls(tls_config.clone());
+        }
+
+        builder
             .pool_max_idle_per_host(0)
             .tcp_nodelay(true)
             .tcp_keepalive(Duration::from_secs(60))
@@ -1344,6 +1351,11 @@ mod tests {
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn build_rustls_config_does_not_panic() {
+        let _ = build_rustls_config();
+    }
 
     #[tokio::test]
     async fn valid_checksum_passes() {
