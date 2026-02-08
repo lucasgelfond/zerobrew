@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::cellar::link::{LinkedFile, Linker};
+use crate::cellar::link::Linker;
 use crate::cellar::materialize::Cellar;
 use crate::network::api::ApiClient;
 use crate::network::download::{
@@ -34,15 +34,6 @@ pub struct InstallPlan {
 
 pub struct ExecuteResult {
     pub installed: usize,
-}
-
-/// Internal struct for tracking processed packages during streaming install
-#[derive(Clone)]
-struct ProcessedPackage {
-    name: String,
-    version: String,
-    store_key: String,
-    linked_files: Vec<LinkedFile>,
 }
 
 impl Installer {
@@ -278,9 +269,7 @@ impl Installer {
             .downloader
             .download_streaming(requests, download_progress.clone());
 
-        // Track results by index to maintain install order for database records
-        let total = to_install.len();
-        let mut completed: Vec<Option<ProcessedPackage>> = vec![None; total];
+        let mut installed = 0usize;
         let mut error: Option<Error> = None;
 
         // Process downloads as they complete
@@ -350,12 +339,52 @@ impl Installer {
                         name: formula.name.clone(),
                     });
 
-                    completed[idx] = Some(ProcessedPackage {
-                        name: formula.name.clone(),
-                        version: formula.effective_version(),
-                        store_key: bottle.sha256.clone(),
-                        linked_files,
-                    });
+                    let processed_name = formula.name.clone();
+                    let processed_version = formula.effective_version();
+                    let processed_store_key = bottle.sha256.clone();
+                    let processed_links = linked_files;
+
+                    // Persist successful package immediately so one later failure
+                    // does not erase already completed work from DB metadata.
+                    let tx = match self.db.transaction() {
+                        Ok(tx) => tx,
+                        Err(e) => {
+                            error = Some(e);
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) =
+                        tx.record_install(&processed_name, &processed_version, &processed_store_key)
+                    {
+                        error = Some(e);
+                        continue;
+                    }
+
+                    let mut link_error = None;
+                    for linked in &processed_links {
+                        if let Err(e) = tx.record_linked_file(
+                            &processed_name,
+                            &processed_version,
+                            &linked.link_path.to_string_lossy(),
+                            &linked.target_path.to_string_lossy(),
+                        ) {
+                            link_error = Some(e);
+                            break;
+                        }
+                    }
+
+                    if let Some(e) = link_error {
+                        error = Some(e);
+                        continue;
+                    }
+
+                    if let Err(e) = tx.commit() {
+                        error = Some(e);
+                        continue;
+                    }
+
+                    installed += 1;
                 }
                 Err(e) => {
                     error = Some(e);
@@ -368,26 +397,7 @@ impl Installer {
             return Err(e);
         }
 
-        // Record all successful installs in database (in order)
-        for processed in completed.into_iter().flatten() {
-            let tx = self.db.transaction()?;
-            tx.record_install(&processed.name, &processed.version, &processed.store_key)?;
-
-            for linked in &processed.linked_files {
-                tx.record_linked_file(
-                    &processed.name,
-                    &processed.version,
-                    &linked.link_path.to_string_lossy(),
-                    &linked.target_path.to_string_lossy(),
-                )?;
-            }
-
-            tx.commit()?;
-        }
-
-        Ok(ExecuteResult {
-            installed: to_install.len(),
-        })
+        Ok(ExecuteResult { installed })
     }
 
     /// Convenience method to plan and execute in one call
@@ -1003,6 +1013,115 @@ mod tests {
         // Both packages should be installed
         assert!(installer.db.get_installed("mainpkg").is_some());
         assert!(installer.db.get_installed("deplib").is_some());
+    }
+
+    #[tokio::test]
+    async fn preserves_successful_installs_when_one_package_fails() {
+        use std::time::Duration;
+
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let good_bottle = create_bottle_tarball("goodpkg");
+        let good_sha = sha256_hex(&good_bottle);
+
+        let tag = get_test_bottle_tag();
+        let good_json = format!(
+            r#"{{
+                "name": "goodpkg",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "{}": {{
+                                "url": "{}/bottles/goodpkg-1.0.0.{}.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            tag,
+            mock_server.uri(),
+            tag,
+            good_sha
+        );
+
+        let bad_json = format!(
+            r#"{{
+                "name": "badpkg",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "{}": {{
+                                "url": "{}/bottles/badpkg-1.0.0.{}.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            tag,
+            mock_server.uri(),
+            tag,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/goodpkg.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&good_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/badpkg.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&bad_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/bottles/goodpkg-1.0.0.{}.bottle.tar.gz",
+                tag
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(good_bottle))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/bottles/badpkg-1.0.0.{}.bottle.tar.gz", tag)))
+            .respond_with(
+                ResponseTemplate::new(500)
+                    .set_delay(Duration::from_millis(100))
+                    .set_body_string("download failed"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+
+        let result = installer
+            .install(&["goodpkg".to_string(), "badpkg".to_string()], false)
+            .await;
+        assert!(result.is_err());
+
+        assert!(installer.db.get_installed("goodpkg").is_some());
+        assert!(installer.db.get_installed("badpkg").is_none());
+        assert!(root.join("cellar/goodpkg/1.0.0").exists());
     }
 
     #[tokio::test]
