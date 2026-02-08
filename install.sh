@@ -45,9 +45,13 @@ error_exit() {
 
 # Cleanup on exit
 BUILD_OUTPUT=""
+DOWNLOAD_TEMP_DIR=""
+DOWNLOADED_ZB_PATH=""
+DOWNLOADED_ZBX_PATH=""
 cleanup() {
     printf '\033[?25h'  # Restore cursor
     [[ -n "$BUILD_OUTPUT" && -f "$BUILD_OUTPUT" ]] && rm -f "$BUILD_OUTPUT"
+    [[ -n "$DOWNLOAD_TEMP_DIR" && -d "$DOWNLOAD_TEMP_DIR" ]] && rm -rf "$DOWNLOAD_TEMP_DIR"
 }
 trap cleanup EXIT
 
@@ -121,6 +125,10 @@ completed() {
     printf "%b[✓]%b %b\n" "$GREEN" "$NC" "$1"
 }
 
+warn() {
+    printf "%b[!]%b %b\n" "$ORANGE" "$NC" "$1" >&2
+}
+
 check_command() {
     local cmd="$1"
     local install_hint="${2:-}"
@@ -171,6 +179,120 @@ zb_init() {
     "$zb_path" init ${init_args[@]+"${init_args[@]}"} >/dev/null 2>&1 || error_exit "Failed to initialize zerobrew"
 }
 
+finalize_installation() {
+    local no_modify="$1"
+
+    # Verify the binary works
+    if ! "$ZEROBREW_BIN/zb" --version >/dev/null 2>&1; then
+        error_exit "Installation succeeded but binary does not execute properly"
+    fi
+
+    # Add zb to PATH for current session if not already present
+    if [[ ":$PATH:" != *":$ZEROBREW_BIN:"* ]]; then
+        export PATH="$ZEROBREW_BIN:$PATH"
+    fi
+
+    zb_init "$ZEROBREW_BIN/zb" "$no_modify"
+
+    print_logo
+    completed "Installation complete"
+}
+
+resolve_release_asset() {
+    local binary_name="$1"
+    local os arch
+    os=$(uname -s)
+    arch=$(uname -m)
+
+    case "$os/$arch" in
+    Darwin/arm64 | Darwin/aarch64)
+        echo "${binary_name}-darwin-arm64"
+        ;;
+    Darwin/x86_64 | Darwin/amd64)
+        echo "${binary_name}-darwin-x64"
+        ;;
+    Linux/arm64 | Linux/aarch64)
+        echo "${binary_name}-linux-arm64"
+        ;;
+    Linux/x86_64 | Linux/amd64)
+        echo "${binary_name}-linux-x64"
+        ;;
+    *)
+        return 1
+        ;;
+    esac
+}
+
+download_release_binary() {
+    local asset_name="$1"
+    local output_name="$2"
+    local required="${3:-true}"
+    local downloaded_path="$DOWNLOAD_TEMP_DIR/${output_name}"
+    local download_url="https://github.com/lucasgelfond/zerobrew/releases/latest/download/${asset_name}"
+
+    (
+        curl -fsL --retry 3 --retry-delay 1 --connect-timeout 10 \
+            "$download_url" \
+            -o "$downloaded_path" \
+            >/dev/null 2>&1
+    ) &
+    if ! spinner "Downloading ${ORANGE}${asset_name}${NC} from latest release" $!; then
+        if [[ "$required" == "true" ]]; then
+            return 1
+        fi
+        warn "Optional ${ORANGE}${asset_name}${NC} not found."
+        return 0
+    fi
+
+    if ! chmod +x "$downloaded_path"; then
+        if [[ "$required" == "true" ]]; then
+            return 1
+        fi
+        warn "Failed to prepare optional asset ${asset_name}. Continuing without it."
+        return 0
+    fi
+
+    if [[ "$output_name" == "zb" ]]; then
+        DOWNLOADED_ZB_PATH="$downloaded_path"
+    elif [[ "$output_name" == "zbx" ]]; then
+        DOWNLOADED_ZBX_PATH="$downloaded_path"
+    fi
+
+    completed "Downloaded ${ORANGE}${asset_name}${NC} from GitHub Releases"
+    return 0
+}
+
+try_release_install() {
+    local zb_asset zbx_asset
+
+    DOWNLOAD_TEMP_DIR=$(mktemp -d)
+    DOWNLOADED_ZB_PATH=""
+    DOWNLOADED_ZBX_PATH=""
+
+    if ! zb_asset=$(resolve_release_asset "zb"); then
+        warn "No prebuilt release binary for zb on $(uname -s)/$(uname -m). Falling back to source build."
+        return 1
+    fi
+
+    if ! download_release_binary "$zb_asset" "zb" "true"; then
+        warn "Release binary download failed for ${zb_asset}. Falling back to source build."
+        return 1
+    fi
+
+    if zbx_asset=$(resolve_release_asset "zbx"); then
+        download_release_binary "$zbx_asset" "zbx" "false"
+    fi
+
+    local binaries_to_install=("$DOWNLOADED_ZB_PATH")
+    if [[ -n "$DOWNLOADED_ZBX_PATH" && -f "$DOWNLOADED_ZBX_PATH" ]]; then
+        binaries_to_install+=("$DOWNLOADED_ZBX_PATH")
+    fi
+
+    install_bin "$ZEROBREW_BIN" "${binaries_to_install[@]}"
+    finalize_installation "$no_modify_path"
+    return 0
+}
+
 print_logo() {
     printf "\n"
     printf "%b▄▄▄▄▄ ▄▄▄▄▄ ▄▄▄▄   ▄▄▄ %b ▄▄▄▄  ▄▄▄▄  ▄▄▄▄▄ ▄▄   ▄▄\n" "$NC" "$ORANGE"
@@ -215,11 +337,7 @@ done
 # Skip all if binary path is provided
 if [[ ${#binary_paths[@]} -gt 0 ]]; then
     install_bin "$ZEROBREW_BIN" "${binary_paths[@]}"
-
-    zb_init "$ZEROBREW_BIN/zb" "$no_modify_path"
-
-    print_logo
-    completed "Installation complete"
+    finalize_installation "$no_modify_path"
     exit 0
 fi
 
@@ -229,6 +347,12 @@ check_command "git" "Install git using your package manager (e.g., 'brew install
 check_command "mkdir" "Your system should have mkdir installed by default"
 check_command "cp" "Your system should have cp installed by default"
 check_command "chmod" "Your system should have chmod installed by default"
+check_command "uname" "Your system should have uname installed by default"
+
+# Try latest prebuilt release first, then fall back to source build if needed.
+if try_release_install; then
+    exit 0
+fi
 
 # Check for Rust/Cargo
 if ! command -v cargo >/dev/null 2>&1; then
@@ -331,17 +455,4 @@ if [[ -z "$ZBX_PATH" || ! -f "$ZBX_PATH" ]]; then
 fi
 
 install_bin "$ZEROBREW_BIN" "$ZB_PATH" "$ZBX_PATH"
-
-# Verify the binary works
-if ! "$ZEROBREW_BIN/zb" --version >/dev/null 2>&1; then
-    error_exit "Installation succeeded but binary does not execute properly"
-fi
-
-# Add zb to PATH for current session if not already present
-if [[ ":$PATH:" != *":$ZEROBREW_BIN:"* ]]; then
-    export PATH="$ZEROBREW_BIN:$PATH"
-fi
-
-zb_init "$ZEROBREW_BIN/zb" "$no_modify_path"
-
-print_logo
+finalize_installation "$no_modify_path"
