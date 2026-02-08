@@ -468,6 +468,9 @@ mod tests {
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
 
         let content = fs::read_to_string(&shell_config).unwrap();
+        assert!(content.contains(&format!("source \"{}/zb_env\"", root.display())));
+
+        let content = fs::read_to_string(&format!("{}/zb_env", root.display())).unwrap();
         assert!(content.contains("export ZEROBREW_DIR=/home/user/.zerobrew"));
         assert!(content.contains("export ZEROBREW_BIN=/home/user/.zerobrew/bin"));
         assert!(content.contains(&format!("export ZEROBREW_ROOT={}", root.display())));
@@ -510,9 +513,12 @@ mod tests {
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
 
         let content = fs::read_to_string(&shell_config).unwrap();
-        assert!(content.contains("_zb_path_append()"));
-        assert!(content.contains("case \":${PATH}:"));
-        assert!(content.contains("_zb_path_append"));
+        assert!(content.contains(&format!("source \"{}/zb_env\"", root.display())));
+
+        let env_content = fs::read_to_string(&format!("{}/zb_env", root.display())).unwrap();
+        assert!(env_content.contains("_zb_path_append()"));
+        assert!(env_content.contains("case \":${PATH}:"));
+        assert!(env_content.contains("_zb_path_append"));
     }
 
     #[test]
@@ -538,8 +544,11 @@ mod tests {
         add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
 
         let content = fs::read_to_string(&shell_config).unwrap();
-        assert!(content.contains("_zb_path_append \"$ZEROBREW_BIN\""));
-        assert!(content.contains("_zb_path_append \"$ZEROBREW_PREFIX/bin\""));
+        assert!(content.contains(&format!("source \"{}/zb_env\"", root.display())));
+
+        let env_content = fs::read_to_string(&format!("{}/zb_env", root.display())).unwrap();
+        assert!(env_content.contains("_zb_path_append \"$ZEROBREW_BIN\""));
+        assert!(env_content.contains("_zb_path_append \"$ZEROBREW_PREFIX/bin\""));
     }
 
     #[test]
@@ -751,6 +760,9 @@ mod tests {
         // Should write to $ZDOTDIR/.zshrc
         assert!(shell_config.exists());
         let content = fs::read_to_string(&shell_config).unwrap();
-        assert!(content.contains("# zerobrew"));
+        assert!(content.contains(&format!("source \"{}/zb_env\"", root.display())));
+
+        let env_content = fs::read_to_string(&format!("{}/zb_env", root.display())).unwrap();
+        assert!(env_content.contains("export ZEROBREW_DIR=/home/user/.zerobrew"));
     }
 }
