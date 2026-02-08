@@ -55,7 +55,7 @@ case "$SHELL_NAME" in
     elif [[ -d /usr/local/etc/bash_completion.d ]]; then
       BASH_COMPLETIONS_DIR="/usr/local/etc/bash_completion.d"
     elif [[ -d ~/.bash_completion.d ]]; then
-      BASH_COMPLETIONS_DIR="~/.bash_completion.d"
+      BASH_COMPLETIONS_DIR="$HOME/.bash_completion.d"
     else
       BASH_COMPLETIONS_DIR="$HOME/.bash_completion.d"
     fi
