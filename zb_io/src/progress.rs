@@ -22,6 +22,8 @@ pub enum InstallProgress {
     LinkStarted { name: String },
     /// Linking completed for a package
     LinkCompleted { name: String },
+    /// Linking skipped (keg-only or conflict)
+    LinkSkipped { name: String, reason: String },
     /// Installation completed for a package (final state)
     InstallCompleted { name: String },
 }

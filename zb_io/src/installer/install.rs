@@ -316,8 +316,48 @@ impl Installer {
                         name: processed_name.clone(),
                     });
 
-                    // Link executables if requested
-                    let linked_files = if link {
+                    // Register the keg in the database before linking so that a
+                    // link failure never leaves an untracked keg on disk.
+                    let tx = match self.db.transaction() {
+                        Ok(tx) => tx,
+                        Err(e) => {
+                            Self::cleanup_materialized(
+                                &self.cellar,
+                                &processed_name,
+                                &processed_version,
+                            );
+                            error = Some(e);
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) =
+                        tx.record_install(&processed_name, &processed_version, &processed_store_key)
+                    {
+                        drop(tx);
+                        Self::cleanup_materialized(
+                            &self.cellar,
+                            &processed_name,
+                            &processed_version,
+                        );
+                        error = Some(e);
+                        continue;
+                    }
+
+                    if let Err(e) = tx.commit() {
+                        Self::cleanup_materialized(
+                            &self.cellar,
+                            &processed_name,
+                            &processed_version,
+                        );
+                        error = Some(e);
+                        continue;
+                    }
+
+                    // Determine whether this formula should be linked.
+                    let should_link = link && !formula.is_keg_only();
+
+                    let linked_files = if should_link {
                         report(InstallProgress::LinkStarted {
                             name: processed_name.clone(),
                         });
@@ -329,103 +369,58 @@ impl Installer {
                                 files
                             }
                             Err(e) => {
-                                Self::cleanup_failed_install(
-                                    &self.linker,
-                                    &self.cellar,
-                                    &processed_name,
-                                    &processed_version,
-                                    &keg_path,
-                                    true,
-                                );
+                                // Keg is registered; only clean up partial symlinks.
+                                let _ = self.linker.unlink_keg(&keg_path);
                                 error = Some(e);
+                                installed += 1;
+                                report(InstallProgress::InstallCompleted {
+                                    name: processed_name.clone(),
+                                });
                                 continue;
                             }
                         }
                     } else {
+                        if link && formula.is_keg_only() {
+                            let reason = match &formula.keg_only {
+                                zb_core::KegOnly::Reason(s) => s.clone(),
+                                _ if formula.name.contains('@') => "versioned formula".to_string(),
+                                _ => "keg-only formula".to_string(),
+                            };
+                            report(InstallProgress::LinkSkipped {
+                                name: processed_name.clone(),
+                                reason,
+                            });
+                        }
                         Vec::new()
                     };
 
-                    // Report installation completed for this package
+                    // Record linked files in the database.
+                    if !linked_files.is_empty()
+                        && let Ok(tx) = self.db.transaction()
+                    {
+                        let mut ok = true;
+                        for linked in &linked_files {
+                            if tx
+                                .record_linked_file(
+                                    &processed_name,
+                                    &processed_version,
+                                    &linked.link_path.to_string_lossy(),
+                                    &linked.target_path.to_string_lossy(),
+                                )
+                                .is_err()
+                            {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if ok {
+                            let _ = tx.commit();
+                        }
+                    }
+
                     report(InstallProgress::InstallCompleted {
                         name: processed_name.clone(),
                     });
-
-                    let processed_links = linked_files;
-
-                    // Persist successful package immediately so one later failure
-                    // does not erase already completed work from DB metadata.
-                    let tx_result = self.db.transaction();
-                    let tx = match tx_result {
-                        Ok(tx) => tx,
-                        Err(e) => {
-                            Self::cleanup_failed_install(
-                                &self.linker,
-                                &self.cellar,
-                                &processed_name,
-                                &processed_version,
-                                &keg_path,
-                                link,
-                            );
-                            error = Some(e);
-                            continue;
-                        }
-                    };
-
-                    if let Err(e) =
-                        tx.record_install(&processed_name, &processed_version, &processed_store_key)
-                    {
-                        drop(tx);
-                        Self::cleanup_failed_install(
-                            &self.linker,
-                            &self.cellar,
-                            &processed_name,
-                            &processed_version,
-                            &keg_path,
-                            link,
-                        );
-                        error = Some(e);
-                        continue;
-                    }
-
-                    let mut link_error = None;
-                    for linked in &processed_links {
-                        if let Err(e) = tx.record_linked_file(
-                            &processed_name,
-                            &processed_version,
-                            &linked.link_path.to_string_lossy(),
-                            &linked.target_path.to_string_lossy(),
-                        ) {
-                            link_error = Some(e);
-                            break;
-                        }
-                    }
-
-                    if let Some(e) = link_error {
-                        drop(tx);
-                        Self::cleanup_failed_install(
-                            &self.linker,
-                            &self.cellar,
-                            &processed_name,
-                            &processed_version,
-                            &keg_path,
-                            link,
-                        );
-                        error = Some(e);
-                        continue;
-                    }
-
-                    if let Err(e) = tx.commit() {
-                        Self::cleanup_failed_install(
-                            &self.linker,
-                            &self.cellar,
-                            &processed_name,
-                            &processed_version,
-                            &keg_path,
-                            link,
-                        );
-                        error = Some(e);
-                        continue;
-                    }
 
                     installed += 1;
                 }
@@ -443,21 +438,8 @@ impl Installer {
         Ok(ExecuteResult { installed })
     }
 
-    fn cleanup_failed_install(
-        linker: &Linker,
-        cellar: &Cellar,
-        name: &str,
-        version: &str,
-        keg_path: &Path,
-        unlink: bool,
-    ) {
-        if unlink && let Err(e) = linker.unlink_keg(keg_path) {
-            eprintln!(
-                "warning: failed to clean up links for {}@{} after install error: {}",
-                name, version, e
-            );
-        }
-
+    /// Remove a materialized keg that was never registered in the database.
+    fn cleanup_materialized(cellar: &Cellar, name: &str, version: &str) {
         if let Err(e) = cellar.remove_keg(name, version) {
             eprintln!(
                 "warning: failed to remove keg for {}@{} after install error: {}",

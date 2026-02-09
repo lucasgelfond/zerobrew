@@ -140,6 +140,11 @@ pub async fn execute(
                     pb.set_message("linked");
                 }
             }
+            InstallProgress::LinkSkipped { name, reason } => {
+                if let Some(pb) = bars.get(&name) {
+                    pb.set_message(format!("keg-only ({})", reason));
+                }
+            }
             InstallProgress::InstallCompleted { name } => {
                 if let Some(pb) = bars.get(&name) {
                     pb.set_style(done_style_clone.clone());
@@ -165,6 +170,29 @@ pub async fn execute(
 
     let result = match result_val {
         Ok(r) => r,
+        Err(ref e @ zb_core::Error::LinkConflict { ref conflicts }) => {
+            eprintln!();
+            eprintln!(
+                "{} The link step did not complete successfully.",
+                style("Error:").red().bold()
+            );
+            eprintln!("The formula was installed, but is not symlinked into the prefix.");
+            eprintln!();
+            eprintln!("Possible conflicting files:");
+            for c in conflicts {
+                if let Some(ref owner) = c.owned_by {
+                    eprintln!(
+                        "  {} (symlink belonging to {})",
+                        c.path.display(),
+                        style(owner).yellow()
+                    );
+                } else {
+                    eprintln!("  {}", c.path.display());
+                }
+            }
+            eprintln!();
+            return Err(e.clone());
+        }
         Err(e) => {
             for formula in &formulas {
                 suggest_homebrew(formula, &e);
