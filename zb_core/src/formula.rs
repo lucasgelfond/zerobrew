@@ -1,6 +1,25 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum KegOnly {
+    #[default]
+    No,
+    Yes,
+    Reason(String),
+}
+
+impl<'de> Deserialize<'de> for KegOnly {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::Bool(true) => Ok(KegOnly::Yes),
+            serde_json::Value::String(s) => Ok(KegOnly::Reason(s)),
+            _ => Ok(KegOnly::No),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Formula {
     pub name: String,
@@ -9,6 +28,8 @@ pub struct Formula {
     pub bottle: Bottle,
     #[serde(default)]
     pub revision: u32,
+    #[serde(default)]
+    pub keg_only: KegOnly,
 }
 
 impl Formula {
@@ -21,6 +42,11 @@ impl Formula {
         } else {
             self.versions.stable.clone()
         }
+    }
+
+    /// Versioned formulas (name@version) are implicitly keg-only to avoid conflicts.
+    pub fn is_keg_only(&self) -> bool {
+        self.name.contains('@') || !matches!(self.keg_only, KegOnly::No)
     }
 }
 
@@ -102,9 +128,65 @@ mod tests {
 
     #[test]
     fn revision_field_defaults_to_zero() {
-        // Formulas without revision field should default to 0
         let fixture = include_str!("../fixtures/formula_foo.json");
         let formula: Formula = serde_json::from_str(fixture).unwrap();
         assert_eq!(formula.revision, 0);
+    }
+
+    #[test]
+    fn keg_only_defaults_to_no() {
+        let fixture = include_str!("../fixtures/formula_foo.json");
+        let formula: Formula = serde_json::from_str(fixture).unwrap();
+        assert_eq!(formula.keg_only, KegOnly::No);
+        assert!(!formula.is_keg_only());
+    }
+
+    #[test]
+    fn keg_only_deserializes_bool_true() {
+        let json = r#"{
+            "name": "libfoo",
+            "versions": { "stable": "1.0" },
+            "dependencies": [],
+            "keg_only": true,
+            "bottle": { "stable": { "files": {
+                "arm64_sonoma": { "url": "https://x.com/a.tar.gz", "sha256": "aa" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        assert_eq!(formula.keg_only, KegOnly::Yes);
+        assert!(formula.is_keg_only());
+    }
+
+    #[test]
+    fn keg_only_deserializes_string_reason() {
+        let json = r#"{
+            "name": "libpq",
+            "versions": { "stable": "16.0" },
+            "dependencies": [],
+            "keg_only": "it conflicts with PostgreSQL",
+            "bottle": { "stable": { "files": {
+                "arm64_sonoma": { "url": "https://x.com/a.tar.gz", "sha256": "aa" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        assert!(
+            matches!(formula.keg_only, KegOnly::Reason(ref s) if s == "it conflicts with PostgreSQL")
+        );
+        assert!(formula.is_keg_only());
+    }
+
+    #[test]
+    fn versioned_formula_is_keg_only() {
+        let json = r#"{
+            "name": "postgresql@15",
+            "versions": { "stable": "15.8" },
+            "dependencies": [],
+            "bottle": { "stable": { "files": {
+                "arm64_sonoma": { "url": "https://x.com/a.tar.gz", "sha256": "aa" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        assert_eq!(formula.keg_only, KegOnly::No);
+        assert!(formula.is_keg_only());
     }
 }

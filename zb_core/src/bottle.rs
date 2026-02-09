@@ -114,7 +114,7 @@ pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formula::{Bottle, BottleFile, BottleStable, Versions};
+    use crate::formula::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
     use std::collections::BTreeMap;
 
     #[test]
@@ -186,6 +186,7 @@ mod tests {
                 stable: BottleStable { files, rebuild: 0 },
             },
             revision: 0,
+            keg_only: KegOnly::default(),
         };
 
         let selected = select_bottle(&formula).unwrap();
@@ -216,6 +217,7 @@ mod tests {
                 stable: BottleStable { files, rebuild: 0 },
             },
             revision: 0,
+            keg_only: KegOnly::default(),
         };
 
         let err = select_bottle(&formula).unwrap_err();
@@ -248,6 +250,7 @@ mod tests {
                 stable: BottleStable { files, rebuild: 0 },
             },
             revision: 0,
+            keg_only: KegOnly::default(),
         };
 
         let err = select_bottle(&formula).unwrap_err();
