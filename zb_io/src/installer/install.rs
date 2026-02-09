@@ -354,6 +354,15 @@ impl Installer {
                         continue;
                     }
 
+                    // Always create the opt symlink so other formulas can
+                    // find keg-only dependencies via prefix/opt/{name}.
+                    if let Err(e) = self.linker.link_opt(&keg_path) {
+                        eprintln!(
+                            "warning: failed to create opt link for {}: {}",
+                            processed_name, e
+                        );
+                    }
+
                     // Determine whether this formula should be linked.
                     let should_link = link && !formula.is_keg_only();
 

@@ -350,7 +350,7 @@ impl Linker {
         Ok(())
     }
 
-    fn link_opt(&self, keg_path: &Path) -> Result<(), Error> {
+    pub fn link_opt(&self, keg_path: &Path) -> Result<(), Error> {
         let name = keg_path
             .parent()
             .and_then(|p| p.file_name())

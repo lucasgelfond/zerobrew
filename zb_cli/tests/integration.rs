@@ -65,6 +65,36 @@ impl TestEnv {
             .output()
             .unwrap_or_else(|e| panic!("failed to execute {}: {e}", bin_path.display()))
     }
+
+    /// Find a binary inside the cellar (for keg-only formulas that aren't linked).
+    fn cellar_binary(&self, formula: &str, binary: &str) -> PathBuf {
+        let cellar = self.prefix().join("Cellar").join(formula);
+        let versions: Vec<_> = std::fs::read_dir(&cellar)
+            .unwrap_or_else(|e| panic!("no cellar entry for {formula}: {e}"))
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            !versions.is_empty(),
+            "no versions found in cellar for {formula}"
+        );
+        versions[0].path().join("bin").join(binary)
+    }
+
+    fn run_cellar_binary(&self, formula: &str, binary: &str, args: &[&str]) -> Output {
+        let bin_path = self.cellar_binary(formula, binary);
+        Command::new(&bin_path)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    bin_path.parent().unwrap().display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .args(args)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to execute {}: {e}", bin_path.display()))
+    }
 }
 
 fn assert_success(output: &Output, context: &str) {
@@ -130,12 +160,19 @@ fn test_ffmpeg_formula() {
 
 #[test]
 #[ignore = "integration test"]
-fn test_curl_simple() {
+fn test_curl_keg_only() {
     let t = TestEnv::new();
 
     assert_success(&t.zb(&["install", "curl"]), "zb install curl");
 
-    let output = t.run_binary("curl", &["https://www.githubstatus.com"]);
+    // curl is keg-only (:provided_by_macos), so it should NOT be linked into bin
+    assert!(
+        !t.bin_dir().join("curl").exists(),
+        "curl should not be linked (keg-only)"
+    );
+
+    // but the binary should exist in the cellar and work
+    let output = t.run_cellar_binary("curl", "curl", &["https://www.githubstatus.com"]);
     assert_success(&output, "curl https://www.githubstatus.com");
     assert_stdout_contains(&output, "GitHub");
 }
