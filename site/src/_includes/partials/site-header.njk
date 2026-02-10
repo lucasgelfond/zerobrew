@@ -1,0 +1,10 @@
+<header>
+  <nav aria-label="Main navigation">
+    <a href="/">{{ site.title }}</a>
+    <ul>
+      {% for item in site.nav %}
+        <li><a href="{{ item.href }}">{{ item.label }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+</header>
