@@ -95,7 +95,7 @@
 .wave-fill-inner {
   max-width: var(--container);
   margin: 0 auto;
-  padding: 0 var(--space-4);
+  padding: 0;
 }
 
 .info-grid {
@@ -344,10 +344,6 @@
 @media (max-width: 900px) {
   .hero-inner {
     padding: 0 var(--space-4);
-  }
-
-  .wave-fill-inner {
-    padding: 0 var(--space-5);
   }
 
   .hero-ferris {
