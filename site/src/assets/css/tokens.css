@@ -21,4 +21,13 @@
   --space-8: 3rem;
   --space-9: 4rem;
   --space-10: 5rem;
+
+  --radius-1: 0.35rem;
+  --radius-2: 0.6rem;
+  --radius-3: 0.75rem;
+  --radius-4: 1.4rem;
+
+  --border-strong: 2px solid var(--color-fg);
+  --shadow-1: 0 2px 0 hsl(0 0% 10% / 0.15);
+  --shadow-2: 0 4px 0 hsl(0 0% 10% / 0.2);
 }

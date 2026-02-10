@@ -20,6 +20,16 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
+}
+
+body.is-home {
+  padding-bottom: 0;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
 }
 
 a {
