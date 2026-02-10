@@ -1,0 +1,13 @@
+footer {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  color: var(--color-fg);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+footer p {
+  margin: 0;
+}

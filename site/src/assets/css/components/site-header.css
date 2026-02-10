@@ -1,0 +1,23 @@
+header {
+  margin-bottom: var(--space-5);
+}
+
+header nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+
+header nav ul {
+  list-style: none;
+  display: flex;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+}
+
+header nav a {
+  text-decoration: none;
+}
