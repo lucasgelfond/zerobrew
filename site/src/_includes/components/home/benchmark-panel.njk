@@ -1,0 +1,44 @@
+<article class="bench-panel" id="benchmarks" aria-labelledby="bench-title-heading">
+  {% set benches = benchmarks.groups %}
+  <div class="bench-card card-shadow" data-bench-count="{{ benches | length }}">
+    <header class="bench-header">
+      <div class="bench-title" id="bench-title-heading">
+        {% for bench in benches %}
+          <span class="bench-title-item{% if loop.first %} is-active{% endif %}" data-bench-index="{{ loop.index0 }}">
+            {{ bench.title }}
+          </span>
+        {% endfor %}
+      </div>
+      <div class="bench-controls" aria-label="Benchmark controls">
+        <button class="bench-arrow" type="button" data-direction="prev" aria-label="Previous benchmark">
+          <span aria-hidden="true">‹</span>
+        </button>
+        <button class="bench-arrow" type="button" data-direction="next" aria-label="Next benchmark">
+          <span aria-hidden="true">›</span>
+        </button>
+      </div>
+    </header>
+
+    {% for bench in benches %}
+      <div class="bench-list{% if loop.first %} is-active{% endif %}" data-bench-index="{{ loop.index0 }}">
+        {% for item in bench.items %}
+          <div class="bench-row" style="--bench-color: {{ item.color }}">
+            <div class="bench-label">
+              <span class="bench-name">{{ item.label }}</span>
+              {% if item.tag %}
+                <span class="bench-tag">{{ item.tag }}</span>
+              {% endif %}
+            </div>
+            <div class="bench-bar">
+              <span class="bench-fill" style="width: {{ item.width }}%;"></span>
+              {% if item.speedup %}
+                <span class="bench-speedup-text">{{ item.speedup }}</span>
+              {% endif %}
+            </div>
+            <div class="bench-time">{{ item.time }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endfor %}
+  </div>
+</article>

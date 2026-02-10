@@ -1,0 +1,15 @@
+<section class="hero-wrap" aria-labelledby="hero-title">
+  <div class="hero-inner">
+    <div class="hero-row">
+      <img class="hero-ferris" src="/assets/images/ferris.svg" alt="Ferris mascot" />
+      <h1 id="hero-title" class="hero">
+        <em>{{ home.hero.brand | default("Zerobrew") }}</em>
+        {{ home.hero.line1Suffix | default("is a drop-in replacement") }}<br />
+        {{ home.hero.line2Prefix | default("for Homebrew, achieving") }}
+        <strong>{{ home.hero.line2Highlight | default("20x/5x") }}</strong><br />
+        {{ home.hero.line3 | default("the speed with the same packages.") }}
+      </h1>
+    </div>
+  </div>
+  <img class="wave" src="/assets/images/wave.svg" alt="" aria-hidden="true" />
+</section>
