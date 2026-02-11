@@ -53,13 +53,13 @@ pub async fn execute(
         println!(
             "{} Resolving dependencies ({} packages)...",
             style("==>").cyan().bold(),
-            plan.formulas.len()
+            plan.items.len()
         );
-        for f in &plan.formulas {
+        for item in &plan.items {
             println!(
                 "    {} {}",
-                style(&f.name).green(),
-                style(&f.versions.stable).dim()
+                style(&item.formula.name).green(),
+                style(&item.formula.versions.stable).dim()
             );
         }
 
