@@ -1,5 +1,6 @@
 use regex::Regex;
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use zb_core::formula::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
 use zb_core::{Error, Formula};
 
@@ -9,6 +10,41 @@ pub struct TapFormulaRef {
     pub repo: String,
     pub formula: String,
 }
+
+static VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^\s*version\s+["']([^"']+)["']"#).expect("VERSION_RE must compile")
+});
+static URL_VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?m)^\s*url\s+["'][^"']*(?:refs/tags|archive|download)/v?([0-9][0-9A-Za-z._+-]*)"#,
+    )
+    .expect("URL_VERSION_RE must compile")
+});
+static REVISION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^\s*revision\s+(\d+)\s*$"#).expect("REVISION_RE must compile")
+});
+static DEPENDS_ON_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^\s*depends_on\s+["']([^"']+)["'](.*)$"#).expect("DEPENDS_ON_RE must compile")
+});
+static BOTTLE_START_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^\s*bottle\s+do\b"#).expect("BOTTLE_START_RE must compile"));
+static END_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^\s*end\b"#).expect("END_RE must compile"));
+static DO_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\bdo\b"#).expect("DO_RE must compile"));
+static KEYWORD_START_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^\s*(if|unless|case|begin|def|class|module|for|while|until)\b"#)
+        .expect("KEYWORD_START_RE must compile")
+});
+static ROOT_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"root_url\s+["']([^"']+)["']"#).expect("ROOT_URL_RE must compile")
+});
+static REBUILD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^\s*rebuild\s+(\d+)\s*$"#).expect("REBUILD_RE must compile")
+});
+static BOTTLE_SHA_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"([a-z0-9_]+):\s*"([0-9a-f]{64})""#).expect("BOTTLE_SHA_RE must compile")
+});
 
 pub fn parse_tap_formula_ref(input: &str) -> Option<TapFormulaRef> {
     let mut parts = input.split('/');
@@ -45,8 +81,7 @@ pub fn parse_tap_formula_ruby(spec: &TapFormulaRef, source: &str) -> Result<Form
 }
 
 fn parse_version(source: &str) -> Option<String> {
-    let explicit_re = Regex::new(r#"(?m)^\s*version\s+["']([^"']+)["']"#).ok()?;
-    if let Some(v) = explicit_re
+    if let Some(v) = VERSION_RE
         .captures(source)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
@@ -54,11 +89,7 @@ fn parse_version(source: &str) -> Option<String> {
         return Some(v);
     }
 
-    let url_version_re = Regex::new(
-        r#"(?m)^\s*url\s+["'][^"']*(?:refs/tags|archive|download)/v?([0-9][0-9A-Za-z._+-]*)"#,
-    )
-    .ok()?;
-    url_version_re
+    URL_VERSION_RE
         .captures(source)
         .and_then(|c| c.get(1))
         .map(|m| normalize_inferred_version(m.as_str()))
@@ -76,8 +107,7 @@ fn normalize_inferred_version(raw: &str) -> String {
 }
 
 fn parse_revision(source: &str) -> Option<u32> {
-    let revision_re = Regex::new(r#"(?m)^\s*revision\s+(\d+)\s*$"#).ok()?;
-    revision_re
+    REVISION_RE
         .captures(source)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<u32>().ok())
@@ -85,9 +115,7 @@ fn parse_revision(source: &str) -> Option<u32> {
 
 fn parse_dependencies(source: &str) -> Vec<String> {
     let mut deps = Vec::new();
-    let dep_re = Regex::new(r#"(?m)^\s*depends_on\s+["']([^"']+)["'](.*)$"#)
-        .expect("depends_on regex must compile");
-    for cap in dep_re.captures_iter(source) {
+    for cap in DEPENDS_ON_RE.captures_iter(source) {
         let options = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         if options.contains(":build") || options.contains(":test") {
             continue;
@@ -134,12 +162,6 @@ fn parse_bottle(
 }
 
 fn extract_bottle_block(source: &str) -> Option<&str> {
-    let bottle_start_re = Regex::new(r#"^\s*bottle\s+do\b"#).ok()?;
-    let end_re = Regex::new(r#"^\s*end\b"#).ok()?;
-    let do_re = Regex::new(r#"\bdo\b"#).ok()?;
-    let keyword_start_re =
-        Regex::new(r#"^\s*(if|unless|case|begin|def|class|module|for|while|until)\b"#).ok()?;
-
     let mut offset = 0usize;
     let mut bottle_body_start: Option<usize> = None;
     let mut depth = 0usize;
@@ -150,14 +172,14 @@ fn extract_bottle_block(source: &str) -> Option<&str> {
         let trimmed = line.trim();
 
         if bottle_body_start.is_none() {
-            if bottle_start_re.is_match(trimmed) {
+            if BOTTLE_START_RE.is_match(trimmed) {
                 bottle_body_start = Some(offset);
                 depth = 1;
             }
             continue;
         }
 
-        if end_re.is_match(trimmed) {
+        if END_RE.is_match(trimmed) {
             depth = depth.saturating_sub(1);
             if depth == 0 {
                 return bottle_body_start.map(|start| &source[start..line_start]);
@@ -165,8 +187,8 @@ fn extract_bottle_block(source: &str) -> Option<&str> {
             continue;
         }
 
-        depth += do_re.find_iter(trimmed).count();
-        if keyword_start_re.is_match(trimmed) {
+        depth += DO_RE.find_iter(trimmed).count();
+        if KEYWORD_START_RE.is_match(trimmed) {
             depth += 1;
         }
     }
@@ -175,16 +197,14 @@ fn extract_bottle_block(source: &str) -> Option<&str> {
 }
 
 fn parse_root_url(block: &str) -> Option<String> {
-    let root_re = Regex::new(r#"root_url\s+["']([^"']+)["']"#).ok()?;
-    root_re
+    ROOT_URL_RE
         .captures(block)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
 }
 
 fn parse_rebuild(block: &str) -> Option<u32> {
-    let rebuild_re = Regex::new(r#"(?m)^\s*rebuild\s+(\d+)\s*$"#).ok()?;
-    rebuild_re
+    REBUILD_RE
         .captures(block)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<u32>().ok())
@@ -199,9 +219,8 @@ fn parse_bottle_files(
     block: &str,
 ) -> BTreeMap<String, BottleFile> {
     let mut files = BTreeMap::new();
-    let sha_re = Regex::new(r#"([a-z0-9_]+):\s*"([0-9a-f]{64})""#).expect("sha regex must compile");
 
-    for cap in sha_re.captures_iter(block) {
+    for cap in BOTTLE_SHA_RE.captures_iter(block) {
         let Some(tag) = cap.get(1).map(|m| m.as_str()) else {
             continue;
         };
