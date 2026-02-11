@@ -49,6 +49,66 @@ impl ApiClient {
         self
     }
 
+    pub async fn fetch_formula_rb(
+        &self,
+        ruby_source_path: &str,
+        cache_dir: &std::path::Path,
+    ) -> Result<std::path::PathBuf, Error> {
+        let url = format!(
+            "https://raw.githubusercontent.com/Homebrew/homebrew-core/master/{ruby_source_path}"
+        );
+
+        let cache_key = format!("rb:{url}");
+        if let Some(entry) = self.cache.as_ref().and_then(|c| c.get(&cache_key)) {
+            let dest = cache_dir.join(ruby_source_path.replace('/', "_"));
+            std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
+                message: format!("failed to create rb cache dir: {e}"),
+            })?;
+            std::fs::write(&dest, entry.body.as_bytes()).map_err(|e| Error::FileError {
+                message: format!("failed to write cached rb file: {e}"),
+            })?;
+            return Ok(dest);
+        }
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: format!("failed to fetch formula rb: {e}"),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("formula rb fetch returned HTTP {}", response.status()),
+            });
+        }
+
+        let body = response.text().await.map_err(|e| Error::NetworkFailure {
+            message: format!("failed to read formula rb response: {e}"),
+        })?;
+
+        if let Some(ref cache) = self.cache {
+            let entry = CacheEntry {
+                etag: None,
+                last_modified: None,
+                body: body.clone(),
+            };
+            let _ = cache.put(&cache_key, &entry);
+        }
+
+        let dest = cache_dir.join(ruby_source_path.replace('/', "_"));
+        std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
+            message: format!("failed to create rb cache dir: {e}"),
+        })?;
+        std::fs::write(&dest, body.as_bytes()).map_err(|e| Error::FileError {
+            message: format!("failed to write rb file: {e}"),
+        })?;
+
+        Ok(dest)
+    }
+
     pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
         if let Some(spec) = parse_tap_formula_ref(name) {
             return self.get_tap_formula(&spec).await;
