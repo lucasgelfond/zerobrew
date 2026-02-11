@@ -159,7 +159,7 @@ install_bin() {
         local binary_name
         binary_name=$(basename "$binary_path")
 
-        if ! install -Dm755 "$binary_path" "$target_dir/$binary_name"; then
+        if ! install -m755 "$binary_path" "$target_dir/$binary_name"; then
             error_exit "Failed to copy $binary_name to $target_dir"
         fi
 
