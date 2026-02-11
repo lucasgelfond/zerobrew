@@ -91,6 +91,47 @@ impl Cellar {
         Ok(keg_path)
     }
 
+    /// Scan the cellar directory and return all (name, version) pairs found on disk.
+    pub fn scan_kegs(&self) -> Result<Vec<(String, String)>, Error> {
+        let mut kegs = Vec::new();
+
+        let entries = std::fs::read_dir(&self.cellar_dir).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to read cellar directory: {e}"),
+        })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| Error::StoreCorruption {
+                message: format!("failed to read cellar entry: {e}"),
+            })?;
+
+            if !entry.path().is_dir() {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            let versions =
+                std::fs::read_dir(entry.path()).map_err(|e| Error::StoreCorruption {
+                    message: format!("failed to read keg directory for {name}: {e}"),
+                })?;
+
+            for version_entry in versions {
+                let version_entry = version_entry.map_err(|e| Error::StoreCorruption {
+                    message: format!("failed to read version entry: {e}"),
+                })?;
+
+                if !version_entry.path().is_dir() {
+                    continue;
+                }
+
+                let version = version_entry.file_name().to_string_lossy().to_string();
+                kegs.push((name.clone(), version));
+            }
+        }
+
+        Ok(kegs)
+    }
+
     pub fn remove_keg(&self, name: &str, version: &str) -> Result<(), Error> {
         let keg_path = self.keg_path(name, version);
 
