@@ -170,7 +170,7 @@ impl ApiClient {
         } else {
             vec![format!("homebrew-{}", spec.repo), spec.repo.clone()]
         };
-        let candidate_paths = vec![
+        let candidate_paths = [
             format!("Formula/{}.rb", spec.formula),
             format!(
                 "Formula/{}/{}.rb",
@@ -178,38 +178,54 @@ impl ApiClient {
                 spec.formula
             ),
         ];
-        let branches = vec!["HEAD", "main", "master"];
+        let branches = ["main", "master"];
 
         let mut last_status: Option<reqwest::StatusCode> = None;
+        let mut last_network_error: Option<Error> = None;
 
         for repo in candidate_repos {
-            for branch in &branches {
-                for path in &candidate_paths {
-                    let url = format!(
-                        "{}/{}/{}/{}/{}",
-                        self.tap_raw_base_url.trim_end_matches('/'),
-                        spec.owner,
-                        repo,
-                        branch,
-                        path
-                    );
-                    let response =
-                        self.client
-                            .get(&url)
-                            .send()
-                            .await
-                            .map_err(|e| Error::NetworkFailure {
+            for branch in branches {
+                let first_url = format!(
+                    "{}/{}/{}/{}/{}",
+                    self.tap_raw_base_url.trim_end_matches('/'),
+                    spec.owner,
+                    repo,
+                    branch,
+                    candidate_paths[0]
+                );
+                let second_url = format!(
+                    "{}/{}/{}/{}/{}",
+                    self.tap_raw_base_url.trim_end_matches('/'),
+                    spec.owner,
+                    repo,
+                    branch,
+                    candidate_paths[1]
+                );
+
+                let (first_response, second_response) = tokio::join!(
+                    self.client.get(&first_url).send(),
+                    self.client.get(&second_url).send()
+                );
+
+                for response in [first_response, second_response] {
+                    match response {
+                        Ok(response) => {
+                            if response.status().is_success() {
+                                let body =
+                                    response.text().await.map_err(|e| Error::NetworkFailure {
+                                        message: format!("failed to read tap formula body: {e}"),
+                                    })?;
+                                return parse_tap_formula_ruby(spec, &body);
+                            }
+
+                            last_status = Some(response.status());
+                        }
+                        Err(e) => {
+                            last_network_error = Some(Error::NetworkFailure {
                                 message: e.to_string(),
-                            })?;
-
-                    if response.status().is_success() {
-                        let body = response.text().await.map_err(|e| Error::NetworkFailure {
-                            message: format!("failed to read tap formula body: {e}"),
-                        })?;
-                        return parse_tap_formula_ruby(spec, &body);
+                            });
+                        }
                     }
-
-                    last_status = Some(response.status());
                 }
             }
         }
@@ -218,6 +234,10 @@ impl ApiClient {
             return Err(Error::MissingFormula {
                 name: format!("{}/{}/{}", spec.owner, spec.repo, spec.formula),
             });
+        }
+
+        if let Some(err) = last_network_error {
+            return Err(err);
         }
 
         Err(Error::NetworkFailure {
