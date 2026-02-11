@@ -441,6 +441,66 @@ end
     }
 
     #[tokio::test]
+    async fn falls_back_to_master_when_main_missing_for_tap_formula() {
+        let mock_server = MockServer::start().await;
+        let rb = r#"
+class Terraform < Formula
+  version "1.10.0"
+  bottle do
+    root_url "https://ghcr.io/v2/hashicorp/tap"
+    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  end
+end
+"#;
+
+        Mock::given(method("GET"))
+            .and(path("/hashicorp/homebrew-tap/main/Formula/terraform.rb"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/hashicorp/homebrew-tap/master/Formula/terraform.rb"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(rb))
+            .mount(&mock_server)
+            .await;
+
+        let client =
+            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
+
+        assert_eq!(formula.name, "terraform");
+        assert_eq!(formula.versions.stable, "1.10.0");
+    }
+
+    #[tokio::test]
+    async fn resolves_tap_formula_from_letter_subdirectory_path() {
+        let mock_server = MockServer::start().await;
+        let rb = r#"
+class Terraform < Formula
+  version "1.10.0"
+  bottle do
+    root_url "https://ghcr.io/v2/hashicorp/tap"
+    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  end
+end
+"#;
+
+        Mock::given(method("GET"))
+            .and(path("/hashicorp/homebrew-tap/main/Formula/t/terraform.rb"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(rb))
+            .mount(&mock_server)
+            .await;
+
+        let client =
+            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
+
+        assert_eq!(formula.name, "terraform");
+        assert_eq!(formula.versions.stable, "1.10.0");
+    }
+
+    #[tokio::test]
     async fn fetches_cask_json() {
         let mock_server = MockServer::start().await;
         let cask_json = r#"{
