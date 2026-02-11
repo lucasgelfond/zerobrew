@@ -596,7 +596,7 @@ impl Installer {
 
         let extracted = self.store.ensure_entry(&cask.sha256, &blob_path)?;
         let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
-        if let Err(e) = self.stage_cask_binaries(&extracted, &keg_path, &cask) {
+        if let Err(e) = stage_cask_binaries(&extracted, &keg_path, &cask) {
             let _ = self.cellar.remove_keg(&cask.install_name, &cask.version);
             return Err(e);
         }
@@ -679,59 +679,58 @@ impl Installer {
 
         Ok(())
     }
+}
 
-    fn stage_cask_binaries(
-        &self,
-        extracted_root: &Path,
-        keg_path: &Path,
-        cask: &crate::installer::cask::ResolvedCask,
-    ) -> Result<(), Error> {
-        let bin_dir = keg_path.join("bin");
-        fs::create_dir_all(&bin_dir).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create cask bin dir: {e}"),
-        })?;
+fn stage_cask_binaries(
+    extracted_root: &Path,
+    keg_path: &Path,
+    cask: &crate::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    let bin_dir = keg_path.join("bin");
+    fs::create_dir_all(&bin_dir).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create cask bin dir: {e}"),
+    })?;
 
-        for binary in &cask.binaries {
-            let source = resolve_cask_source_path(extracted_root, cask, &binary.source)?;
-            if !source.exists() {
-                return Err(Error::InvalidArgument {
-                    message: format!(
-                        "cask '{}' binary source '{}' not found in archive",
-                        cask.token, binary.source
-                    ),
-                });
-            }
-
-            let target = bin_dir.join(&binary.target);
-            if target.exists() {
-                fs::remove_file(&target).map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to replace existing cask binary: {e}"),
-                })?;
-            }
-
-            fs::copy(&source, &target).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to stage cask binary '{}': {e}", binary.target),
-            })?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(&target)
-                    .map_err(|e| Error::StoreCorruption {
-                        message: format!("failed to read staged cask binary metadata: {e}"),
-                    })?
-                    .permissions();
-                if perms.mode() & 0o111 == 0 {
-                    perms.set_mode(0o755);
-                    fs::set_permissions(&target, perms).map_err(|e| Error::StoreCorruption {
-                        message: format!("failed to make staged cask binary executable: {e}"),
-                    })?;
-                }
-            }
+    for binary in &cask.binaries {
+        let source = resolve_cask_source_path(extracted_root, cask, &binary.source)?;
+        if !source.exists() {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "cask '{}' binary source '{}' not found in archive",
+                    cask.token, binary.source
+                ),
+            });
         }
 
-        Ok(())
+        let target = bin_dir.join(&binary.target);
+        if target.exists() {
+            fs::remove_file(&target).map_err(|e| Error::StoreCorruption {
+                message: format!("failed to replace existing cask binary: {e}"),
+            })?;
+        }
+
+        fs::copy(&source, &target).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to stage cask binary '{}': {e}", binary.target),
+        })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&target)
+                .map_err(|e| Error::StoreCorruption {
+                    message: format!("failed to read staged cask binary metadata: {e}"),
+                })?
+                .permissions();
+            if perms.mode() & 0o111 == 0 {
+                perms.set_mode(0o755);
+                fs::set_permissions(&target, perms).map_err(|e| Error::StoreCorruption {
+                    message: format!("failed to make staged cask binary executable: {e}"),
+                })?;
+            }
+        }
     }
+
+    Ok(())
 }
 
 fn resolve_cask_source_path(
