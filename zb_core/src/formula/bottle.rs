@@ -114,12 +114,12 @@ pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formula::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
+    use crate::formula::types::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
     use std::collections::BTreeMap;
 
     #[test]
     fn selects_platform_bottle() {
-        let fixture = include_str!("../fixtures/formula_foo.json");
+        let fixture = include_str!("../../fixtures/formula_foo.json");
         let formula: Formula = serde_json::from_str(fixture).unwrap();
 
         let selected = select_bottle(&formula).unwrap();
@@ -187,6 +187,13 @@ mod tests {
             },
             revision: 0,
             keg_only: KegOnly::default(),
+            build_dependencies: Vec::new(),
+            urls: None,
+            ruby_source_path: None,
+            ruby_source_checksum: None,
+            uses_from_macos: Vec::new(),
+            requirements: Vec::new(),
+            variations: None,
         };
 
         let selected = select_bottle(&formula).unwrap();
@@ -218,6 +225,13 @@ mod tests {
             },
             revision: 0,
             keg_only: KegOnly::default(),
+            build_dependencies: Vec::new(),
+            urls: None,
+            ruby_source_path: None,
+            ruby_source_checksum: None,
+            uses_from_macos: Vec::new(),
+            requirements: Vec::new(),
+            variations: None,
         };
 
         let err = select_bottle(&formula).unwrap_err();
@@ -251,6 +265,13 @@ mod tests {
             },
             revision: 0,
             keg_only: KegOnly::default(),
+            build_dependencies: Vec::new(),
+            urls: None,
+            ruby_source_path: None,
+            ruby_source_checksum: None,
+            uses_from_macos: Vec::new(),
+            requirements: Vec::new(),
+            variations: None,
         };
 
         let err = select_bottle(&formula).unwrap_err();
