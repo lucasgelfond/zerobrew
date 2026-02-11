@@ -61,7 +61,18 @@ jobs:
           shared-key: release-${{ matrix.target }}
 
       - name: Build release binary
+        env:
+          LZMA_API_STATIC: "1"
         run: cargo build --release --locked --target ${{ matrix.target }} --package zb_cli
+
+      - name: Verify no dynamic liblzma dependency (macOS)
+        if: contains(matrix.target, 'apple-darwin')
+        run: |
+          otool -L target/${{ matrix.target }}/release/zb
+          if otool -L target/${{ matrix.target }}/release/zb | grep -Eq '/opt/homebrew|/usr/local/opt|liblzma'; then
+            echo "error: unexpected dynamic dependency detected in release binary"
+            exit 1
+          fi
 
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/zb ${{ matrix.artifact_name }}
