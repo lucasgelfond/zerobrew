@@ -9,9 +9,28 @@ const HOMEBREW_PREFIXES: &[&str] = &[
     "/home/linuxbrew/.linuxbrew",
 ];
 
-/// Longest old prefix we patch:
-/// macOS Mach-O cannot be expanded in-place, so new prefix must not exceed this.
-const MAX_PREFIX_LEN_MACOS: usize = 13;
+const USR_LOCAL_RELOCATABLE_SUFFIXES: &[&str] = &["/Cellar/", "/opt/", "/Homebrew/"];
+
+fn is_patchable_prefix_match(contents: &[u8], offset: usize, old_prefix: &str) -> bool {
+    let old_bytes = old_prefix.as_bytes();
+    let next_byte = contents.get(offset + old_bytes.len()).copied();
+
+    if !matches!(next_byte, None | Some(0) | Some(b'/')) {
+        return false;
+    }
+
+    // `/usr/local` appears in many binaries as generic compiler defaults
+    // (`/usr/local/include`, CUDA hints, etc.). Only treat Homebrew-owned
+    // subpaths as relocatable targets.
+    if old_prefix == "/usr/local" {
+        let suffix = &contents[offset + old_bytes.len()..];
+        return USR_LOCAL_RELOCATABLE_SUFFIXES
+            .iter()
+            .any(|candidate| suffix.starts_with(candidate.as_bytes()));
+    }
+
+    true
+}
 
 /// Patch hardcoded Homebrew paths in text files.
 fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> Result<(), Error> {
@@ -146,18 +165,30 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
         let new_bytes = new_prefix.as_bytes();
 
         if new_bytes.len() > old_bytes.len() {
-            if contents.windows(old_bytes.len()).any(|w| w == old_bytes) {
+            let mut found_unpatchable_match = false;
+            let mut i = 0;
+            while i + old_bytes.len() <= contents.len() {
+                if contents[i..i + old_bytes.len()] == *old_bytes
+                    && is_patchable_prefix_match(&contents, i, old_prefix)
+                {
+                    found_unpatchable_match = true;
+                    break;
+                }
+                i += 1;
+            }
+
+            if found_unpatchable_match {
                 return Err(Error::StoreCorruption {
                     message: format!(
                         "zerobrew prefix \"{}\" ({} bytes) is longer than \"{}\" ({} bytes). \
                          On macOS, Mach-O binaries cannot be expanded in-place, so path-sensitive formulae (e.g. git) will not work. \
-                         Use a prefix of at most {} characters, e.g. /opt/zerobrew. \
-                         Re-init with: zb init <root> /opt/zerobrew (or your chosen short prefix), then reinstall.",
+                         Use a prefix of at most {} characters for this formula. \
+                         Re-init with: zb --root <root> --prefix <short-prefix> init, then reinstall.",
                         new_prefix,
                         new_bytes.len(),
                         *old_prefix,
                         old_bytes.len(),
-                        MAX_PREFIX_LEN_MACOS
+                        old_bytes.len()
                     ),
                 });
             }
@@ -167,10 +198,7 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
         let mut i = 0;
         while i + old_bytes.len() <= contents.len() {
             if contents[i..i + old_bytes.len()] == *old_bytes
-                && matches!(
-                    contents.get(i + old_bytes.len()).copied(),
-                    None | Some(0) | Some(b'/')
-                )
+                && is_patchable_prefix_match(&contents, i, old_prefix)
             {
                 contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
                 contents[i + new_bytes.len()..i + old_bytes.len()].fill(0);
@@ -602,16 +630,70 @@ mod tests {
         );
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("13"),
-            "error should mention max prefix length"
-        );
-        assert!(
-            err_msg.contains("/opt/zerobrew"),
-            "error should suggest short prefix"
+            err_msg.contains("at most 13"),
+            "error should mention the formula-specific prefix length limit"
         );
 
         let unchanged = fs::read(&test_file).unwrap();
         assert_eq!(unchanged, original, "binary must be unchanged");
+    }
+
+    #[test]
+    fn test_patch_macho_ignores_generic_usr_local_defaults() {
+        let tmp = TempDir::new().unwrap();
+        let test_file = tmp.path().join("test_binary");
+
+        let new_prefix = "/opt/zerobrew";
+
+        let mut contents = Vec::new();
+        contents.extend_from_slice(b"\xfe\xed\xfa\xcf");
+        contents.extend_from_slice(b"clang defaults\0");
+        contents.extend_from_slice(b"/usr/local/include\0");
+        contents.extend_from_slice(b"/usr/local/cuda\0");
+        contents.extend_from_slice(b"end\0");
+
+        let original = contents.clone();
+        fs::write(&test_file, &contents).unwrap();
+
+        let result = patch_macho_binary_strings(&test_file, new_prefix);
+        assert!(
+            result.is_ok(),
+            "generic /usr/local defaults should not block relocation"
+        );
+
+        let unchanged = fs::read(&test_file).unwrap();
+        assert_eq!(
+            unchanged, original,
+            "non-Homebrew defaults must remain untouched"
+        );
+    }
+
+    #[test]
+    fn test_patch_macho_usr_local_opt_still_requires_short_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let test_file = tmp.path().join("test_binary");
+
+        let new_prefix = "/opt/zerobrew";
+
+        let mut contents = Vec::new();
+        contents.extend_from_slice(b"\xfe\xed\xfa\xcf");
+        contents.extend_from_slice(b"homebrew dependency path\0");
+        contents.extend_from_slice(b"/usr/local/opt/git/libexec/git-core\0");
+        contents.extend_from_slice(b"end\0");
+
+        fs::write(&test_file, &contents).unwrap();
+
+        let result = patch_macho_binary_strings(&test_file, new_prefix);
+        assert!(
+            result.is_err(),
+            "homebrew-owned /usr/local/opt paths still need an in-place-compatible prefix"
+        );
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("at most 10"),
+            "error should use the matched old prefix length"
+        );
     }
 
     #[test]

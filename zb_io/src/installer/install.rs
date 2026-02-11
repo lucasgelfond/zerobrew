@@ -307,6 +307,11 @@ impl Installer {
                     ) {
                         Ok(path) => path,
                         Err(e) => {
+                            Self::cleanup_materialized(
+                                &self.cellar,
+                                &processed_name,
+                                &processed_version,
+                            );
                             error = Some(e);
                             continue;
                         }
