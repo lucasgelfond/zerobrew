@@ -520,6 +520,30 @@ impl Installer {
     pub fn keg_path(&self, name: &str, version: &str) -> std::path::PathBuf {
         self.cellar.keg_path(name, version)
     }
+
+    /// Repair the database by registering kegs that exist in the cellar but
+    /// are missing from the database.  Returns the list of (name, version)
+    /// pairs that were registered.
+    pub fn repair(&mut self) -> Result<Vec<(String, String)>, Error> {
+        let on_disk = self.cellar.scan_kegs()?;
+        let mut repaired = Vec::new();
+
+        for (name, version) in &on_disk {
+            if self.db.get_installed(name).is_some() {
+                continue;
+            }
+
+            let store_key = format!("repaired-{}-{}", name, version);
+
+            let tx = self.db.transaction()?;
+            tx.record_install(name, version, &store_key)?;
+            tx.commit()?;
+
+            repaired.push((name.clone(), version.clone()));
+        }
+
+        Ok(repaired)
+    }
 }
 
 /// Create an Installer with standard paths
