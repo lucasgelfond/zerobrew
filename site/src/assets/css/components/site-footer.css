@@ -17,6 +17,10 @@ footer p:last-child {
   margin-left: auto;
 }
 
+.is-docs footer {
+  font-weight: 400;
+}
+
 .is-home footer {
   position: relative;
   z-index: 0;

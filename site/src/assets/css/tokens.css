@@ -11,6 +11,11 @@
   --color-cold: hsl(220 88% 57%);        /* cobalt blue (ZB cold) */
   --color-fg: hsl(0 0% 10%);             /* charcoal */
 
+  --docs-note: hsl(216 95% 55%);
+  --docs-info: hsl(200 95% 48%);
+  --docs-warning: hsl(22 100% 52%);
+  --docs-tip: hsl(165 85% 38%);
+
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;

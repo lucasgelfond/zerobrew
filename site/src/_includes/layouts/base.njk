@@ -9,7 +9,7 @@
     <link rel="shortcut icon" href="/assets/favicon.svg" />
     <link rel="stylesheet" href="/assets/css/main.css" />
   </head>
-  <body class="{% if page.url == '/' %}is-home{% endif %}">
+  <body class="{% if page.url == '/' %}is-home {% endif %}{% if page.url and page.url.indexOf('/docs/') == 0 %}is-docs{% endif %}">
     {% include "partials/site-header.njk" %}
 
     <main id="main-content">
