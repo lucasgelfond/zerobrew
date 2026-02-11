@@ -59,7 +59,7 @@ fn required_string(value: &Value, field: &str) -> Result<String, Error> {
         .get(field)
         .and_then(Value::as_str)
         .map(ToString::to_string)
-        .ok_or_else(|| Error::NetworkFailure {
+        .ok_or_else(|| Error::InvalidArgument {
             message: format!("failed to parse cask JSON: missing string field '{field}'"),
         })
 }
@@ -108,7 +108,7 @@ fn parse_binary_artifacts(cask: &Value) -> Result<Vec<CaskBinary>, Error> {
     let artifacts = cask
         .get("artifacts")
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::NetworkFailure {
+        .ok_or_else(|| Error::InvalidArgument {
             message: "failed to parse cask JSON: missing artifacts array".to_string(),
         })?;
 
@@ -218,5 +218,31 @@ mod tests {
         assert_eq!(resolved.binaries.len(), 2);
         assert_eq!(resolved.binaries[0].target, "tool");
         assert_eq!(resolved.binaries[1].target, "tool-two");
+    }
+
+    #[test]
+    fn resolve_cask_missing_required_field_is_invalid_argument() {
+        let cask = serde_json::json!({
+            "token": "test",
+            "version": "1.0.0",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [{ "binary": [["op"]] }]
+        });
+
+        let err = resolve_cask("test", &cask).unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn resolve_cask_missing_artifacts_array_is_invalid_argument() {
+        let cask = serde_json::json!({
+            "token": "test",
+            "version": "1.0.0",
+            "url": "https://example.com/test.zip",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        });
+
+        let err = resolve_cask("test", &cask).unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument { .. }));
     }
 }
