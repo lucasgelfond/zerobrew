@@ -29,10 +29,14 @@ pub struct Installer {
     db: Database,
 }
 
+pub struct PlannedInstall {
+    pub install_name: String,
+    pub formula: Formula,
+    pub bottle: SelectedBottle,
+}
+
 pub struct InstallPlan {
-    pub install_names: Vec<String>,
-    pub formulas: Vec<Formula>,
-    pub bottles: Vec<SelectedBottle>,
+    pub items: Vec<PlannedInstall>,
 }
 
 pub struct ExecuteResult {
@@ -66,24 +70,19 @@ impl Installer {
         // Resolve in topological order
         let ordered = resolve_closure(names, &formulas)?;
 
-        // Build list of formulas in order
-        let all_formulas: Vec<Formula> = ordered
-            .iter()
-            .map(|n| formulas.get(n).cloned().unwrap())
-            .collect();
-
-        // Select bottles for each formula
-        let mut bottles = Vec::new();
-        for formula in &all_formulas {
-            let bottle = select_bottle(formula)?;
-            bottles.push(bottle);
+        // Build install items in dependency order
+        let mut items = Vec::with_capacity(ordered.len());
+        for install_name in ordered {
+            let formula = formulas.get(&install_name).cloned().unwrap();
+            let bottle = select_bottle(&formula)?;
+            items.push(PlannedInstall {
+                install_name,
+                formula,
+                bottle,
+            });
         }
 
-        Ok(InstallPlan {
-            install_names: ordered,
-            formulas: all_formulas,
-            bottles,
-        })
+        Ok(InstallPlan { items })
     }
 
     /// Try to extract a download, with automatic retry on corruption
@@ -240,27 +239,19 @@ impl Installer {
             }
         };
 
-        // Pair install identities with formulas and bottles.
-        // `install_name` is persisted to DB; `formula.name` is used for bottle layout/linking.
-        let to_install: Vec<(String, Formula, SelectedBottle)> = plan
-            .install_names
-            .into_iter()
-            .zip(plan.formulas.into_iter())
-            .zip(plan.bottles.into_iter())
-            .map(|((install_name, formula), bottle)| (install_name, formula, bottle))
-            .collect();
+        let items = plan.items;
 
-        if to_install.is_empty() {
+        if items.is_empty() {
             return Ok(ExecuteResult { installed: 0 });
         }
 
         // Download all bottles
-        let requests: Vec<DownloadRequest> = to_install
+        let requests: Vec<DownloadRequest> = items
             .iter()
-            .map(|(_install_name, f, b)| DownloadRequest {
-                url: b.url.clone(),
-                sha256: b.sha256.clone(),
-                name: f.name.clone(),
+            .map(|item| DownloadRequest {
+                url: item.bottle.url.clone(),
+                sha256: item.bottle.sha256.clone(),
+                name: item.formula.name.clone(),
             })
             .collect();
 
@@ -284,11 +275,11 @@ impl Installer {
             match result {
                 Ok(download) => {
                     let idx = download.index;
-                    let (install_name, formula, bottle) = &to_install[idx];
-                    let processed_name = install_name.clone();
-                    let materialized_name = formula.name.clone();
-                    let processed_version = formula.effective_version();
-                    let processed_store_key = bottle.sha256.clone();
+                    let item = &items[idx];
+                    let processed_name = item.install_name.clone();
+                    let materialized_name = item.formula.name.clone();
+                    let processed_version = item.formula.effective_version();
+                    let processed_store_key = item.bottle.sha256.clone();
 
                     report(InstallProgress::UnpackStarted {
                         name: materialized_name.clone(),
@@ -296,7 +287,12 @@ impl Installer {
 
                     // Try extraction with retry logic for corrupted downloads
                     let store_entry = match self
-                        .extract_with_retry(&download, formula, bottle, download_progress.clone())
+                        .extract_with_retry(
+                            &download,
+                            &item.formula,
+                            &item.bottle,
+                            download_progress.clone(),
+                        )
                         .await
                     {
                         Ok(entry) => entry,
@@ -372,7 +368,7 @@ impl Installer {
                     }
 
                     // Determine whether this formula should be linked.
-                    let should_link = link && !formula.is_keg_only();
+                    let should_link = link && !item.formula.is_keg_only();
 
                     let linked_files = if should_link {
                         report(InstallProgress::LinkStarted {
@@ -397,10 +393,12 @@ impl Installer {
                             }
                         }
                     } else {
-                        if link && formula.is_keg_only() {
-                            let reason = match &formula.keg_only {
+                        if link && item.formula.is_keg_only() {
+                            let reason = match &item.formula.keg_only {
                                 zb_core::KegOnly::Reason(s) => s.clone(),
-                                _ if formula.name.contains('@') => "versioned formula".to_string(),
+                                _ if item.formula.name.contains('@') => {
+                                    "versioned formula".to_string()
+                                }
                                 _ => "keg-only formula".to_string(),
                             };
                             report(InstallProgress::LinkSkipped {
@@ -1413,7 +1411,11 @@ end
             .await
             .unwrap();
 
-        let planned_names: Vec<String> = plan.formulas.iter().map(|f| f.name.clone()).collect();
+        let planned_names: Vec<String> = plan
+            .items
+            .iter()
+            .map(|item| item.formula.name.clone())
+            .collect();
         assert!(planned_names.contains(&"terraform".to_string()));
         assert!(planned_names.contains(&"go".to_string()));
     }
