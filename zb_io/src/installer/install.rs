@@ -514,7 +514,9 @@ impl Installer {
     ) -> Result<ExecuteResult, Error> {
         let mut installed = 0usize;
         for name in names {
-            let token = name.strip_prefix("cask:").unwrap_or(name);
+            let token = name
+                .strip_prefix("cask:")
+                .expect("install_casks expects cask: prefixed names");
             self.install_single_cask(token, link).await?;
             installed += 1;
         }
