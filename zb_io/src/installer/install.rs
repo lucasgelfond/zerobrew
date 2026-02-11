@@ -596,88 +596,87 @@ impl Installer {
 
         let extracted = self.store.ensure_entry(&cask.sha256, &blob_path)?;
         let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
-        if let Err(e) = stage_cask_binaries(&extracted, &keg_path, &cask) {
-            let _ = self.cellar.remove_keg(&cask.install_name, &cask.version);
-            return Err(e);
-        }
+        let mut cleanup = FailedInstallGuard::new(
+            &self.linker,
+            &self.cellar,
+            &cask.install_name,
+            &cask.version,
+            &keg_path,
+            link,
+        );
+
+        stage_cask_binaries(&extracted, &keg_path, &cask)?;
 
         let linked_files = if link {
-            match self.linker.link_keg(&keg_path) {
-                Ok(files) => files,
-                Err(e) => {
-                    Self::cleanup_failed_install(
-                        &self.linker,
-                        &self.cellar,
-                        &cask.install_name,
-                        &cask.version,
-                        &keg_path,
-                        true,
-                    );
-                    return Err(e);
-                }
-            }
+            self.linker.link_keg(&keg_path)?
         } else {
             Vec::new()
         };
 
-        let tx = match self.db.transaction() {
-            Ok(tx) => tx,
-            Err(e) => {
-                Self::cleanup_failed_install(
-                    &self.linker,
-                    &self.cellar,
-                    &cask.install_name,
-                    &cask.version,
-                    &keg_path,
-                    link,
-                );
-                return Err(e);
-            }
-        };
-        if let Err(e) = tx.record_install(&cask.install_name, &cask.version, &cask.sha256) {
-            drop(tx);
-            Self::cleanup_failed_install(
-                &self.linker,
-                &self.cellar,
-                &cask.install_name,
-                &cask.version,
-                &keg_path,
-                link,
-            );
-            return Err(e);
-        }
+        let tx = self.db.transaction()?;
+        tx.record_install(&cask.install_name, &cask.version, &cask.sha256)?;
         for linked in &linked_files {
-            if let Err(e) = tx.record_linked_file(
+            tx.record_linked_file(
                 &cask.install_name,
                 &cask.version,
                 &linked.link_path.to_string_lossy(),
                 &linked.target_path.to_string_lossy(),
-            ) {
-                drop(tx);
-                Self::cleanup_failed_install(
-                    &self.linker,
-                    &self.cellar,
-                    &cask.install_name,
-                    &cask.version,
-                    &keg_path,
-                    link,
-                );
-                return Err(e);
-            }
+            )?;
         }
-        if let Err(e) = tx.commit() {
-            Self::cleanup_failed_install(
-                &self.linker,
-                &self.cellar,
-                &cask.install_name,
-                &cask.version,
-                &keg_path,
-                link,
-            );
-            return Err(e);
-        }
+        tx.commit()?;
 
+        cleanup.disarm();
         Ok(())
+    }
+}
+
+struct FailedInstallGuard<'a> {
+    linker: &'a Linker,
+    cellar: &'a Cellar,
+    name: &'a str,
+    version: &'a str,
+    keg_path: &'a Path,
+    unlink: bool,
+    armed: bool,
+}
+
+impl<'a> FailedInstallGuard<'a> {
+    fn new(
+        linker: &'a Linker,
+        cellar: &'a Cellar,
+        name: &'a str,
+        version: &'a str,
+        keg_path: &'a Path,
+        unlink: bool,
+    ) -> Self {
+        Self {
+            linker,
+            cellar,
+            name,
+            version,
+            keg_path,
+            unlink,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for FailedInstallGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            Installer::cleanup_failed_install(
+                self.linker,
+                self.cellar,
+                self.name,
+                self.version,
+                self.keg_path,
+                self.unlink,
+            );
+        }
     }
 }
 
