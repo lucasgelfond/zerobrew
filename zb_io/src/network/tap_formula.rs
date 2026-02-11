@@ -124,7 +124,7 @@ fn parse_dependencies(source: &str) -> Vec<String> {
             deps.push(dep.as_str().to_string());
         }
     }
-    deps.sort();
+    deps.sort_unstable();
     deps.dedup();
     deps
 }
@@ -227,7 +227,7 @@ fn parse_bottle_files(
         let Some(sha) = cap.get(2).map(|m| m.as_str()) else {
             continue;
         };
-        if matches!(tag, "cellar") {
+        if tag == "cellar" {
             continue;
         }
         let url = build_bottle_url(spec, root_url, stable, revision, rebuild, tag, sha);
