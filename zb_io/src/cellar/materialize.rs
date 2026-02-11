@@ -110,10 +110,9 @@ impl Cellar {
 
             let name = entry.file_name().to_string_lossy().to_string();
 
-            let versions =
-                std::fs::read_dir(entry.path()).map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to read keg directory for {name}: {e}"),
-                })?;
+            let versions = std::fs::read_dir(entry.path()).map_err(|e| Error::StoreCorruption {
+                message: format!("failed to read keg directory for {name}: {e}"),
+            })?;
 
             for version_entry in versions {
                 let version_entry = version_entry.map_err(|e| Error::StoreCorruption {

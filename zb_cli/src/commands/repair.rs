@@ -17,7 +17,12 @@ pub fn execute(installer: &mut zb_io::Installer) -> Result<(), zb_core::Error> {
             style(repaired.len()).green().bold()
         );
         for (name, version) in &repaired {
-            println!("    {} {} {}", style("✓").green(), name, style(version).dim());
+            println!(
+                "    {} {} {}",
+                style("✓").green(),
+                name,
+                style(version).dim()
+            );
         }
     }
 
