@@ -15,7 +15,9 @@ use crate::storage::blob::BlobCache;
 use crate::storage::db::Database;
 use crate::storage::store::Store;
 
-use zb_core::{Error, Formula, SelectedBottle, resolve_closure, select_bottle};
+use zb_core::{
+    BuildPlan, Error, Formula, InstallMethod, SelectedBottle, resolve_closure, select_bottle,
+};
 
 /// Maximum number of retries for corrupted downloads
 const MAX_CORRUPTION_RETRIES: usize = 3;
@@ -27,14 +29,17 @@ pub struct Installer {
     cellar: Cellar,
     linker: Linker,
     db: Database,
+    prefix: std::path::PathBuf,
 }
 
+#[derive(Debug)]
 pub struct PlannedInstall {
     pub install_name: String,
     pub formula: Formula,
-    pub bottle: SelectedBottle,
+    pub method: InstallMethod,
 }
 
+#[derive(Debug)]
 pub struct InstallPlan {
     pub items: Vec<PlannedInstall>,
 }
@@ -51,6 +56,7 @@ impl Installer {
         cellar: Cellar,
         linker: Linker,
         db: Database,
+        prefix: std::path::PathBuf,
     ) -> Self {
         Self {
             api_client,
@@ -59,26 +65,32 @@ impl Installer {
             cellar,
             linker,
             db,
+            prefix,
         }
     }
 
-    /// Resolve dependencies and plan the install
     pub async fn plan(&self, names: &[String]) -> Result<InstallPlan, Error> {
-        // Recursively fetch all formulas we need
         let formulas = self.fetch_all_formulas(names).await?;
-
-        // Resolve in topological order
         let ordered = resolve_closure(names, &formulas)?;
 
-        // Build install items in dependency order
         let mut items = Vec::with_capacity(ordered.len());
         for install_name in ordered {
             let formula = formulas.get(&install_name).cloned().unwrap();
-            let bottle = select_bottle(&formula)?;
+            let method = match select_bottle(&formula) {
+                Ok(bottle) => InstallMethod::Bottle(bottle),
+                Err(_) => match BuildPlan::from_formula(&formula, &self.prefix) {
+                    Some(plan) => InstallMethod::Source(plan),
+                    None => {
+                        return Err(Error::UnsupportedBottle {
+                            name: formula.name.clone(),
+                        });
+                    }
+                },
+            };
             items.push(PlannedInstall {
                 install_name,
                 formula,
-                bottle,
+                method,
             });
         }
 
@@ -196,11 +208,9 @@ impl Installer {
                     Err(e) => return Err(e),
                 };
 
-                // Check if this formula has a bottle for the current platform
-                // If not, skip it (it's likely a system-provided dependency on this platform)
-                if select_bottle(&formula).is_err() {
+                if select_bottle(&formula).is_err() && !formula.has_source_url() {
                     eprintln!(
-                        "    Skipping {} (no bottle available for this platform)",
+                        "    Skipping {} (no bottle or source available for this platform)",
                         formula.name
                     );
                     continue;
@@ -225,8 +235,6 @@ impl Installer {
         self.execute_with_progress(plan, link, None).await
     }
 
-    /// Execute the install plan with progress callback
-    /// Uses streaming extraction - starts extracting each package as soon as its download completes
     pub async fn execute_with_progress(
         &mut self,
         plan: InstallPlan,
@@ -239,213 +247,235 @@ impl Installer {
             }
         };
 
-        let items = plan.items;
+        let (bottle_items, source_items): (Vec<_>, Vec<_>) = plan
+            .items
+            .into_iter()
+            .partition(|item| matches!(item.method, InstallMethod::Bottle(_)));
 
-        if items.is_empty() {
+        if bottle_items.is_empty() && source_items.is_empty() {
             return Ok(ExecuteResult { installed: 0 });
         }
-
-        // Download all bottles
-        let requests: Vec<DownloadRequest> = items
-            .iter()
-            .map(|item| DownloadRequest {
-                url: item.bottle.url.clone(),
-                sha256: item.bottle.sha256.clone(),
-                name: item.formula.name.clone(),
-            })
-            .collect();
-
-        // Convert progress callback for download
-        let download_progress: Option<DownloadProgressCallback> = progress.clone().map(|cb| {
-            Arc::new(move |event: InstallProgress| {
-                cb(event);
-            }) as DownloadProgressCallback
-        });
-
-        // Use streaming downloads - process each as it completes
-        let mut rx = self
-            .downloader
-            .download_streaming(requests, download_progress.clone());
 
         let mut installed = 0usize;
         let mut error: Option<Error> = None;
 
-        // Process downloads as they complete
-        while let Some(result) = rx.recv().await {
-            match result {
-                Ok(download) => {
-                    let idx = download.index;
-                    let item = &items[idx];
-                    let processed_name = item.install_name.clone();
-                    let materialized_name = item.formula.name.clone();
-                    let processed_version = item.formula.effective_version();
-                    let processed_store_key = item.bottle.sha256.clone();
-
-                    report(InstallProgress::UnpackStarted {
-                        name: materialized_name.clone(),
-                    });
-
-                    // Try extraction with retry logic for corrupted downloads
-                    let store_entry = match self
-                        .extract_with_retry(
-                            &download,
-                            &item.formula,
-                            &item.bottle,
-                            download_progress.clone(),
-                        )
-                        .await
-                    {
-                        Ok(entry) => entry,
-                        Err(e) => {
-                            error = Some(e);
-                            continue;
-                        }
+        if !bottle_items.is_empty() {
+            let requests: Vec<DownloadRequest> = bottle_items
+                .iter()
+                .map(|item| {
+                    let InstallMethod::Bottle(ref bottle) = item.method else {
+                        unreachable!()
                     };
+                    DownloadRequest {
+                        url: bottle.url.clone(),
+                        sha256: bottle.sha256.clone(),
+                        name: item.formula.name.clone(),
+                    }
+                })
+                .collect();
 
-                    // Materialize to cellar
-                    // Use effective_version() which includes rebuild suffix if applicable
-                    let keg_path = match self.cellar.materialize(
-                        &materialized_name,
-                        &processed_version,
-                        &store_entry,
-                    ) {
-                        Ok(path) => path,
-                        Err(e) => {
-                            error = Some(e);
-                            continue;
-                        }
-                    };
+            let download_progress: Option<DownloadProgressCallback> =
+                progress.clone().map(|cb| {
+                    Arc::new(move |event: InstallProgress| {
+                        cb(event);
+                    }) as DownloadProgressCallback
+                });
 
-                    report(InstallProgress::UnpackCompleted {
-                        name: materialized_name.clone(),
-                    });
+            let mut rx = self
+                .downloader
+                .download_streaming(requests, download_progress.clone());
 
-                    // Register the keg in the database before linking so that a
-                    // link failure never leaves an untracked keg on disk.
-                    let tx = match self.db.transaction() {
-                        Ok(tx) => tx,
-                        Err(e) => {
+            while let Some(result) = rx.recv().await {
+                match result {
+                    Ok(download) => {
+                        let idx = download.index;
+                        let item = &bottle_items[idx];
+                        let InstallMethod::Bottle(ref bottle) = item.method else {
+                            unreachable!()
+                        };
+                        let processed_name = item.install_name.clone();
+                        let materialized_name = item.formula.name.clone();
+                        let processed_version = item.formula.effective_version();
+                        let processed_store_key = bottle.sha256.clone();
+
+                        report(InstallProgress::UnpackStarted {
+                            name: materialized_name.clone(),
+                        });
+
+                        let store_entry = match self
+                            .extract_with_retry(
+                                &download,
+                                &item.formula,
+                                bottle,
+                                download_progress.clone(),
+                            )
+                            .await
+                        {
+                            Ok(entry) => entry,
+                            Err(e) => {
+                                error = Some(e);
+                                continue;
+                            }
+                        };
+
+                        let keg_path = match self.cellar.materialize(
+                            &materialized_name,
+                            &processed_version,
+                            &store_entry,
+                        ) {
+                            Ok(path) => path,
+                            Err(e) => {
+                                error = Some(e);
+                                continue;
+                            }
+                        };
+
+                        report(InstallProgress::UnpackCompleted {
+                            name: materialized_name.clone(),
+                        });
+
+                        let tx = match self.db.transaction() {
+                            Ok(tx) => tx,
+                            Err(e) => {
+                                Self::cleanup_materialized(
+                                    &self.cellar,
+                                    &materialized_name,
+                                    &processed_version,
+                                );
+                                error = Some(e);
+                                continue;
+                            }
+                        };
+
+                        if let Err(e) = tx.record_install(
+                            &processed_name,
+                            &processed_version,
+                            &processed_store_key,
+                        ) {
+                            drop(tx);
                             Self::cleanup_materialized(
                                 &self.cellar,
-                                &materialized_name,
+                                &processed_name,
                                 &processed_version,
                             );
                             error = Some(e);
                             continue;
                         }
-                    };
 
-                    if let Err(e) =
-                        tx.record_install(&processed_name, &processed_version, &processed_store_key)
-                    {
-                        drop(tx);
-                        Self::cleanup_materialized(
-                            &self.cellar,
-                            &processed_name,
-                            &processed_version,
-                        );
-                        error = Some(e);
-                        continue;
-                    }
+                        if let Err(e) = tx.commit() {
+                            Self::cleanup_materialized(
+                                &self.cellar,
+                                &processed_name,
+                                &processed_version,
+                            );
+                            error = Some(e);
+                            continue;
+                        }
 
-                    if let Err(e) = tx.commit() {
-                        Self::cleanup_materialized(
-                            &self.cellar,
-                            &processed_name,
-                            &processed_version,
-                        );
-                        error = Some(e);
-                        continue;
-                    }
+                        if let Err(e) = self.linker.link_opt(&keg_path) {
+                            eprintln!(
+                                "warning: failed to create opt link for {}: {}",
+                                processed_name, e
+                            );
+                        }
 
-                    // Always create the opt symlink so other formulas can
-                    // find keg-only dependencies via prefix/opt/{name}.
-                    if let Err(e) = self.linker.link_opt(&keg_path) {
-                        eprintln!(
-                            "warning: failed to create opt link for {}: {}",
-                            processed_name, e
-                        );
-                    }
+                        let should_link = link && !item.formula.is_keg_only();
 
-                    // Determine whether this formula should be linked.
-                    let should_link = link && !item.formula.is_keg_only();
+                        let linked_files = if should_link {
+                            report(InstallProgress::LinkStarted {
+                                name: materialized_name.clone(),
+                            });
+                            match self.linker.link_keg(&keg_path) {
+                                Ok(files) => {
+                                    report(InstallProgress::LinkCompleted {
+                                        name: materialized_name.clone(),
+                                    });
+                                    files
+                                }
+                                Err(e) => {
+                                    let _ = self.linker.unlink_keg(&keg_path);
+                                    error = Some(e);
+                                    installed += 1;
+                                    report(InstallProgress::InstallCompleted {
+                                        name: materialized_name.clone(),
+                                    });
+                                    continue;
+                                }
+                            }
+                        } else {
+                            if link && item.formula.is_keg_only() {
+                                let reason = match &item.formula.keg_only {
+                                    zb_core::KegOnly::Reason(s) => s.clone(),
+                                    _ if item.formula.name.contains('@') => {
+                                        "versioned formula".to_string()
+                                    }
+                                    _ => "keg-only formula".to_string(),
+                                };
+                                report(InstallProgress::LinkSkipped {
+                                    name: materialized_name.clone(),
+                                    reason,
+                                });
+                            }
+                            Vec::new()
+                        };
 
-                    let linked_files = if should_link {
-                        report(InstallProgress::LinkStarted {
+                        if !linked_files.is_empty()
+                            && let Ok(tx) = self.db.transaction()
+                        {
+                            let mut ok = true;
+                            for linked in &linked_files {
+                                if tx
+                                    .record_linked_file(
+                                        &processed_name,
+                                        &processed_version,
+                                        &linked.link_path.to_string_lossy(),
+                                        &linked.target_path.to_string_lossy(),
+                                    )
+                                    .is_err()
+                                {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                            if ok {
+                                let _ = tx.commit();
+                            }
+                        }
+
+                        report(InstallProgress::InstallCompleted {
                             name: materialized_name.clone(),
                         });
-                        match self.linker.link_keg(&keg_path) {
-                            Ok(files) => {
-                                report(InstallProgress::LinkCompleted {
-                                    name: materialized_name.clone(),
-                                });
-                                files
-                            }
-                            Err(e) => {
-                                // Keg is registered; only clean up partial symlinks.
-                                let _ = self.linker.unlink_keg(&keg_path);
-                                error = Some(e);
-                                installed += 1;
-                                report(InstallProgress::InstallCompleted {
-                                    name: materialized_name.clone(),
-                                });
-                                continue;
-                            }
-                        }
-                    } else {
-                        if link && item.formula.is_keg_only() {
-                            let reason = match &item.formula.keg_only {
-                                zb_core::KegOnly::Reason(s) => s.clone(),
-                                _ if item.formula.name.contains('@') => {
-                                    "versioned formula".to_string()
-                                }
-                                _ => "keg-only formula".to_string(),
-                            };
-                            report(InstallProgress::LinkSkipped {
-                                name: materialized_name.clone(),
-                                reason,
-                            });
-                        }
-                        Vec::new()
-                    };
 
-                    // Record linked files in the database.
-                    if !linked_files.is_empty()
-                        && let Ok(tx) = self.db.transaction()
-                    {
-                        let mut ok = true;
-                        for linked in &linked_files {
-                            if tx
-                                .record_linked_file(
-                                    &processed_name,
-                                    &processed_version,
-                                    &linked.link_path.to_string_lossy(),
-                                    &linked.target_path.to_string_lossy(),
-                                )
-                                .is_err()
-                            {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        if ok {
-                            let _ = tx.commit();
-                        }
+                        installed += 1;
                     }
-
-                    report(InstallProgress::InstallCompleted {
-                        name: materialized_name.clone(),
-                    });
-
-                    installed += 1;
-                }
-                Err(e) => {
-                    error = Some(e);
+                    Err(e) => {
+                        error = Some(e);
+                    }
                 }
             }
         }
 
-        // Return error if any download failed
+        for item in &source_items {
+            let InstallMethod::Source(ref build_plan) = item.method else {
+                unreachable!()
+            };
+
+            report(InstallProgress::UnpackStarted {
+                name: item.formula.name.clone(),
+            });
+
+            match self
+                .install_from_source(item, build_plan, link, &report)
+                .await
+            {
+                Ok(()) => installed += 1,
+                Err(e) => {
+                    error = Some(e);
+                    continue;
+                }
+            }
+        }
+
         if let Some(e) = error {
             return Err(e);
         }
@@ -474,6 +504,138 @@ impl Installer {
                 name, version, e
             );
         }
+    }
+
+    async fn install_from_source(
+        &mut self,
+        item: &PlannedInstall,
+        build_plan: &BuildPlan,
+        link: bool,
+        report: &impl Fn(InstallProgress),
+    ) -> Result<(), Error> {
+        let install_name = &item.install_name;
+        let formula_name = &item.formula.name;
+        let version = item.formula.effective_version();
+
+        let ruby_source_path =
+            item.formula
+                .ruby_source_path
+                .as_deref()
+                .ok_or_else(|| Error::ExecutionError {
+                    message: format!("no ruby_source_path for formula '{formula_name}'"),
+                })?;
+
+        let cache_dir = self.prefix.join("tmp").join("rb_cache");
+        let formula_rb = self
+            .api_client
+            .fetch_formula_rb(ruby_source_path, &cache_dir)
+            .await?;
+
+        let mut installed_deps = std::collections::HashMap::new();
+        for dep_name in &build_plan.runtime_dependencies {
+            if let Some(keg) = self.db.get_installed(dep_name) {
+                installed_deps.insert(
+                    dep_name.clone(),
+                    crate::build::DepInfo {
+                        cellar_path: self
+                            .cellar
+                            .keg_path(dep_name, &keg.version)
+                            .display()
+                            .to_string(),
+                    },
+                );
+            }
+        }
+
+        let executor = crate::build::BuildExecutor::new(self.prefix.clone());
+        executor
+            .execute(build_plan, &formula_rb, &installed_deps)
+            .await?;
+
+        report(InstallProgress::UnpackCompleted {
+            name: formula_name.clone(),
+        });
+
+        let store_key = format!("source:{formula_name}:{version}");
+        let keg_path = self.cellar.keg_path(formula_name, &version);
+
+        let tx = self.db.transaction().inspect_err(|_| {
+            Self::cleanup_materialized(&self.cellar, formula_name, &version);
+        })?;
+
+        if let Err(e) = tx.record_install(install_name, &version, &store_key) {
+            drop(tx);
+            Self::cleanup_materialized(&self.cellar, formula_name, &version);
+            return Err(e);
+        }
+
+        if let Err(e) = tx.commit() {
+            Self::cleanup_materialized(&self.cellar, formula_name, &version);
+            return Err(e);
+        }
+
+        if let Err(e) = self.linker.link_opt(&keg_path) {
+            eprintln!("warning: failed to create opt link for {install_name}: {e}");
+        }
+
+        let should_link = link && !item.formula.is_keg_only();
+
+        if should_link {
+            report(InstallProgress::LinkStarted {
+                name: formula_name.clone(),
+            });
+            match self.linker.link_keg(&keg_path) {
+                Ok(files) => {
+                    report(InstallProgress::LinkCompleted {
+                        name: formula_name.clone(),
+                    });
+                    if !files.is_empty()
+                        && let Ok(tx) = self.db.transaction()
+                    {
+                        let mut ok = true;
+                        for linked in &files {
+                            if tx
+                                .record_linked_file(
+                                    install_name,
+                                    &version,
+                                    &linked.link_path.to_string_lossy(),
+                                    &linked.target_path.to_string_lossy(),
+                                )
+                                .is_err()
+                            {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if ok {
+                            let _ = tx.commit();
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = self.linker.unlink_keg(&keg_path);
+                    report(InstallProgress::InstallCompleted {
+                        name: formula_name.clone(),
+                    });
+                    return Err(e);
+                }
+            }
+        } else if link && item.formula.is_keg_only() {
+            let reason = match &item.formula.keg_only {
+                zb_core::KegOnly::Reason(s) => s.clone(),
+                _ if item.formula.name.contains('@') => "versioned formula".to_string(),
+                _ => "keg-only formula".to_string(),
+            };
+            report(InstallProgress::LinkSkipped {
+                name: formula_name.clone(),
+                reason,
+            });
+        }
+
+        report(InstallProgress::InstallCompleted {
+            name: formula_name.clone(),
+        });
+        Ok(())
     }
 
     /// Remove a materialized keg that was never registered in the database.
@@ -838,6 +1000,7 @@ pub fn create_installer(
         cellar,
         linker,
         db,
+        prefix: prefix.to_path_buf(),
     })
 }
 
@@ -955,7 +1118,15 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Install
         installer
@@ -1036,7 +1207,15 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Install
         installer
@@ -1116,7 +1295,15 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Install and uninstall
         installer
@@ -1206,7 +1393,15 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Install but don't uninstall
         installer
@@ -1323,7 +1518,15 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Install main package (should also install dependency)
         installer
@@ -1405,7 +1608,7 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix.to_path_buf());
         let plan = installer
             .plan(&["hashicorp/tap/terraform".to_string()])
             .await
@@ -1470,7 +1673,7 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix.to_path_buf());
 
         installer
             .install(&["hashicorp/tap/terraform".to_string()], true)
@@ -1539,7 +1742,7 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix.to_path_buf());
         installer
             .install(&["terraform".to_string()], true)
             .await
@@ -1648,7 +1851,15 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         let result = installer
             .install(&["goodpkg".to_string(), "badpkg".to_string()], false)
@@ -1718,7 +1929,15 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&db_path).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Force metadata persistence to fail after filesystem work is done.
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -1826,7 +2045,15 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Install root (should install all 5 packages)
         installer
@@ -1916,7 +2143,15 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Install slow package (which depends on fast)
         // With streaming, fast should be extracted while slow is still downloading
@@ -2023,7 +2258,15 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db);
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
 
         // Install - should succeed (first download is valid in this test)
         installer
@@ -2052,5 +2295,177 @@ end
         // - Second attempt: re-download, extraction fails (corruption)
         // - Third attempt: re-download, extraction fails (corruption)
         // - Returns error: "Failed after 3 attempts..."
+    }
+
+    #[tokio::test]
+    async fn plan_falls_back_to_source_when_no_bottle() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let formula_json = r#"{
+            "name": "nobottle",
+            "versions": { "stable": "1.0.0" },
+            "dependencies": [],
+            "build_dependencies": ["pkgconf"],
+            "urls": {
+                "stable": {
+                    "url": "https://example.com/nobottle-1.0.0.tar.gz",
+                    "checksum": "abc123"
+                }
+            },
+            "ruby_source_path": "Formula/n/nobottle.rb",
+            "bottle": { "stable": { "files": {} } }
+        }"#;
+
+        Mock::given(method("GET"))
+            .and(path("/nobottle.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(formula_json))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
+
+        let plan = installer.plan(&["nobottle".to_string()]).await.unwrap();
+
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(plan.items[0].formula.name, "nobottle");
+        assert!(matches!(plan.items[0].method, zb_core::InstallMethod::Source(_)));
+
+        if let zb_core::InstallMethod::Source(ref bp) = plan.items[0].method {
+            assert_eq!(bp.source_url, "https://example.com/nobottle-1.0.0.tar.gz");
+            assert_eq!(bp.formula_name, "nobottle");
+            assert_eq!(bp.build_dependencies, vec!["pkgconf"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_prefers_bottle_over_source() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let tag = get_test_bottle_tag();
+        let formula_json = format!(
+            r#"{{
+                "name": "hasboth",
+                "versions": {{ "stable": "2.0.0" }},
+                "dependencies": [],
+                "urls": {{
+                    "stable": {{
+                        "url": "https://example.com/hasboth-2.0.0.tar.gz",
+                        "checksum": "def456"
+                    }}
+                }},
+                "ruby_source_path": "Formula/h/hasboth.rb",
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "{}": {{
+                                "url": "https://example.com/hasboth.bottle.tar.gz",
+                                "sha256": "aabbccdd"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            tag
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/hasboth.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
+
+        let plan = installer.plan(&["hasboth".to_string()]).await.unwrap();
+
+        assert_eq!(plan.items.len(), 1);
+        assert!(matches!(plan.items[0].method, zb_core::InstallMethod::Bottle(_)));
+    }
+
+    #[tokio::test]
+    async fn plan_errors_when_no_bottle_and_no_source() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let formula_json = r#"{
+            "name": "nothing",
+            "versions": { "stable": "1.0.0" },
+            "dependencies": [],
+            "bottle": { "stable": { "files": {} } }
+        }"#;
+
+        Mock::given(method("GET"))
+            .and(path("/nothing.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(formula_json))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
+
+        let result = installer.plan(&["nothing".to_string()]).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            zb_core::Error::MissingFormula { .. }
+        ));
     }
 }

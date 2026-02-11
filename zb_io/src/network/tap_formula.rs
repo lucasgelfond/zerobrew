@@ -77,6 +77,13 @@ pub fn parse_tap_formula_ruby(spec: &TapFormulaRef, source: &str) -> Result<Form
         bottle,
         revision,
         keg_only: KegOnly::default(),
+        build_dependencies: Vec::new(),
+        urls: None,
+        ruby_source_path: None,
+        ruby_source_checksum: None,
+        uses_from_macos: Vec::new(),
+        requirements: Vec::new(),
+        variations: None,
     })
 }
 
