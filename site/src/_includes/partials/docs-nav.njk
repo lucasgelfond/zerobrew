@@ -1,0 +1,32 @@
+<div class="docs-nav">
+  <div class="docs-nav-top">
+    <a class="docs-nav-title" href="/docs/">Docs</a>
+    <button class="docs-nav-toggle" type="button" aria-expanded="false" aria-controls="docs-nav-groups">
+      Menu
+    </button>
+  </div>
+
+  <div class="docs-nav-groups" id="docs-nav-groups">
+    {% for group in docsNav %}
+      <div class="docs-nav-group">
+        {% if group.href %}
+          <a class="docs-nav-heading docs-nav-heading-link {% if page.url == group.href %}is-active{% endif %}" href="{{ group.href }}">{{ group.title }}</a>
+        {% else %}
+          <div class="docs-nav-heading">{{ group.title }}</div>
+        {% endif %}
+
+        {% if group.pages and group.pages.length %}
+          <ul>
+            {% for navPage in group.pages %}
+              <li>
+                <a class="{% if page.url == navPage.href %}is-active{% endif %}" href="{{ navPage.href }}">
+                  {{ navPage.title }}
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</div>

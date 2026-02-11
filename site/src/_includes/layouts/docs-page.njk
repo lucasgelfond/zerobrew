@@ -1,0 +1,90 @@
+---
+layout: layouts/base.njk
+---
+
+<section class="docs-wrap">
+  <div class="docs-inner">
+    <div class="docs-shell">
+      <aside class="docs-sidebar">
+        {% include "partials/docs-nav.njk" %}
+      </aside>
+
+      <article class="docs-content">
+        {% set parentGroup = null %}
+        {% set currentGroup = null %}
+        {% if docsNav %}
+          {% for group in docsNav %}
+            {% if group.href and page.url == group.href %}
+              {% set currentGroup = group %}
+            {% endif %}
+            {% if group.href and page.url != group.href and page.url.indexOf(group.href) == 0 %}
+              {% set parentGroup = group %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+
+        <div class="docs-breadcrumb">
+          {% if parentGroup %}
+            <a href="{{ parentGroup.href }}">{{ parentGroup.title }}</a>
+          {% else %}
+            <a href="/docs/">Docs</a>
+          {% endif %}
+        </div>
+
+        <header class="docs-header">
+          <h1>{{ title }}</h1>
+          {% if description %}
+            <p>{{ description }}</p>
+          {% endif %}
+        </header>
+
+        <div class="docs-body">
+          {{ content | safe }}
+
+          {% if currentGroup and currentGroup.pages and currentGroup.pages.length %}
+            <section class="docs-section-list" aria-label="Pages in {{ currentGroup.title }}">
+              {% for navPage in currentGroup.pages %}
+                {% set cardTitle = navPage.title %}
+                {% if currentGroup.title == "Commands" %}
+                  {% set cardTitle = navPage.title | capitalizeFirst %}
+                {% endif %}
+                <a class="docs-section-card" href="{{ navPage.href }}">
+                  <div class="docs-section-card-title">{{ cardTitle }}</div>
+                  <div class="docs-section-card-text">{{ navPage.description or "Open this page." }}</div>
+                </a>
+              {% endfor %}
+            </section>
+          {% endif %}
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+{% if docsNav %}
+  <script type="application/json" data-docs-nav-map>
+    {{ docsNav | dump | safe }}
+  </script>
+{% endif %}
+<div class="docs-search" data-docs-search>
+  <div class="docs-search-overlay" data-docs-search-close></div>
+  <div class="docs-search-panel" role="dialog" aria-modal="true" aria-label="Search docs">
+    <div class="docs-search-header">
+      <input
+        class="docs-search-input"
+        type="search"
+        placeholder="Search docs"
+        aria-label="Search docs"
+        data-docs-search-input
+      />
+      <button class="docs-search-close" type="button" data-docs-search-close>
+        Esc
+      </button>
+    </div>
+    <div class="docs-search-meta" data-docs-search-meta>
+      Start typing to search the docs.
+    </div>
+    <div class="docs-search-results" role="listbox" data-docs-search-results></div>
+  </div>
+</div>
+
