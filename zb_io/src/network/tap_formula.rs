@@ -1,6 +1,6 @@
 use regex::Regex;
 use std::collections::BTreeMap;
-use zb_core::formula::{Bottle, BottleFile, BottleStable, Versions};
+use zb_core::formula::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
 use zb_core::{Error, Formula};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,7 @@ pub fn parse_tap_formula_ruby(spec: &TapFormulaRef, source: &str) -> Result<Form
         dependencies,
         bottle,
         revision,
+        keg_only: KegOnly::default(),
     })
 }
 

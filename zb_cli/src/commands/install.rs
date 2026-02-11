@@ -150,14 +150,6 @@ pub async fn execute(
                         pb.set_message("linked");
                     }
                 }
-                InstallProgress::InstallCompleted { name } => {
-                    if let Some(pb) = bars.get(&name) {
-                        pb.set_style(done_style_clone.clone());
-                        pb.set_message(format!("{} installed", style("✓").green()));
-                        pb.finish();
-                    }
-                }
-            }
                 InstallProgress::LinkSkipped { name, reason } => {
                     if let Some(pb) = bars.get(&name) {
                         pb.set_message(format!("keg-only ({})", reason));
