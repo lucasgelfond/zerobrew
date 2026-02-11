@@ -92,6 +92,7 @@ pub enum Commands {
         formula: String,
     },
     Gc,
+    Repair,
     Reset {
         #[arg(long, short = 'y')]
         yes: bool,
