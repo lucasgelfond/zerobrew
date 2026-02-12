@@ -34,18 +34,22 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact_name: zb-darwin-arm64
+            zbx_artifact_name: zbx-darwin-arm64
 
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact_name: zb-darwin-x64
+            zbx_artifact_name: zbx-darwin-x64
 
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact_name: zb-linux-x64
+            zbx_artifact_name: zbx-linux-x64
 
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             artifact_name: zb-linux-arm64
+            zbx_artifact_name: zbx-linux-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -74,14 +78,23 @@ jobs:
             exit 1
           fi
 
-      - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/zb ${{ matrix.artifact_name }}
+      - name: Prepare binaries
+        run: |
+          cp target/${{ matrix.target }}/release/zb ${{ matrix.artifact_name }}
+          cp target/${{ matrix.target }}/release/zbx ${{ matrix.zbx_artifact_name }}
 
-      - name: Upload binary as artifact
+      - name: Upload zb binary as artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
+          retention-days: 7
+
+      - name: Upload zbx binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.zbx_artifact_name }}
+          path: ${{ matrix.zbx_artifact_name }}
           retention-days: 7
 
   release:
@@ -94,7 +107,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: assets
-          pattern: "zb-*"
+          pattern: "zb*-*"
           merge-multiple: true
 
       - name: Create GitHub Release
