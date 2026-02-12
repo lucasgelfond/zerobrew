@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub release installs with clone fallback ([#198](https://github.com/lucasgelfond/zerobrew/pull/198))
 
 ### Fixed
+- Include zbx binaries in GitHub releases (fixes "zbx-darwin-arm64 not found" on macOS ARM)([#229](https://github.com/lucasgelfond/zerobrew/pull/229))
+- Preserve execute bit when patching Mach-O binary strings ([#228](https://github.com/lucasgelfond/zerobrew/pull/228))                               
 - Prevent bricked installs from link conflicts, respect keg-only formulas ([#207](https://github.com/lucasgelfond/zerobrew/pull/207))
 - Default macOS prefix to `/opt/zerobrew` to stay within the 13-char Mach-O path limit ([#206](https://github.com/lucasgelfond/zerobrew/pull/206))
 - Shell init management and fish support ([#200](https://github.com/lucasgelfond/zerobrew/pull/200))
