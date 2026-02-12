@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn test_patch_macho_fails_when_new_prefix_longer() {
+    fn test_patch_macho_skips_when_new_prefix_longer() {
         let tmp = TempDir::new().unwrap();
         let test_file = tmp.path().join("test_binary");
 
@@ -581,23 +581,20 @@ mod tests {
         let original = contents.clone();
         fs::write(&test_file, &contents).unwrap();
 
+        // Should succeed (skip) rather than error when the new prefix is
+        // longer than the old one — install_name_tool handles load command
+        // changes regardless of length.
         let result = patch_macho_binary_strings(&test_file, new_prefix);
         assert!(
-            result.is_err(),
-            "should error when prefix too long and path present"
-        );
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("13"),
-            "error should mention max prefix length"
-        );
-        assert!(
-            err_msg.contains("/opt/zerobrew"),
-            "error should suggest short prefix"
+            result.is_ok(),
+            "should skip when new prefix is longer than old prefix"
         );
 
         let unchanged = fs::read(&test_file).unwrap();
-        assert_eq!(unchanged, original, "binary must be unchanged");
+        assert_eq!(
+            unchanged, original,
+            "binary must be unchanged when prefix cannot be expanded in-place"
+        );
     }
 
     #[test]
