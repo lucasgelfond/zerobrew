@@ -1,5 +1,5 @@
 use console::style;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -63,7 +63,7 @@ pub async fn execute(
             );
         }
 
-        let multi = MultiProgress::new();
+        let multi = MultiProgress::with_draw_target(ProgressDrawTarget::stderr_with_hz(15));
         let bars: Arc<Mutex<HashMap<String, ProgressBar>>> = Arc::new(Mutex::new(HashMap::new()));
 
         let download_style = ProgressStyle::default_bar()
@@ -92,12 +92,16 @@ pub async fn execute(
         let done_style_clone = done_style.clone();
 
         let progress_callback: Arc<ProgressCallback> = Arc::new(Box::new(move |event| {
-            let mut bars = bars_clone.lock().unwrap();
+            // Minimize mutex hold time: acquire the lock, do the minimal
+            // HashMap operation, then drop the lock before calling ProgressBar
+            // methods. This prevents contention when multiple chunked-download
+            // tasks fire progress events concurrently.
             match event {
                 InstallProgress::DownloadStarted { name, total_bytes } => {
                     let pb = if let Some(total) = total_bytes {
                         let pb = multi_clone.add(ProgressBar::new(total));
                         pb.set_style(download_style_clone.clone());
+                        pb.enable_steady_tick(std::time::Duration::from_millis(100));
                         pb
                     } else {
                         let pb = multi_clone.add(ProgressBar::new_spinner());
@@ -107,21 +111,28 @@ pub async fn execute(
                         pb
                     };
                     pb.set_prefix(name.clone());
-                    bars.insert(name, pb);
+                    bars_clone.lock().unwrap().insert(name, pb);
                 }
                 InstallProgress::DownloadProgress {
                     name,
                     downloaded,
                     total_bytes,
                 } => {
-                    if let Some(pb) = bars.get(&name)
-                        && total_bytes.is_some()
-                    {
+                    let pb = {
+                        let bars = bars_clone.lock().unwrap();
+                        if total_bytes.is_some() {
+                            bars.get(&name).cloned()
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(pb) = pb {
                         pb.set_position(downloaded);
                     }
                 }
                 InstallProgress::DownloadCompleted { name, total_bytes } => {
-                    if let Some(pb) = bars.get(&name) {
+                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    if let Some(pb) = pb {
                         if total_bytes > 0 {
                             pb.set_position(total_bytes);
                         }
@@ -131,32 +142,38 @@ pub async fn execute(
                     }
                 }
                 InstallProgress::UnpackStarted { name } => {
-                    if let Some(pb) = bars.get(&name) {
+                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    if let Some(pb) = pb {
                         pb.set_message("unpacking...");
                     }
                 }
                 InstallProgress::UnpackCompleted { name } => {
-                    if let Some(pb) = bars.get(&name) {
+                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    if let Some(pb) = pb {
                         pb.set_message("unpacked");
                     }
                 }
                 InstallProgress::LinkStarted { name } => {
-                    if let Some(pb) = bars.get(&name) {
+                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    if let Some(pb) = pb {
                         pb.set_message("linking...");
                     }
                 }
                 InstallProgress::LinkCompleted { name } => {
-                    if let Some(pb) = bars.get(&name) {
+                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    if let Some(pb) = pb {
                         pb.set_message("linked");
                     }
                 }
                 InstallProgress::LinkSkipped { name, reason } => {
-                    if let Some(pb) = bars.get(&name) {
+                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    if let Some(pb) = pb {
                         pb.set_message(format!("keg-only ({})", reason));
                     }
                 }
                 InstallProgress::InstallCompleted { name } => {
-                    if let Some(pb) = bars.get(&name) {
+                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    if let Some(pb) = pb {
                         pb.set_style(done_style_clone.clone());
                         pb.set_message(format!("{} installed", style("✓").green()));
                         pb.finish();
