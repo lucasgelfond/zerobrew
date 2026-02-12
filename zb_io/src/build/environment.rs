@@ -23,9 +23,22 @@ pub fn build_env(plan: &BuildPlan, prefix: &Path) -> HashMap<String, String> {
         format!("{}:{system_pkg}", pkgconfig_dir.display()),
     );
 
-    env.insert("CFLAGS".into(), format!("-I{}", include_dir.display()));
-    env.insert("CPPFLAGS".into(), format!("-I{}", include_dir.display()));
-    env.insert("LDFLAGS".into(), format!("-L{}", lib_dir.display()));
+    let system_cflags = std::env::var("CFLAGS").unwrap_or_default();
+    let system_cppflags = std::env::var("CPPFLAGS").unwrap_or_default();
+    let system_ldflags = std::env::var("LDFLAGS").unwrap_or_default();
+
+    env.insert(
+        "CFLAGS".into(),
+        format!("-I{} {system_cflags}", include_dir.display()).trim().to_string(),
+    );
+    env.insert(
+        "CPPFLAGS".into(),
+        format!("-I{} {system_cppflags}", include_dir.display()).trim().to_string(),
+    );
+    env.insert(
+        "LDFLAGS".into(),
+        format!("-L{} {system_ldflags}", lib_dir.display()).trim().to_string(),
+    );
 
     env.insert("HOMEBREW_PREFIX".into(), prefix.display().to_string());
     env.insert(
