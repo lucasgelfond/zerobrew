@@ -31,7 +31,14 @@ pub async fn download_and_extract_source(
 }
 
 async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {
-    let response = reqwest::get(url).await.map_err(|e| Error::NetworkFailure {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| Error::NetworkFailure {
+            message: format!("failed to create HTTP client: {e}"),
+        })?;
+
+    let response = client.get(url).send().await.map_err(|e| Error::NetworkFailure {
         message: format!("failed to download source: {e}"),
     })?;
 
@@ -60,7 +67,7 @@ async fn verify_checksum(path: &Path, expected: &str) -> Result<(), Error> {
     hasher.update(&bytes);
     let actual = format!("{:x}", hasher.finalize());
 
-    if actual != expected {
+    if actual != expected.to_lowercase() {
         return Err(Error::ChecksumMismatch {
             expected: expected.to_string(),
             actual,
