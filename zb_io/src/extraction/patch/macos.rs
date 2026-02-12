@@ -182,6 +182,12 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
             message: format!("failed to rename temp file: {e}"),
         })?;
 
+        // Restore original permissions — fs::File::create uses 0644 by default,
+        // which drops the execute bit from patched binaries.
+        fs::set_permissions(path, metadata.permissions()).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to restore permissions after patching: {e}"),
+        })?;
+
         match std::process::Command::new("codesign")
             .args(["--force", "--sign", "-", &path.to_string_lossy()])
             .output()
@@ -531,7 +537,38 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_patch_macho_preserves_execute_bit() {
+        let tmp = TempDir::new().unwrap();
+        let test_file = tmp.path().join("test_binary");
+
+        let old_prefix = "/home/linuxbrew/.linuxbrew";
+        let new_prefix = "/opt/zerobrew/prefix";
+
+        let mut contents = Vec::new();
+        contents.extend_from_slice(b"\xfe\xed\xfa\xcf");
+        contents.extend_from_slice(old_prefix.as_bytes());
+        contents.extend_from_slice(b"/bin/hello\0");
+
+        fs::write(&test_file, &contents).unwrap();
+
+        // Set executable permissions (0755)
+        let mut perms = fs::metadata(&test_file).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&test_file, perms).unwrap();
+
+        patch_macho_binary_strings(&test_file, new_prefix).unwrap();
+
+        let mode = fs::metadata(&test_file).unwrap().permissions().mode();
+        assert!(
+            mode & 0o111 != 0,
+            "execute bit lost after patching: mode = {:#o}",
+            mode
+        );
+    }
 
     #[test]
     fn test_patch_macho_binary_strings() {
