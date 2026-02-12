@@ -37,7 +37,8 @@ impl BuildPlan {
         let version = formula.effective_version();
         let cellar_path = prefix.join("Cellar").join(&formula.name).join(&version);
 
-        let detected_system = detect_build_system(&source.url, &formula.build_dependencies);
+        let all_build_deps = formula.all_build_dependencies();
+        let detected_system = detect_build_system(&source.url, &all_build_deps);
 
         Some(Self {
             formula_name: formula.name.clone(),
@@ -45,7 +46,7 @@ impl BuildPlan {
             source_url: source.url.clone(),
             source_checksum: source.checksum.clone(),
             ruby_source_path: formula.ruby_source_path.clone(),
-            build_dependencies: formula.all_build_dependencies(),
+            build_dependencies: all_build_deps,
             runtime_dependencies: formula.dependencies.clone(),
             detected_system,
             prefix: prefix.to_path_buf(),
