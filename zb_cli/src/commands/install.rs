@@ -2,7 +2,7 @@ use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use zb_io::{InstallProgress, ProgressCallback};
 
 use crate::utils::{normalize_formula_name, suggest_homebrew};
@@ -99,19 +99,26 @@ pub async fn execute(
             match event {
                 InstallProgress::DownloadStarted { name, total_bytes } => {
                     let pb = if let Some(total) = total_bytes {
-                        let pb = multi_clone.add(ProgressBar::new(total));
-                        pb.set_style(download_style_clone.clone());
-                        pb.enable_steady_tick(std::time::Duration::from_millis(100));
-                        pb
+                        multi_clone.add(ProgressBar::new(total))
                     } else {
-                        let pb = multi_clone.add(ProgressBar::new_spinner());
+                        multi_clone.add(ProgressBar::new_spinner())
+                    };
+
+                    // Insert first so early progress events can find the bar.
+                    bars_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(name.clone(), pb.clone());
+
+                    pb.set_prefix(name);
+                    if total_bytes.is_some() {
+                        pb.set_style(download_style_clone.clone());
+                        pb.enable_steady_tick(Duration::from_millis(100));
+                    } else {
                         pb.set_style(spinner_style_clone.clone());
                         pb.set_message("downloading...");
-                        pb.enable_steady_tick(std::time::Duration::from_millis(80));
-                        pb
-                    };
-                    pb.set_prefix(name.clone());
-                    bars_clone.lock().unwrap().insert(name, pb);
+                        pb.enable_steady_tick(Duration::from_millis(80));
+                    }
                 }
                 InstallProgress::DownloadProgress {
                     name,
@@ -119,7 +126,7 @@ pub async fn execute(
                     total_bytes,
                 } => {
                     let pb = {
-                        let bars = bars_clone.lock().unwrap();
+                        let bars = bars_clone.lock().unwrap_or_else(|e| e.into_inner());
                         if total_bytes.is_some() {
                             bars.get(&name).cloned()
                         } else {
@@ -131,48 +138,75 @@ pub async fn execute(
                     }
                 }
                 InstallProgress::DownloadCompleted { name, total_bytes } => {
-                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    let pb = bars_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(&name)
+                        .cloned();
                     if let Some(pb) = pb {
                         if total_bytes > 0 {
                             pb.set_position(total_bytes);
                         }
                         pb.set_style(spinner_style_clone.clone());
                         pb.set_message("unpacking...");
-                        pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                        pb.enable_steady_tick(Duration::from_millis(80));
                     }
                 }
                 InstallProgress::UnpackStarted { name } => {
-                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    let pb = bars_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(&name)
+                        .cloned();
                     if let Some(pb) = pb {
                         pb.set_message("unpacking...");
                     }
                 }
                 InstallProgress::UnpackCompleted { name } => {
-                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    let pb = bars_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(&name)
+                        .cloned();
                     if let Some(pb) = pb {
                         pb.set_message("unpacked");
                     }
                 }
                 InstallProgress::LinkStarted { name } => {
-                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    let pb = bars_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(&name)
+                        .cloned();
                     if let Some(pb) = pb {
                         pb.set_message("linking...");
                     }
                 }
                 InstallProgress::LinkCompleted { name } => {
-                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    let pb = bars_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(&name)
+                        .cloned();
                     if let Some(pb) = pb {
                         pb.set_message("linked");
                     }
                 }
                 InstallProgress::LinkSkipped { name, reason } => {
-                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    let pb = bars_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(&name)
+                        .cloned();
                     if let Some(pb) = pb {
                         pb.set_message(format!("keg-only ({})", reason));
                     }
                 }
                 InstallProgress::InstallCompleted { name } => {
-                    let pb = bars_clone.lock().unwrap().get(&name).cloned();
+                    let pb = bars_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&name);
                     if let Some(pb) = pb {
                         pb.set_style(done_style_clone.clone());
                         pb.set_message(format!("{} installed", style("✓").green()));
@@ -187,7 +221,7 @@ pub async fn execute(
             .await;
 
         {
-            let bars = bars.lock().unwrap();
+            let bars = bars.lock().unwrap_or_else(|e| e.into_inner());
             for (_, pb) in bars.iter() {
                 if !pb.is_finished() {
                     pb.finish();
