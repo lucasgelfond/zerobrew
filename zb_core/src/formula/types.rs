@@ -125,11 +125,15 @@ impl Formula {
     }
 
     pub fn all_build_dependencies(&self) -> Vec<String> {
-        let mut deps = self.build_dependencies.clone();
-        for u in &self.uses_from_macos {
-            #[cfg(not(target_os = "macos"))]
-            deps.push(u.name().to_string());
-        }
+        let deps = self.build_dependencies.clone();
+        #[cfg(not(target_os = "macos"))]
+        let deps = {
+            let mut deps = deps;
+            for u in &self.uses_from_macos {
+                deps.push(u.name().to_string());
+            }
+            deps
+        };
         deps
     }
 }
