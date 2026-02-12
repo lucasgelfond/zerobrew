@@ -2,6 +2,7 @@ use console::style;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use zb_core::formula_token;
 use zb_io::Installer;
 
 use crate::utils::normalize_formula_name;
@@ -34,14 +35,15 @@ pub async fn prepare_execution(
                 name: normalized.clone(),
             })?;
 
-    let keg_path = installer.keg_path(&normalized, &installed.version);
-    let bin_path = keg_path.join("bin").join(&normalized);
+    let executable_name = formula_token(&installed.name);
+    let keg_path = installer.keg_path(executable_name, &installed.version);
+    let bin_path = keg_path.join("bin").join(executable_name);
 
     if !bin_path.exists() {
         return Err(zb_core::Error::ExecutionError {
             message: format!(
                 "executable '{}' not found in package '{}'",
-                normalized, normalized
+                executable_name, normalized
             ),
         });
     }

@@ -16,7 +16,8 @@ use crate::storage::db::Database;
 use crate::storage::store::Store;
 
 use zb_core::{
-    BuildPlan, Error, Formula, InstallMethod, SelectedBottle, resolve_closure, select_bottle,
+    BuildPlan, Error, Formula, InstallMethod, SelectedBottle, formula_token, resolve_closure,
+    select_bottle,
 };
 
 /// Maximum number of retries for corrupted downloads
@@ -718,9 +719,10 @@ impl Installer {
         let installed = self.db.get_installed(name).ok_or(Error::NotInstalled {
             name: name.to_string(),
         })?;
+        let keg_name = formula_token(&installed.name);
 
         // Unlink executables
-        let keg_path = self.cellar.keg_path(name, &installed.version);
+        let keg_path = self.cellar.keg_path(keg_name, &installed.version);
         self.linker.unlink_keg(&keg_path)?;
 
         // Remove from database (decrements store ref)
@@ -731,7 +733,7 @@ impl Installer {
         }
 
         // Remove cellar entry
-        self.cellar.remove_keg(name, &installed.version)?;
+        self.cellar.remove_keg(keg_name, &installed.version)?;
 
         Ok(())
     }
@@ -1725,8 +1727,10 @@ end
 
         assert!(installer.is_installed("hashicorp/tap/terraform"));
         assert!(!installer.is_installed("terraform"));
+        assert!(root.join("cellar/terraform/1.10.0").exists());
         installer.uninstall("hashicorp/tap/terraform").unwrap();
         assert!(!installer.is_installed("hashicorp/tap/terraform"));
+        assert!(!root.join("cellar/terraform/1.10.0").exists());
     }
 
     #[tokio::test]
