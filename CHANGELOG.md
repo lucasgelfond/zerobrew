@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shell init management and fish support ([#200](https://github.com/lucasgelfond/zerobrew/pull/200))
 - Remove `-D` flag from install since directories are already created ([#221](https://github.com/lucasgelfond/zerobrew/pull/221))
 - Force static liblzma linking and verify macOS binaries ([#222](https://github.com/lucasgelfond/zerobrew/pull/222))
+- Skip patching when new prefix is longer than old ([#227](https://github.com/lucasgelfond/zerobrew/pull/227))
 
 ### Changed
 - Refreshed README with banner and star history ([#224](https://github.com/lucasgelfond/zerobrew/pull/224))
