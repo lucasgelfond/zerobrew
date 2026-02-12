@@ -55,7 +55,7 @@ impl ApiClient {
         cache_dir: &std::path::Path,
     ) -> Result<std::path::PathBuf, Error> {
         let url = format!(
-            "https://raw.githubusercontent.com/Homebrew/homebrew-core/master/{ruby_source_path}"
+            "https://raw.githubusercontent.com/Homebrew/homebrew-core/main/{ruby_source_path}"
         );
 
         let cache_key = format!("rb:{url}");
