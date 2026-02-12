@@ -377,7 +377,7 @@ impl Installer {
                             drop(tx);
                             Self::cleanup_materialized(
                                 &self.cellar,
-                                &processed_name,
+                                &materialized_name,
                                 &processed_version,
                             );
                             error = Some(e);
@@ -387,7 +387,7 @@ impl Installer {
                         if let Err(e) = tx.commit() {
                             Self::cleanup_materialized(
                                 &self.cellar,
-                                &processed_name,
+                                &materialized_name,
                                 &processed_version,
                             );
                             error = Some(e);
@@ -565,11 +565,7 @@ impl Installer {
                 installed_deps.insert(
                     dep_name.clone(),
                     crate::build::DepInfo {
-                        cellar_path: self
-                            .cellar
-                            .keg_path(dep_name, &keg.version)
-                            .display()
-                            .to_string(),
+                        cellar_path: dependency_cellar_path(&self.cellar, &keg.name, &keg.version),
                     },
                 );
             }
@@ -821,6 +817,13 @@ impl Installer {
         cleanup.disarm();
         Ok(())
     }
+}
+
+fn dependency_cellar_path(cellar: &Cellar, installed_name: &str, version: &str) -> String {
+    cellar
+        .keg_path(formula_token(installed_name), version)
+        .display()
+        .to_string()
 }
 
 struct FailedInstallGuard<'a> {
@@ -1083,6 +1086,24 @@ mod tests {
         } else {
             "arm64_sonoma"
         }
+    }
+
+    #[test]
+    fn dependency_cellar_path_uses_formula_token_for_tap_name() {
+        let tmp = TempDir::new().unwrap();
+        let cellar = Cellar::new(tmp.path()).unwrap();
+        let path = dependency_cellar_path(&cellar, "hashicorp/tap/terraform", "1.10.0");
+
+        assert!(path.ends_with("cellar/terraform/1.10.0"));
+    }
+
+    #[test]
+    fn dependency_cellar_path_keeps_core_formula_name() {
+        let tmp = TempDir::new().unwrap();
+        let cellar = Cellar::new(tmp.path()).unwrap();
+        let path = dependency_cellar_path(&cellar, "openssl@3", "3.3.2");
+
+        assert!(path.ends_with("cellar/openssl@3/3.3.2"));
     }
 
     #[tokio::test]
@@ -2004,6 +2025,83 @@ end
         assert!(!root.join("cellar/rollbackme/1.0.0").exists());
         assert!(!prefix.join("bin/rollbackme").exists());
         assert!(!prefix.join("opt/rollbackme").exists());
+        assert!(root.join("store").join(&bottle_sha).exists());
+    }
+
+    #[tokio::test]
+    async fn db_persist_failure_cleans_materialized_tap_formula_keg() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let bottle = create_bottle_tarball("terraform");
+        let bottle_sha = sha256_hex(&bottle);
+        let tag = get_test_bottle_tag();
+
+        let tap_formula_rb = format!(
+            r#"
+class Terraform < Formula
+  version "1.10.0"
+  bottle do
+    root_url "{}/v2/hashicorp/tap"
+    sha256 {}: "{}"
+  end
+end
+"#,
+            mock_server.uri(),
+            tag,
+            bottle_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/hashicorp/homebrew-tap/main/Formula/terraform.rb"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(tap_formula_rb))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/v2/hashicorp/tap/terraform/blobs/sha256:{bottle_sha}"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let db_path = root.join("db/zb.sqlite3");
+        let api_client =
+            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&db_path).unwrap();
+
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+        );
+
+        // Force metadata persistence to fail after filesystem work is done.
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute("DROP TABLE installed_kegs", []).unwrap();
+
+        let result = installer
+            .install(&["hashicorp/tap/terraform".to_string()], true)
+            .await;
+        assert!(result.is_err());
+
+        // Keg is materialized at canonical formula name, so rollback must remove this path.
+        assert!(!root.join("cellar/terraform/1.10.0").exists());
+        assert!(!prefix.join("bin/terraform").exists());
+        assert!(!prefix.join("opt/terraform").exists());
         assert!(root.join("store").join(&bottle_sha).exists());
     }
 
