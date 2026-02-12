@@ -1,5 +1,6 @@
 pub mod build;
 pub mod cellar;
+pub(crate) mod checksum;
 pub mod extraction;
 pub mod installer;
 pub mod network;

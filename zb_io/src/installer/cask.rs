@@ -188,12 +188,12 @@ mod tests {
             }
         });
 
-        let resolved = resolve_cask("test", &cask).unwrap();
+        let _resolved = resolve_cask("test", &cask).unwrap();
         #[cfg(target_os = "linux")]
         {
-            assert_eq!(resolved.url, "https://example.com/linux.zip");
+            assert_eq!(_resolved.url, "https://example.com/linux.zip");
             assert_eq!(
-                resolved.sha256,
+                _resolved.sha256,
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             );
         }

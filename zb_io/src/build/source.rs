@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
 use tokio::fs;
 use zb_core::Error;
 
+use crate::checksum::verify_sha256_bytes;
 use crate::extraction::extract_tarball;
 
 pub async fn download_and_extract_source(
@@ -14,9 +14,7 @@ pub async fn download_and_extract_source(
     let tarball_path = work_dir.join("source.tar.gz");
     download_source(url, &tarball_path).await?;
 
-    if let Some(expected) = expected_checksum {
-        verify_checksum(&tarball_path, expected).await?;
-    }
+    verify_checksum(&tarball_path, expected_checksum, url).await?;
 
     let src_dir = work_dir.join("src");
     fs::create_dir_all(&src_dir)
@@ -62,23 +60,18 @@ async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {
     })
 }
 
-async fn verify_checksum(path: &Path, expected: &str) -> Result<(), Error> {
+async fn verify_checksum(path: &Path, expected: Option<&str>, url: &str) -> Result<(), Error> {
     let bytes = fs::read(path).await.map_err(|e| Error::FileError {
         message: format!("failed to read tarball for checksum: {e}"),
     })?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let actual = format!("{:x}", hasher.finalize());
-
-    if actual != expected.to_lowercase() {
-        return Err(Error::ChecksumMismatch {
-            expected: expected.to_string(),
-            actual,
-        });
-    }
-
-    Ok(())
+    verify_sha256_bytes(&bytes, expected).map_err(|e| match e {
+        Error::ChecksumMismatch { .. } => e,
+        Error::InvalidArgument { message } => Error::InvalidArgument {
+            message: format!("invalid source checksum for '{url}': {message}"),
+        },
+        other => other,
+    })
 }
 
 async fn find_source_root(src_dir: &Path) -> Result<PathBuf, Error> {

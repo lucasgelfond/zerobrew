@@ -1,3 +1,4 @@
+use crate::checksum::verify_sha256_bytes;
 use crate::network::cache::{ApiCache, CacheEntry};
 use crate::network::tap_formula::{parse_tap_formula_ref, parse_tap_formula_ruby};
 use zb_core::{Error, Formula};
@@ -53,13 +54,27 @@ impl ApiClient {
         &self,
         ruby_source_path: &str,
         cache_dir: &std::path::Path,
+        expected_sha256: Option<&str>,
     ) -> Result<std::path::PathBuf, Error> {
         let url = format!(
             "https://raw.githubusercontent.com/Homebrew/homebrew-core/main/{ruby_source_path}"
         );
+        self.fetch_formula_rb_from_url(ruby_source_path, &url, cache_dir, expected_sha256)
+            .await
+    }
 
+    async fn fetch_formula_rb_from_url(
+        &self,
+        ruby_source_path: &str,
+        url: &str,
+        cache_dir: &std::path::Path,
+        expected_sha256: Option<&str>,
+    ) -> Result<std::path::PathBuf, Error> {
         let cache_key = format!("rb:{url}");
         if let Some(entry) = self.cache.as_ref().and_then(|c| c.get(&cache_key)) {
+            verify_sha256_bytes(entry.body.as_bytes(), expected_sha256)
+                .map_err(|e| Self::map_formula_rb_checksum_error(e, ruby_source_path, "cache"))?;
+
             let dest = cache_dir.join(ruby_source_path.replace('/', "_"));
             std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
                 message: format!("failed to create rb cache dir: {e}"),
@@ -72,7 +87,7 @@ impl ApiClient {
 
         let response = self
             .client
-            .get(&url)
+            .get(url)
             .send()
             .await
             .map_err(|e| Error::NetworkFailure {
@@ -88,6 +103,9 @@ impl ApiClient {
         let body = response.text().await.map_err(|e| Error::NetworkFailure {
             message: format!("failed to read formula rb response: {e}"),
         })?;
+
+        verify_sha256_bytes(body.as_bytes(), expected_sha256)
+            .map_err(|e| Self::map_formula_rb_checksum_error(e, ruby_source_path, "network"))?;
 
         if let Some(ref cache) = self.cache {
             let entry = CacheEntry {
@@ -107,6 +125,18 @@ impl ApiClient {
         })?;
 
         Ok(dest)
+    }
+
+    fn map_formula_rb_checksum_error(err: Error, ruby_source_path: &str, source: &str) -> Error {
+        match err {
+            Error::ChecksumMismatch { .. } => err,
+            Error::InvalidArgument { message } => Error::InvalidArgument {
+                message: format!(
+                    "invalid ruby_source_checksum for '{ruby_source_path}' (source: {source}): {message}"
+                ),
+            },
+            other => other,
+        }
     }
 
     pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
@@ -323,6 +353,7 @@ impl Default for ApiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -558,6 +589,64 @@ end
 
         assert_eq!(formula.name, "terraform");
         assert_eq!(formula.versions.stable, "1.10.0");
+    }
+
+    #[tokio::test]
+    async fn fetch_formula_rb_from_network_rejects_checksum_mismatch() {
+        let mock_server = MockServer::start().await;
+        let ruby_body = "class Foo < Formula\nend\n";
+
+        Mock::given(method("GET"))
+            .and(path("/Formula/f/foo.rb"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(ruby_body))
+            .mount(&mock_server)
+            .await;
+
+        let cache_dir = tempdir().unwrap();
+        let client = ApiClient::new();
+
+        let err = client
+            .fetch_formula_rb_from_url(
+                "Formula/f/foo.rb",
+                &format!("{}/Formula/f/foo.rb", mock_server.uri()),
+                cache_dir.path(),
+                Some(&"0".repeat(64)),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::ChecksumMismatch { .. }));
+    }
+
+    #[tokio::test]
+    async fn fetch_formula_rb_from_cache_rejects_checksum_mismatch() {
+        let cache = ApiCache::in_memory().unwrap();
+        let cache_url = "https://example.invalid/Formula/f/foo.rb";
+        cache
+            .put(
+                &format!("rb:{cache_url}"),
+                &CacheEntry {
+                    etag: None,
+                    last_modified: None,
+                    body: "class Foo < Formula\nend\n".to_string(),
+                },
+            )
+            .unwrap();
+
+        let cache_dir = tempdir().unwrap();
+        let client = ApiClient::new().with_cache(cache);
+
+        let err = client
+            .fetch_formula_rb_from_url(
+                "Formula/f/foo.rb",
+                cache_url,
+                cache_dir.path(),
+                Some(&"f".repeat(64)),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::ChecksumMismatch { .. }));
     }
 
     #[tokio::test]

@@ -547,9 +547,15 @@ impl Installer {
                 })?;
 
         let cache_dir = self.prefix.join("tmp").join("rb_cache");
+        let formula_rb_checksum = item
+            .formula
+            .ruby_source_checksum
+            .as_ref()
+            .map(|checksum| checksum.sha256.as_str());
+
         let formula_rb = self
             .api_client
-            .fetch_formula_rb(ruby_source_path, &cache_dir)
+            .fetch_formula_rb(ruby_source_path, &cache_dir, formula_rb_checksum)
             .await?;
 
         let mut installed_deps = std::collections::HashMap::new();
