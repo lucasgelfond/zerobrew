@@ -9,10 +9,6 @@ const HOMEBREW_PREFIXES: &[&str] = &[
     "/home/linuxbrew/.linuxbrew",
 ];
 
-/// Longest old prefix we patch:
-/// macOS Mach-O cannot be expanded in-place, so new prefix must not exceed this.
-const MAX_PREFIX_LEN_MACOS: usize = 13;
-
 /// Patch hardcoded Homebrew paths in text files.
 fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
@@ -146,21 +142,11 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
         let new_bytes = new_prefix.as_bytes();
 
         if new_bytes.len() > old_bytes.len() {
-            if contents.windows(old_bytes.len()).any(|w| w == old_bytes) {
-                return Err(Error::StoreCorruption {
-                    message: format!(
-                        "zerobrew prefix \"{}\" ({} bytes) is longer than \"{}\" ({} bytes). \
-                         On macOS, Mach-O binaries cannot be expanded in-place, so path-sensitive formulae (e.g. git) will not work. \
-                         Use a prefix of at most {} characters, e.g. /opt/zerobrew. \
-                         Re-init with: zb init <root> /opt/zerobrew (or your chosen short prefix), then reinstall.",
-                        new_prefix,
-                        new_bytes.len(),
-                        *old_prefix,
-                        old_bytes.len(),
-                        MAX_PREFIX_LEN_MACOS
-                    ),
-                });
-            }
+            // Cannot expand shorter paths in-place in Mach-O binaries.
+            // Skip this prefix — the install_name_tool pass handles load
+            // command changes regardless of length, and many binaries
+            // legitimately reference shorter prefixes like /usr/local for
+            // system libraries (not Homebrew paths).
             continue;
         }
 
