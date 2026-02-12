@@ -11,6 +11,7 @@ pub async fn execute(
     installer: &mut zb_io::Installer,
     formulas: Vec<String>,
     no_link: bool,
+    build_from_source: bool,
 ) -> Result<(), zb_core::Error> {
     let start = Instant::now();
     println!(
@@ -40,7 +41,10 @@ pub async fn execute(
     let mut installed_count = 0usize;
 
     if !normalized_names.is_empty() {
-        let plan = match installer.plan(&normalized_names).await {
+        let plan = match installer
+            .plan_with_options(&normalized_names, build_from_source)
+            .await
+        {
             Ok(p) => p,
             Err(e) => {
                 for formula in &formulas {

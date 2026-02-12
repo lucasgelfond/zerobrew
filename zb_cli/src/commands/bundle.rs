@@ -20,7 +20,7 @@ pub async fn execute(
 
     let start = Instant::now();
     for formula in formulas {
-        install::execute(installer, vec![formula], no_link).await?;
+        install::execute(installer, vec![formula], no_link, false).await?;
     }
 
     println!(

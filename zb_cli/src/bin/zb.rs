@@ -48,9 +48,11 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
     match cli.command {
         Commands::Init { .. } => unreachable!(),
         Commands::Completion { .. } => unreachable!(),
-        Commands::Install { formulas, no_link } => {
-            commands::install::execute(&mut installer, formulas, no_link).await
-        }
+        Commands::Install {
+            formulas,
+            no_link,
+            build_from_source,
+        } => commands::install::execute(&mut installer, formulas, no_link, build_from_source).await,
         Commands::Bundle { file, no_link } => {
             commands::bundle::execute(&mut installer, &file, no_link).await
         }

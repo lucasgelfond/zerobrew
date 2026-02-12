@@ -70,22 +70,44 @@ impl Installer {
     }
 
     pub async fn plan(&self, names: &[String]) -> Result<InstallPlan, Error> {
+        self.plan_with_options(names, false).await
+    }
+
+    pub async fn plan_with_options(
+        &self,
+        names: &[String],
+        build_from_source: bool,
+    ) -> Result<InstallPlan, Error> {
         let formulas = self.fetch_all_formulas(names).await?;
         let ordered = resolve_closure(names, &formulas)?;
 
         let mut items = Vec::with_capacity(ordered.len());
         for install_name in ordered {
             let formula = formulas.get(&install_name).cloned().unwrap();
-            let method = match select_bottle(&formula) {
-                Ok(bottle) => InstallMethod::Bottle(bottle),
-                Err(_) => match BuildPlan::from_formula(&formula, &self.prefix) {
+            let method = if build_from_source {
+                match BuildPlan::from_formula(&formula, &self.prefix) {
                     Some(plan) => InstallMethod::Source(plan),
-                    None => {
-                        return Err(Error::UnsupportedBottle {
-                            name: formula.name.clone(),
-                        });
-                    }
-                },
+                    None => match select_bottle(&formula) {
+                        Ok(bottle) => InstallMethod::Bottle(bottle),
+                        Err(_) => {
+                            return Err(Error::UnsupportedBottle {
+                                name: formula.name.clone(),
+                            });
+                        }
+                    },
+                }
+            } else {
+                match select_bottle(&formula) {
+                    Ok(bottle) => InstallMethod::Bottle(bottle),
+                    Err(_) => match BuildPlan::from_formula(&formula, &self.prefix) {
+                        Some(plan) => InstallMethod::Source(plan),
+                        None => {
+                            return Err(Error::UnsupportedBottle {
+                                name: formula.name.clone(),
+                            });
+                        }
+                    },
+                }
             };
             items.push(PlannedInstall {
                 install_name,
@@ -274,12 +296,11 @@ impl Installer {
                 })
                 .collect();
 
-            let download_progress: Option<DownloadProgressCallback> =
-                progress.clone().map(|cb| {
-                    Arc::new(move |event: InstallProgress| {
-                        cb(event);
-                    }) as DownloadProgressCallback
-                });
+            let download_progress: Option<DownloadProgressCallback> = progress.clone().map(|cb| {
+                Arc::new(move |event: InstallProgress| {
+                    cb(event);
+                }) as DownloadProgressCallback
+            });
 
             let mut rx = self
                 .downloader
@@ -1608,7 +1629,15 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix.to_path_buf());
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.to_path_buf(),
+        );
         let plan = installer
             .plan(&["hashicorp/tap/terraform".to_string()])
             .await
@@ -1673,7 +1702,15 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix.to_path_buf());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.to_path_buf(),
+        );
 
         installer
             .install(&["hashicorp/tap/terraform".to_string()], true)
@@ -1742,7 +1779,15 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix.to_path_buf());
+        let mut installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.to_path_buf(),
+        );
         installer
             .install(&["terraform".to_string()], true)
             .await
@@ -2348,7 +2393,10 @@ end
 
         assert_eq!(plan.items.len(), 1);
         assert_eq!(plan.items[0].formula.name, "nobottle");
-        assert!(matches!(plan.items[0].method, zb_core::InstallMethod::Source(_)));
+        assert!(matches!(
+            plan.items[0].method,
+            zb_core::InstallMethod::Source(_)
+        ));
 
         if let zb_core::InstallMethod::Source(ref bp) = plan.items[0].method {
             assert_eq!(bp.source_url, "https://example.com/nobottle-1.0.0.tar.gz");
@@ -2419,7 +2467,10 @@ end
         let plan = installer.plan(&["hasboth".to_string()]).await.unwrap();
 
         assert_eq!(plan.items.len(), 1);
-        assert!(matches!(plan.items[0].method, zb_core::InstallMethod::Bottle(_)));
+        assert!(matches!(
+            plan.items[0].method,
+            zb_core::InstallMethod::Bottle(_)
+        ));
     }
 
     #[tokio::test]

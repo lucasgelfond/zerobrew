@@ -29,15 +29,21 @@ pub fn build_env(plan: &BuildPlan, prefix: &Path) -> HashMap<String, String> {
 
     env.insert(
         "CFLAGS".into(),
-        format!("-I{} {system_cflags}", include_dir.display()).trim().to_string(),
+        format!("-I{} {system_cflags}", include_dir.display())
+            .trim()
+            .to_string(),
     );
     env.insert(
         "CPPFLAGS".into(),
-        format!("-I{} {system_cppflags}", include_dir.display()).trim().to_string(),
+        format!("-I{} {system_cppflags}", include_dir.display())
+            .trim()
+            .to_string(),
     );
     env.insert(
         "LDFLAGS".into(),
-        format!("-L{} {system_ldflags}", lib_dir.display()).trim().to_string(),
+        format!("-L{} {system_ldflags}", lib_dir.display())
+            .trim()
+            .to_string(),
     );
 
     env.insert("HOMEBREW_PREFIX".into(), prefix.display().to_string());

@@ -68,6 +68,8 @@ pub enum Commands {
         formulas: Vec<String>,
         #[arg(long)]
         no_link: bool,
+        #[arg(long, short = 's')]
+        build_from_source: bool,
     },
     Bundle {
         #[arg(long, short = 'f', value_name = "FILE", default_value = "Brewfile")]

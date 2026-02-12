@@ -38,9 +38,13 @@ async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {
             message: format!("failed to create HTTP client: {e}"),
         })?;
 
-    let response = client.get(url).send().await.map_err(|e| Error::NetworkFailure {
-        message: format!("failed to download source: {e}"),
-    })?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| Error::NetworkFailure {
+            message: format!("failed to download source: {e}"),
+        })?;
 
     let status = response.status();
     if !status.is_success() {
