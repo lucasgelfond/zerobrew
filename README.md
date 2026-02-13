@@ -56,6 +56,22 @@ zbx jq --version                # run without linking
 
 </div>
 
+## Relationship with Homebrew
+
+zerobrew is more of a performance-optimized client for the Homebrew ecosystem. We rely on:
+- Homebrew's formula definitions (homebrew-core)
+- Homebrew's pre-built bottles when available
+- Homebrew's package metadata and infrastructure
+
+Our innovations focus on:
+- Content-addressable storage for deduplication
+- APFS clonefiles for zero-overhead copying
+- Source build fallback using Homebrew's Ruby DSL
+
+zerobrew is experimental. We recommend running it alongside Homebrew rather than as a replacement, and do _not_ 
+recommend purging homebrew and replacing it with zerobrew unless you are absolutely sure about the implications of 
+doing so. 
+
 ## Project status
 
 <div align="center">
