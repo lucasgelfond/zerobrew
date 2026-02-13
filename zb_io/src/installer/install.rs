@@ -571,6 +571,16 @@ impl Installer {
             }
         }
 
+        let keg_path = self.cellar.keg_path(formula_name, &version);
+        if keg_path.exists() {
+            fs::remove_dir_all(&keg_path).map_err(|e| Error::StoreCorruption {
+                message: format!(
+                    "failed to remove stale build output for '{}@{}': {}",
+                    formula_name, version, e
+                ),
+            })?;
+        }
+
         let executor = crate::build::BuildExecutor::new(self.prefix.clone());
         executor
             .execute(build_plan, &formula_rb, &installed_deps)
@@ -581,7 +591,6 @@ impl Installer {
         });
 
         let store_key = format!("source:{formula_name}:{version}");
-        let keg_path = self.cellar.keg_path(formula_name, &version);
 
         let tx = self.db.transaction().inspect_err(|_| {
             Self::cleanup_materialized(&self.cellar, formula_name, &version);

@@ -436,6 +436,11 @@ class Formula
     exit 1 unless result
   end
 
+  def mv(*sources, **options)
+    normalized = sources.map { |s| s.respond_to?(:to_path) ? s.to_path : s.to_s }
+    FileUtils.mv(*normalized, **options)
+  end
+
   def std_configure_args
     ["--disable-debug", "--disable-dependency-tracking", "--prefix=#{prefix}", "--libdir=#{lib}"]
   end
