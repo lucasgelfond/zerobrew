@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::cellar::link::Linker;
@@ -572,19 +572,28 @@ impl Installer {
         }
 
         let keg_path = self.cellar.keg_path(formula_name, &version);
-        if keg_path.exists() {
-            fs::remove_dir_all(&keg_path).map_err(|e| Error::StoreCorruption {
-                message: format!(
-                    "failed to remove stale build output for '{}@{}': {}",
-                    formula_name, version, e
-                ),
-            })?;
-        }
+        let previous_keg_backup =
+            Self::backup_existing_source_keg(&keg_path, formula_name, &version)?;
 
         let executor = crate::build::BuildExecutor::new(self.prefix.clone());
-        executor
+        if let Err(build_err) = executor
             .execute(build_plan, &formula_rb, &installed_deps)
-            .await?;
+            .await
+        {
+            if let Some(backup_path) = previous_keg_backup.as_ref() {
+                Self::restore_source_keg_from_backup(
+                    &keg_path,
+                    backup_path,
+                    formula_name,
+                    &version,
+                )?;
+            }
+            return Err(build_err);
+        }
+
+        if let Some(backup_path) = previous_keg_backup.as_ref() {
+            Self::remove_source_keg_backup(backup_path, formula_name, &version)?;
+        }
 
         report(InstallProgress::UnpackCompleted {
             name: formula_name.clone(),
@@ -669,6 +678,88 @@ impl Installer {
             name: formula_name.clone(),
         });
         Ok(())
+    }
+
+    fn backup_existing_source_keg(
+        keg_path: &Path,
+        formula_name: &str,
+        version: &str,
+    ) -> Result<Option<PathBuf>, Error> {
+        if !keg_path.exists() {
+            return Ok(None);
+        }
+
+        let backup_path = Self::source_keg_backup_path(keg_path);
+        if backup_path.exists() {
+            fs::remove_dir_all(&backup_path).map_err(|e| Error::StoreCorruption {
+                message: format!(
+                    "failed to remove stale source-build backup for '{}@{}': {}",
+                    formula_name, version, e
+                ),
+            })?;
+        }
+
+        fs::rename(keg_path, &backup_path).map_err(|e| Error::StoreCorruption {
+            message: format!(
+                "failed to backup existing keg for '{}@{}': {}",
+                formula_name, version, e
+            ),
+        })?;
+
+        Ok(Some(backup_path))
+    }
+
+    fn restore_source_keg_from_backup(
+        keg_path: &Path,
+        backup_path: &Path,
+        formula_name: &str,
+        version: &str,
+    ) -> Result<(), Error> {
+        if keg_path.exists() {
+            fs::remove_dir_all(keg_path).map_err(|e| Error::StoreCorruption {
+                message: format!(
+                    "failed to remove failed source-build output for '{}@{}': {}",
+                    formula_name, version, e
+                ),
+            })?;
+        }
+
+        fs::rename(backup_path, keg_path).map_err(|e| Error::StoreCorruption {
+            message: format!(
+                "failed to restore previous keg for '{}@{}': {}",
+                formula_name, version, e
+            ),
+        })
+    }
+
+    fn remove_source_keg_backup(
+        backup_path: &Path,
+        formula_name: &str,
+        version: &str,
+    ) -> Result<(), Error> {
+        if !backup_path.exists() {
+            return Ok(());
+        }
+
+        fs::remove_dir_all(backup_path).map_err(|e| Error::StoreCorruption {
+            message: format!(
+                "failed to remove source-build backup for '{}@{}': {}",
+                formula_name, version, e
+            ),
+        })
+    }
+
+    fn source_keg_backup_path(keg_path: &Path) -> PathBuf {
+        let backup_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let name = keg_path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "keg".to_string());
+
+        keg_path.with_file_name(format!("{name}.zb-backup-{backup_suffix}"))
     }
 
     /// Remove a materialized keg that was never registered in the database.
@@ -1131,6 +1222,40 @@ mod tests {
         let path = dependency_cellar_path(&cellar, &keg.name, &keg.version);
 
         assert!(path.ends_with("cellar/terraform/1.10.0"));
+    }
+
+    #[test]
+    fn source_keg_backup_can_restore_previous_installation() {
+        let tmp = TempDir::new().unwrap();
+        let keg_path = tmp.path().join("cellar").join("example").join("1.0.0");
+        fs::create_dir_all(&keg_path).unwrap();
+        fs::write(keg_path.join("old.txt"), "old").unwrap();
+
+        let backup = Installer::backup_existing_source_keg(&keg_path, "example", "1.0.0").unwrap();
+        let backup = backup.expect("backup path should exist");
+
+        assert!(!keg_path.exists());
+        assert!(backup.exists());
+
+        fs::create_dir_all(&keg_path).unwrap();
+        fs::write(keg_path.join("new.txt"), "new").unwrap();
+
+        Installer::restore_source_keg_from_backup(&keg_path, &backup, "example", "1.0.0").unwrap();
+
+        assert!(keg_path.join("old.txt").exists());
+        assert!(!keg_path.join("new.txt").exists());
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn backup_existing_source_keg_returns_none_when_keg_is_missing() {
+        let tmp = TempDir::new().unwrap();
+        let missing_keg = tmp.path().join("cellar").join("example").join("1.0.0");
+
+        let backup =
+            Installer::backup_existing_source_keg(&missing_keg, "example", "1.0.0").unwrap();
+
+        assert!(backup.is_none());
     }
 
     #[tokio::test]
