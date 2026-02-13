@@ -4,7 +4,50 @@ use crate::network::tap_formula::{parse_tap_formula_ref, parse_tap_formula_ruby}
 use futures_util::stream::{self, StreamExt};
 use zb_core::{Error, Formula};
 
-const TAP_RB_URL_PREFIX: &str = "tap-rb-url:";
+const HOMEBREW_CORE_RAW_BASE: &str =
+    "https://raw.githubusercontent.com/Homebrew/homebrew-core/main";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RubySourceLocator<'a> {
+    CoreRelativePath(&'a str),
+    AbsoluteUrl(&'a str),
+    TapEncodedUrl(&'a str),
+}
+
+impl<'a> RubySourceLocator<'a> {
+    const TAP_URL_PREFIX: &'static str = "tap-rb-url:";
+
+    fn parse(input: &'a str) -> Self {
+        if let Some(encoded_url) = input.strip_prefix(Self::TAP_URL_PREFIX) {
+            return Self::TapEncodedUrl(encoded_url);
+        }
+
+        if input.starts_with("https://") || input.starts_with("http://") {
+            return Self::AbsoluteUrl(input);
+        }
+
+        Self::CoreRelativePath(input)
+    }
+
+    fn source_id(self, original: &'a str) -> &'a str {
+        match self {
+            Self::CoreRelativePath(_) => original,
+            Self::AbsoluteUrl(url) => url,
+            Self::TapEncodedUrl(url) => url,
+        }
+    }
+
+    fn to_url(self) -> String {
+        match self {
+            Self::CoreRelativePath(path) => format!("{HOMEBREW_CORE_RAW_BASE}/{path}"),
+            Self::AbsoluteUrl(url) | Self::TapEncodedUrl(url) => url.to_string(),
+        }
+    }
+
+    fn encode_tap_url(url: &str) -> String {
+        format!("{}{}", Self::TAP_URL_PREFIX, url)
+    }
+}
 
 pub struct ApiClient {
     base_url: String,
@@ -59,18 +102,11 @@ impl ApiClient {
         cache_dir: &std::path::Path,
         expected_sha256: Option<&str>,
     ) -> Result<std::path::PathBuf, Error> {
-        let url = if let Some(encoded_url) = ruby_source_path.strip_prefix(TAP_RB_URL_PREFIX) {
-            encoded_url.to_string()
-        } else if ruby_source_path.starts_with("https://")
-            || ruby_source_path.starts_with("http://")
-        {
-            ruby_source_path.to_string()
-        } else {
-            format!(
-                "https://raw.githubusercontent.com/Homebrew/homebrew-core/main/{ruby_source_path}"
-            )
-        };
-        self.fetch_formula_rb_from_url(ruby_source_path, &url, cache_dir, expected_sha256)
+        let locator = RubySourceLocator::parse(ruby_source_path);
+        let source_id = locator.source_id(ruby_source_path);
+        let url = locator.to_url();
+
+        self.fetch_formula_rb_from_url(source_id, &url, cache_dir, expected_sha256)
             .await
     }
 
@@ -313,7 +349,7 @@ impl ApiClient {
                                     })?;
                                 let mut formula = parse_tap_formula_ruby(spec, &body)?;
                                 formula.ruby_source_path =
-                                    Some(format!("{TAP_RB_URL_PREFIX}{url}"));
+                                    Some(RubySourceLocator::encode_tap_url(&url));
                                 return Ok(formula);
                             }
 
@@ -371,6 +407,46 @@ mod tests {
     use tempfile::tempdir;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn ruby_source_locator_parses_all_supported_kinds() {
+        assert_eq!(
+            RubySourceLocator::parse("Formula/f/foo.rb"),
+            RubySourceLocator::CoreRelativePath("Formula/f/foo.rb")
+        );
+        assert_eq!(
+            RubySourceLocator::parse("https://example.com/foo.rb"),
+            RubySourceLocator::AbsoluteUrl("https://example.com/foo.rb")
+        );
+        let encoded = format!(
+            "{}{}",
+            RubySourceLocator::TAP_URL_PREFIX,
+            "https://example.com/tap/foo.rb"
+        );
+        assert_eq!(
+            RubySourceLocator::parse(&encoded),
+            RubySourceLocator::TapEncodedUrl("https://example.com/tap/foo.rb")
+        );
+    }
+
+    #[test]
+    fn ruby_source_locator_resolves_urls_exhaustively() {
+        assert_eq!(
+            RubySourceLocator::CoreRelativePath("Formula/f/foo.rb").to_url(),
+            "https://raw.githubusercontent.com/Homebrew/homebrew-core/main/Formula/f/foo.rb"
+        );
+        assert_eq!(
+            RubySourceLocator::AbsoluteUrl("https://example.com/foo.rb").to_url(),
+            "https://example.com/foo.rb"
+        );
+        assert_eq!(
+            RubySourceLocator::TapEncodedUrl(
+                "https://raw.githubusercontent.com/org/tap/main/foo.rb"
+            )
+            .to_url(),
+            "https://raw.githubusercontent.com/org/tap/main/foo.rb"
+        );
+    }
 
     #[tokio::test]
     async fn fetches_formula_from_mock_server() {
@@ -545,7 +621,8 @@ end
         assert!(formula.dependencies.contains(&"go".to_string()));
         assert!(formula.bottle.stable.files.contains_key("arm64_sonoma"));
         let expected_path = format!(
-            "{TAP_RB_URL_PREFIX}{}/hashicorp/homebrew-tap/main/Formula/terraform.rb",
+            "{}{}/hashicorp/homebrew-tap/main/Formula/terraform.rb",
+            RubySourceLocator::TAP_URL_PREFIX,
             mock_server.uri()
         );
         assert_eq!(
@@ -589,7 +666,7 @@ end
             formula
                 .ruby_source_path
                 .as_deref()
-                .is_some_and(|path| path.starts_with(TAP_RB_URL_PREFIX))
+                .is_some_and(|path| path.starts_with(RubySourceLocator::TAP_URL_PREFIX))
         );
     }
 
