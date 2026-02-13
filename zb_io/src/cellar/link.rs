@@ -88,12 +88,10 @@ impl Linker {
         for entry in entries.flatten() {
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
-            let file_type = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
 
-            if file_type.is_dir() {
+            // Use src_path.is_dir() which follows symlinks, so that keg entries
+            // like `man -> ../gnuman` (symlinks to directories) are treated as dirs.
+            if src_path.is_dir() {
                 // When the destination is a symlink to a directory, actual linking will
                 // expand it into individual file symlinks. Check the expanded contents.
                 if dst_path.symlink_metadata().is_ok()
@@ -154,7 +152,7 @@ impl Linker {
             let matching_old = old_target.join(entry.file_name());
             let dst_path = dst.join(entry.file_name());
 
-            if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+            if src_path.is_dir() {
                 if matching_old.exists() {
                     Self::collect_conflicts_merged(&src_path, &matching_old, &dst_path, conflicts);
                 } else {
@@ -204,11 +202,11 @@ impl Linker {
             })?;
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
-            let file_type = entry.file_type().map_err(|e| Error::StoreCorruption {
-                message: e.to_string(),
-            })?;
 
-            if file_type.is_dir() {
+            // Use src_path.is_dir() which follows symlinks, so that keg entries
+            // like `man -> ../gnuman` (symlinks to directories) are expanded
+            // into individual file symlinks instead of conflicting.
+            if src_path.is_dir() {
                 if dst_path.symlink_metadata().is_ok() && dst_path.is_symlink() {
                     let old_target =
                         fs::read_link(&dst_path).map_err(|e| Error::StoreCorruption {
@@ -546,5 +544,67 @@ mod tests {
         assert!(!prefix.join("bin/beta-only").exists());
         // The opt link should also not exist
         assert!(!prefix.join("opt/beta").exists());
+    }
+
+    #[test]
+    fn symlink_to_directory_in_keg_expands_without_conflict() {
+        // Reproduces the gnu-sed / gnu-tar / findutils conflict from issue #69:
+        // https://github.com/lucasgelfond/zerobrew/issues/69
+        // each keg has `libexec/gnubin/man -> ../gnuman` (symlink to directory).
+        // The linker should expand these into individual file symlinks so that
+        // man pages from different kegs coexist.
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+
+        // keg1: libexec/gnubin/man -> ../gnuman, with gnuman/man1/sed.1
+        let keg1 = prefix.join("Cellar/gnu-sed/4.9");
+        fs::create_dir_all(keg1.join("libexec/gnuman/man1")).unwrap();
+        fs::write(keg1.join("libexec/gnuman/man1/sed.1"), b"sed man").unwrap();
+        fs::create_dir_all(keg1.join("libexec/gnubin")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../gnuman", keg1.join("libexec/gnubin/man")).unwrap();
+
+        // keg2: libexec/gnubin/man -> ../gnuman, with gnuman/man1/tar.1
+        let keg2 = prefix.join("Cellar/gnu-tar/1.35");
+        fs::create_dir_all(keg2.join("libexec/gnuman/man1")).unwrap();
+        fs::write(keg2.join("libexec/gnuman/man1/tar.1"), b"tar man").unwrap();
+        fs::create_dir_all(keg2.join("libexec/gnubin")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../gnuman", keg2.join("libexec/gnubin/man")).unwrap();
+
+        // Both should link without conflicts
+        linker.link_keg(&keg1).unwrap();
+        linker.link_keg(&keg2).unwrap();
+
+        // Both man pages should be accessible
+        assert!(prefix.join("libexec/gnubin/man/man1/sed.1").exists());
+        assert!(prefix.join("libexec/gnubin/man/man1/tar.1").exists());
+        // gnuman dirs should also be expanded and merged
+        assert!(prefix.join("libexec/gnuman/man1/sed.1").exists());
+        assert!(prefix.join("libexec/gnuman/man1/tar.1").exists());
+    }
+
+    #[test]
+    fn check_conflicts_passes_for_symlink_to_directory() {
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+
+        let keg1 = prefix.join("Cellar/pkg1/1.0.0");
+        fs::create_dir_all(keg1.join("libexec/realdir")).unwrap();
+        fs::write(keg1.join("libexec/realdir/file1"), b"a").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("realdir", keg1.join("libexec/alias")).unwrap();
+
+        let keg2 = prefix.join("Cellar/pkg2/1.0.0");
+        fs::create_dir_all(keg2.join("libexec/realdir")).unwrap();
+        fs::write(keg2.join("libexec/realdir/file2"), b"b").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("realdir", keg2.join("libexec/alias")).unwrap();
+
+        linker.link_keg(&keg1).unwrap();
+        // Pre-flight check should pass since the files don't overlap
+        assert!(linker.check_conflicts(&keg2).is_ok());
     }
 }
