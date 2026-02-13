@@ -1,0 +1,201 @@
+name: Homebrew Compatibility
+
+on:
+  schedule:
+    # Run weekly on Sunday at 9 PM ET (1 AM UTC Monday)
+    - cron: '0 1 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'zb_io/src/build/shim.rb'
+      - '.github/workflows/homebrew-compat.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  test-compatibility:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: Get Homebrew version
+        id: brew-version
+        run: |
+          version=$(brew --version | grep -o 'Homebrew [0-9.]*' | cut -d' ' -f2)
+          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "Homebrew version: $version"
+
+      - name: Build zerobrew
+        run: cargo build --release
+
+      - name: Install zerobrew
+        run: cargo install --path zb_cli
+
+      - name: Initialize zerobrew
+        run: zb init
+
+      - name: Test common formulas
+        id: test-formulas
+        run: |
+          formulas=(
+            "jq"
+            "wget"
+            "tree"
+            "curl"
+            "git"
+            "node"
+            "python@3.12"
+            "rust"
+            "go"
+            "redis"
+            "postgresql@16"
+            "ffmpeg"
+            "vim"
+            "emacs"
+            "gcc"
+            "llvm"
+            "qt"
+            "opencv"
+            "imagemagick"
+            "mysql"
+          )
+
+          passed=0
+          failed=0
+          failed_list=""
+
+          for formula in "${formulas[@]}"; do
+            echo "Testing $formula..."
+            if zb info "$formula" > /tmp/test_output.log 2>&1; then
+              echo "PASS: $formula"
+              passed=$((passed + 1))
+            else
+              echo "FAIL: $formula"
+              if [ $failed -eq 0 ]; then
+                echo "First failure output:"
+                cat /tmp/test_output.log
+              fi
+              failed=$((failed + 1))
+              failed_list="$failed_list\n- $formula"
+            fi
+          done
+
+          total=$((passed + failed))
+          echo "passed=$passed" >> $GITHUB_OUTPUT
+          echo "failed=$failed" >> $GITHUB_OUTPUT
+          echo "total=$total" >> $GITHUB_OUTPUT
+          echo "failed_list<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$failed_list" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "Results: $passed/$total passed"
+
+          if [ $failed -gt 0 ]; then
+            exit 1
+          fi
+
+      - name: Create issue on failure
+        if: failure() && steps.test-formulas.conclusion == 'failure' && github.event_name != 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const brewVersion = '${{ steps.brew-version.outputs.version }}';
+            const passed = '${{ steps.test-formulas.outputs.passed }}';
+            const failed = '${{ steps.test-formulas.outputs.failed }}';
+            const total = '${{ steps.test-formulas.outputs.total }}';
+            const failedList = `${{ steps.test-formulas.outputs.failed_list }}`;
+            const platform = '${{ matrix.os }}';
+
+            // Check if an open issue already exists for this platform
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'homebrew-compatibility',
+              state: 'open'
+            });
+
+            const platformIssue = existingIssues.data.find(issue =>
+              issue.title.includes(platform) || issue.labels.some(label => label.name === platform)
+            );
+
+            if (platformIssue) {
+              console.log(`Issue already exists: ${platformIssue.html_url}`);
+
+              // Add a comment with updated results
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: platformIssue.number,
+                body: `## Updated Test Results
+
+            **Platform:** ${platform}
+            **Homebrew Version:** ${brewVersion}
+            **Results:** ${passed}/${total} formulas passed
+            **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ### Failed Formulas
+            ${failedList}
+
+            The compatibility issue persists. Please review and update the shim.`
+              });
+            } else {
+              // Create new issue
+              const body = `## Homebrew Compatibility Test Failed
+
+            **Platform:** ${platform}
+            **Homebrew Version:** ${brewVersion}
+            **Results:** ${passed}/${total} formulas passed
+
+            ### Failed Formulas
+            ${failedList}
+
+            The shim may need to be updated to maintain compatibility with the current Homebrew version.
+
+            **Action Items:**
+            - Review failed formulas
+            - Check for Homebrew DSL changes
+            - Update shim.rb if necessary
+            - Update compatibility documentation
+
+            **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Homebrew compatibility issue detected (${platform}, ${brewVersion})`,
+                body: body,
+                labels: ['homebrew-compatibility', 'bug', platform]
+              });
+            }
+
+      - name: Comment on success
+        if: success()
+        run: |
+          echo "All formulas passed compatibility testing with Homebrew ${{ steps.brew-version.outputs.version }}"
+          echo "Passed: ${{ steps.test-formulas.outputs.passed }}/${{ steps.test-formulas.outputs.total }}"
