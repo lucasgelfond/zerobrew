@@ -1,3 +1,16 @@
+# frozen_string_literal: true
+
+# This file contains code derived from Homebrew (https://github.com/Homebrew/brew)
+# Copyright (c) 2009-present, Homebrew contributors
+# Licensed under BSD 2-Clause License (see LICENSE-HOMEBREW)
+#
+# Portions of this code implement a compatibility shim that mimics Homebrew's
+# Formula DSL and helper methods to allow Homebrew formulas to run in ZeroBrew.
+#
+# Homebrew Compatibility: 5.0.x
+# This shim has been tested with Homebrew 5.0.14.
+# Last verified: 2025-02-13
+
 require "fileutils"
 require "pathname"
 require "json"
