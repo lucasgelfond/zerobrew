@@ -72,10 +72,8 @@ pub enum Commands {
         build_from_source: bool,
     },
     Bundle {
-        #[arg(long, short = 'f', value_name = "FILE", default_value = "Brewfile")]
-        file: PathBuf,
-        #[arg(long)]
-        no_link: bool,
+        #[command(subcommand)]
+        command: Option<BundleCommands>,
     },
     Uninstall {
         #[arg(required_unless_present = "all", num_args = 1..)]
@@ -111,5 +109,21 @@ pub enum Commands {
         formula: String,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum BundleCommands {
+    Install {
+        #[arg(long, short = 'f', value_name = "FILE", default_value = "Brewfile")]
+        file: PathBuf,
+        #[arg(long)]
+        no_link: bool,
+    },
+    Dump {
+        #[arg(long, short = 'f', value_name = "FILE", default_value = "Brewfile")]
+        file: PathBuf,
+        #[arg(long)]
+        force: bool,
     },
 }

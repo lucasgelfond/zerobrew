@@ -1,11 +1,27 @@
 use console::style;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::install;
+use crate::cli::BundleCommands;
 
 pub async fn execute(
+    installer: &mut zb_io::Installer,
+    command: Option<BundleCommands>,
+) -> Result<(), zb_core::Error> {
+    match command.unwrap_or(BundleCommands::Install {
+        file: PathBuf::from("Brewfile"),
+        no_link: false,
+    }) {
+        BundleCommands::Install { file, no_link } => {
+            install_from_file(installer, &file, no_link).await
+        }
+        BundleCommands::Dump { file, force } => dump_to_file(installer, &file, force),
+    }
+}
+
+async fn install_from_file(
     installer: &mut zb_io::Installer,
     manifest_path: &Path,
     no_link: bool,
@@ -28,6 +44,40 @@ pub async fn execute(
         style("==>").cyan().bold(),
         start.elapsed().as_secs_f64()
     );
+    Ok(())
+}
+
+fn dump_to_file(
+    installer: &mut zb_io::Installer,
+    file_path: &Path,
+    force: bool,
+) -> Result<(), zb_core::Error> {
+    if file_path.exists() && !force {
+        return Err(zb_core::Error::FileError {
+            message: format!(
+                "file {} already exists (use --force to overwrite)",
+                file_path.display()
+            ),
+        });
+    }
+
+    let installed = installer.list_installed()?;
+    let mut content = String::new();
+    for keg in &installed {
+        content.push_str(&format!("brew \"{}\"\n", keg.name));
+    }
+
+    std::fs::write(file_path, content).map_err(|e| zb_core::Error::FileError {
+        message: format!("failed to write {}: {}", file_path.display(), e),
+    })?;
+
+    println!(
+        "{} Dumped {} packages to {}",
+        style("==>").cyan().bold(),
+        style(installed.len()).green().bold(),
+        file_path.display()
+    );
+
     Ok(())
 }
 
@@ -164,5 +214,27 @@ mod tests {
 
         let entries = load_manifest(file.path()).unwrap();
         assert_eq!(entries, vec!["wget", "cask:docker-desktop"]);
+    }
+
+    #[test]
+    fn parse_brewfile_entry_handles_brew_directive() {
+        assert_eq!(parse_brewfile_entry("brew \"jq\""), Some("jq".to_string()));
+        assert_eq!(
+            parse_brewfile_entry("brew 'wget'"),
+            Some("wget".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_brewfile_entry_handles_cask_directive() {
+        assert_eq!(
+            parse_brewfile_entry("cask \"docker\""),
+            Some("cask:docker".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_brewfile_entry_skips_tap_directive() {
+        assert_eq!(parse_brewfile_entry("tap \"homebrew/core\""), None);
     }
 }
