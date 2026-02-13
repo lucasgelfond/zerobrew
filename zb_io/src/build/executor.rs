@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use tokio::fs;
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use zb_core::{BuildPlan, Error};
 
@@ -109,35 +111,200 @@ async fn run_build(
     source_root: &Path,
     env: &HashMap<String, String>,
 ) -> Result<(), Error> {
-    let output = Command::new(ruby)
+    let mut child = Command::new(ruby)
         .arg(shim_path)
         .current_dir(source_root)
         .envs(env)
-        .output()
-        .await
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| Error::ExecutionError {
             message: format!("failed to execute ruby shim: {e}"),
         })?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = child.stdout.take().ok_or_else(|| Error::ExecutionError {
+        message: "failed to capture ruby shim stdout".to_string(),
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| Error::ExecutionError {
+        message: "failed to capture ruby shim stderr".to_string(),
+    })?;
 
-    if !stdout.is_empty() {
-        for line in stdout.lines() {
-            eprintln!("  {line}");
-        }
-    }
+    let stdout_task = tokio::spawn(stream_output_and_capture_tail(stdout, false));
+    let stderr_task = tokio::spawn(stream_output_and_capture_tail(stderr, true));
 
-    if !output.status.success() {
-        let mut msg = format!(
-            "source build failed (exit code: {:?})",
-            output.status.code()
-        );
-        if !stderr.is_empty() {
-            msg.push_str(&format!("\n{stderr}"));
+    let status = child.wait().await.map_err(|e| Error::ExecutionError {
+        message: format!("failed waiting for ruby shim: {e}"),
+    })?;
+
+    let stdout_tail = stdout_task
+        .await
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to join stdout task: {e}"),
+        })?
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed reading stdout: {e}"),
+        })?;
+    let stderr_tail = stderr_task
+        .await
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to join stderr task: {e}"),
+        })?
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed reading stderr: {e}"),
+        })?;
+
+    if !status.success() {
+        let mut msg = format!("source build failed (exit code: {:?})", status.code());
+        let tail = if !stderr_tail.is_empty() {
+            stderr_tail
+        } else {
+            stdout_tail
+        };
+        if !tail.is_empty() {
+            msg.push('\n');
+            msg.push_str(&tail.join("\n"));
         }
         return Err(Error::ExecutionError { message: msg });
     }
 
     Ok(())
+}
+
+async fn stream_output_and_capture_tail<R>(
+    reader: R,
+    stderr: bool,
+) -> Result<Vec<String>, std::io::Error>
+where
+    R: AsyncRead + Unpin,
+{
+    const TAIL_LINES: usize = 40;
+    let mut tail = VecDeque::with_capacity(TAIL_LINES);
+    let mut lines = BufReader::new(reader).lines();
+
+    while let Some(line) = lines.next_line().await? {
+        if stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+
+        if tail.len() == TAIL_LINES {
+            tail.pop_front();
+        }
+        tail.push_back(line);
+    }
+
+    Ok(tail.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn run_build_supports_mv_in_formula_install() {
+        let Some(ruby) = find_ruby().await.ok() else {
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        std::fs::create_dir_all(source_root.join("themes")).unwrap();
+        std::fs::write(source_root.join("themes/default.omp.json"), "{}").unwrap();
+
+        let shim_path = tmp.path().join("shim.rb");
+        std::fs::write(&shim_path, SHIM_RUBY).unwrap();
+
+        let formula_path = tmp.path().join("foo.rb");
+        std::fs::write(
+            &formula_path,
+            r#"
+class Foo < Formula
+  def install
+    mv "themes", prefix
+  end
+end
+"#,
+        )
+        .unwrap();
+
+        let prefix = tmp.path().join("prefix");
+        let cellar = prefix.join("Cellar");
+        std::fs::create_dir_all(&cellar).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("ZEROBREW_PREFIX".to_string(), prefix.display().to_string());
+        env.insert("ZEROBREW_CELLAR".to_string(), cellar.display().to_string());
+        env.insert("ZEROBREW_FORMULA_NAME".to_string(), "foo".to_string());
+        env.insert("ZEROBREW_FORMULA_VERSION".to_string(), "1.0.0".to_string());
+        env.insert(
+            "ZEROBREW_FORMULA_FILE".to_string(),
+            formula_path.display().to_string(),
+        );
+        env.insert("ZEROBREW_INSTALLED_DEPS".to_string(), "{}".to_string());
+
+        run_build(&ruby, &shim_path, &source_root, &env)
+            .await
+            .unwrap();
+
+        assert!(
+            prefix
+                .join("Cellar")
+                .join("foo")
+                .join("1.0.0")
+                .join("themes")
+                .join("default.omp.json")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn run_build_includes_stderr_tail_in_error() {
+        let Some(ruby) = find_ruby().await.ok() else {
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        std::fs::create_dir_all(&source_root).unwrap();
+
+        let shim_path = tmp.path().join("shim.rb");
+        std::fs::write(&shim_path, SHIM_RUBY).unwrap();
+
+        let formula_path = tmp.path().join("foo.rb");
+        std::fs::write(
+            &formula_path,
+            r#"
+class Foo < Formula
+  def install
+    system "sh", "-c", "echo boom-from-stderr 1>&2; exit 7"
+  end
+end
+"#,
+        )
+        .unwrap();
+
+        let prefix = tmp.path().join("prefix");
+        let cellar = prefix.join("Cellar");
+        std::fs::create_dir_all(&cellar).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("ZEROBREW_PREFIX".to_string(), prefix.display().to_string());
+        env.insert("ZEROBREW_CELLAR".to_string(), cellar.display().to_string());
+        env.insert("ZEROBREW_FORMULA_NAME".to_string(), "foo".to_string());
+        env.insert("ZEROBREW_FORMULA_VERSION".to_string(), "1.0.0".to_string());
+        env.insert(
+            "ZEROBREW_FORMULA_FILE".to_string(),
+            formula_path.display().to_string(),
+        );
+        env.insert("ZEROBREW_INSTALLED_DEPS".to_string(), "{}".to_string());
+
+        let err = run_build(&ruby, &shim_path, &source_root, &env)
+            .await
+            .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("source build failed"));
+        assert!(message.contains("boom-from-stderr"));
+    }
 }
