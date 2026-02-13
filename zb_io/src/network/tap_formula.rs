@@ -42,8 +42,9 @@ static BOTTLE_START_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^\s*bottle\s+do\b"#).expect("BOTTLE_START_RE must compile"));
 static END_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^\s*end\b"#).expect("END_RE must compile"));
-static DO_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\bdo\b"#).expect("DO_RE must compile"));
+static DO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\bdo\b\s*(?:\|[^|]*\|\s*)?(?:#.*)?$"#).expect("DO_RE must compile")
+});
 static KEYWORD_START_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"^\s*(if|unless|case|begin|def|class|module|for|while|until)\b"#)
         .expect("KEYWORD_START_RE must compile")
@@ -263,17 +264,10 @@ fn extract_formula_class_body(source: &str) -> Option<&str> {
             continue;
         }
 
-        if END_RE.is_match(trimmed) {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return class_body_start.map(|start| &source[start..line_start]);
-            }
-            continue;
-        }
-
-        depth += DO_RE.find_iter(trimmed).count();
-        if KEYWORD_START_RE.is_match(trimmed) {
-            depth += 1;
+        let depth_before = depth;
+        update_depth(&mut depth, trimmed);
+        if depth_before > 0 && depth == 0 {
+            return class_body_start.map(|start| &source[start..line_start]);
         }
     }
 
@@ -324,17 +318,10 @@ fn extract_bottle_block(source: &str) -> Option<&str> {
             continue;
         }
 
-        if END_RE.is_match(trimmed) {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return bottle_body_start.map(|start| &source[start..line_start]);
-            }
-            continue;
-        }
-
-        depth += DO_RE.find_iter(trimmed).count();
-        if KEYWORD_START_RE.is_match(trimmed) {
-            depth += 1;
+        let depth_before = depth;
+        update_depth(&mut depth, trimmed);
+        if depth_before > 0 && depth == 0 {
+            return bottle_body_start.map(|start| &source[start..line_start]);
         }
     }
 
@@ -669,6 +656,45 @@ end
         let formula = parse_tap_formula_ruby(&spec, source).unwrap();
         assert_eq!(formula.dependencies, vec!["openssl@3".to_string()]);
         assert_eq!(formula.build_dependencies, vec!["go".to_string()]);
+    }
+
+    #[test]
+    fn parser_does_not_treat_do_inside_strings_as_block_start() {
+        let source = r#"
+class Example < Formula
+  desc "A tool to do amazing things"
+  url "https://example.com/example-1.0.0.tar.gz"
+  sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  depends_on "openssl@3"
+  depends_on "go" => :build
+
+  resource "extra" do |r|
+    depends_on "python@3.12"
+    r.url "https://example.com/resource.tar.gz"
+  end
+end
+"#;
+
+        let spec = TapFormulaRef {
+            owner: "someone".to_string(),
+            repo: "tap".to_string(),
+            formula: "example".to_string(),
+        };
+
+        let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+        assert_eq!(formula.dependencies, vec!["openssl@3".to_string()]);
+        assert_eq!(formula.build_dependencies, vec!["go".to_string()]);
+
+        let stable = formula
+            .urls
+            .as_ref()
+            .and_then(|u| u.stable.as_ref())
+            .expect("stable source url should be parsed");
+        assert_eq!(stable.url, "https://example.com/example-1.0.0.tar.gz");
+        assert_eq!(
+            stable.checksum.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
     }
 
     #[test]
