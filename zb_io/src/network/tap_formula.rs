@@ -142,11 +142,9 @@ fn parse_bottle(
     stable: &str,
     revision: u32,
 ) -> Result<Bottle, Error> {
-    let block = extract_bottle_block(source).ok_or_else(|| Error::MissingFormula {
-        name: format!(
-            "tap formula '{}' does not contain a bottle block",
-            spec.formula
-        ),
+    let block = extract_bottle_block(source).ok_or_else(|| Error::UnsupportedFormula {
+        name: spec.formula.clone(),
+        reason: "tap formula does not contain a bottle block".to_string(),
     })?;
 
     let root_url = parse_root_url(block)
@@ -155,11 +153,9 @@ fn parse_bottle(
     let files = parse_bottle_files(spec, &root_url, stable, revision, rebuild, block);
 
     if files.is_empty() {
-        return Err(Error::MissingFormula {
-            name: format!(
-                "tap formula '{}' does not contain supported bottle sha256 entries",
-                spec.formula
-            ),
+        return Err(Error::UnsupportedFormula {
+            name: spec.formula.clone(),
+            reason: "tap formula does not contain supported bottle sha256 entries".to_string(),
         });
     }
 
@@ -434,5 +430,45 @@ end
 
         assert!(formula.bottle.stable.files.contains_key("x86_64_linux"));
         assert!(formula.bottle.stable.files.contains_key("arm64_sonoma"));
+    }
+
+    #[test]
+    fn returns_unsupported_formula_when_bottle_block_is_missing() {
+        let source = r#"
+class Terraform < Formula
+  version "1.10.0"
+end
+"#;
+
+        let spec = TapFormulaRef {
+            owner: "hashicorp".to_string(),
+            repo: "tap".to_string(),
+            formula: "terraform".to_string(),
+        };
+
+        let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedFormula { .. }));
+    }
+
+    #[test]
+    fn returns_unsupported_formula_when_bottle_has_no_supported_sha_entries() {
+        let source = r#"
+class Terraform < Formula
+  version "1.10.0"
+  bottle do
+    root_url "https://ghcr.io/v2/hashicorp/tap"
+    sha256 cellar: :any_skip_relocation
+  end
+end
+"#;
+
+        let spec = TapFormulaRef {
+            owner: "hashicorp".to_string(),
+            repo: "tap".to_string(),
+            formula: "terraform".to_string(),
+        };
+
+        let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedFormula { .. }));
     }
 }
