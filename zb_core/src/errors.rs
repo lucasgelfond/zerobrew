@@ -16,6 +16,7 @@ pub enum Error {
     NetworkFailure { message: String },
     MissingFormula { name: String },
     UnsupportedTap { name: String },
+    UnsupportedFormula { name: String, reason: String },
     DependencyCycle { cycle: Vec<String> },
     NotInstalled { name: String },
     FileError { message: String },
@@ -58,6 +59,9 @@ impl fmt::Display for Error {
                     f,
                     "tap formula '{name}' is not supported (only homebrew/core)"
                 )
+            }
+            Error::UnsupportedFormula { name, reason } => {
+                write!(f, "formula '{name}' is not supported: {reason}")
             }
             Error::DependencyCycle { cycle } => {
                 let rendered = cycle.join(" -> ");
