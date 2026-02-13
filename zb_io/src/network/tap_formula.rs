@@ -82,8 +82,22 @@ pub fn parse_tap_formula_ruby(spec: &TapFormulaRef, source: &str) -> Result<Form
     let revision = parse_revision(source).unwrap_or(0);
     let dependencies = parse_runtime_dependencies(source);
     let build_dependencies = parse_build_dependencies(source);
-    let source_url = parse_source_url(source);
+    let parsed_source_url = parse_source_url(source);
     let bottle = parse_bottle(spec, source, &stable, revision);
+
+    let source_url = match parsed_source_url {
+        ParsedSourceUrl::PresentWithChecksum(source_url) => Some(source_url),
+        ParsedSourceUrl::PresentMissingChecksum => {
+            if bottle.is_none() {
+                return Err(Error::UnsupportedFormula {
+                    name: spec.formula.clone(),
+                    reason: "tap formula source url is missing sha256".to_string(),
+                });
+            }
+            None
+        }
+        ParsedSourceUrl::NotPresent => None,
+    };
 
     if bottle.is_none() && source_url.is_none() {
         return Err(Error::UnsupportedFormula {
@@ -196,7 +210,13 @@ fn parse_build_dependencies(source: &str) -> Vec<String> {
     deps
 }
 
-fn parse_source_url(source: &str) -> Option<SourceUrl> {
+enum ParsedSourceUrl {
+    NotPresent,
+    PresentMissingChecksum,
+    PresentWithChecksum(SourceUrl),
+}
+
+fn parse_source_url(source: &str) -> ParsedSourceUrl {
     let body = extract_formula_class_body(source).unwrap_or(source);
     let mut depth = 0usize;
     let mut url: Option<String> = None;
@@ -226,12 +246,16 @@ fn parse_source_url(source: &str) -> Option<SourceUrl> {
         update_depth(&mut depth, trimmed);
     }
 
-    url.map(|url| SourceUrl {
-        url,
-        checksum,
-        tag: None,
-        revision: None,
-    })
+    match (url, checksum) {
+        (Some(url), Some(checksum)) => ParsedSourceUrl::PresentWithChecksum(SourceUrl {
+            url,
+            checksum: Some(checksum),
+            tag: None,
+            revision: None,
+        }),
+        (Some(_), None) => ParsedSourceUrl::PresentMissingChecksum,
+        _ => ParsedSourceUrl::NotPresent,
+    }
 }
 
 fn update_depth(depth: &mut usize, trimmed: &str) {
@@ -630,6 +654,55 @@ end
             stable.checksum.as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
+    }
+
+    #[test]
+    fn source_url_without_sha256_is_unsupported() {
+        let source = r#"
+class Example < Formula
+  url "https://example.com/example-1.0.0.tar.gz"
+end
+"#;
+
+        let spec = TapFormulaRef {
+            owner: "someone".to_string(),
+            repo: "tap".to_string(),
+            formula: "example".to_string(),
+        };
+
+        let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::UnsupportedFormula { reason, .. }
+            if reason.contains("missing sha256")
+        ));
+    }
+
+    #[test]
+    fn source_url_without_top_level_sha256_is_unsupported_even_if_nested_has_sha256() {
+        let source = r#"
+class Example < Formula
+  url "https://example.com/example-1.0.0.tar.gz"
+
+  resource "extra" do
+    url "https://example.com/resource.tar.gz"
+    sha256 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  end
+end
+"#;
+
+        let spec = TapFormulaRef {
+            owner: "someone".to_string(),
+            repo: "tap".to_string(),
+            formula: "example".to_string(),
+        };
+
+        let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::UnsupportedFormula { reason, .. }
+            if reason.contains("missing sha256")
+        ));
     }
 
     #[test]
