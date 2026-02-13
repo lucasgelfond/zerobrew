@@ -1,7 +1,9 @@
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
-use zb_core::formula::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
+use zb_core::formula::{
+    Bottle, BottleFile, BottleStable, FormulaUrls, KegOnly, SourceUrl, Versions,
+};
 use zb_core::{Error, Formula};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +27,16 @@ static REVISION_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static DEPENDS_ON_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?m)^\s*depends_on\s+["']([^"']+)["'](.*)$"#).expect("DEPENDS_ON_RE must compile")
+});
+static SOURCE_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^\s*url\s+["']([^"']+)["']"#).expect("SOURCE_URL_RE must compile")
+});
+static SOURCE_SHA_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^\s*sha256\s+["']([0-9a-f]{64})["']\s*$"#)
+        .expect("SOURCE_SHA_RE must compile")
+});
+static CLASS_START_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^\s*class\s+\w+\s*<\s*Formula\b"#).expect("CLASS_START_RE must compile")
 });
 static BOTTLE_START_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^\s*bottle\s+do\b"#).expect("BOTTLE_START_RE must compile"));
@@ -67,18 +79,30 @@ pub fn parse_tap_formula_ref(input: &str) -> Option<TapFormulaRef> {
 pub fn parse_tap_formula_ruby(spec: &TapFormulaRef, source: &str) -> Result<Formula, Error> {
     let stable = parse_version(source).unwrap_or_else(|| "0".to_string());
     let revision = parse_revision(source).unwrap_or(0);
-    let dependencies = parse_dependencies(source);
-    let bottle = parse_bottle(spec, source, &stable, revision)?;
+    let dependencies = parse_runtime_dependencies(source);
+    let build_dependencies = parse_build_dependencies(source);
+    let source_url = parse_source_url(source);
+    let bottle = parse_bottle(spec, source, &stable, revision);
+
+    if bottle.is_none() && source_url.is_none() {
+        return Err(Error::UnsupportedFormula {
+            name: spec.formula.clone(),
+            reason: "tap formula does not provide bottle data or source url".to_string(),
+        });
+    }
 
     Ok(Formula {
         name: spec.formula.clone(),
         versions: Versions { stable },
         dependencies,
-        bottle,
+        bottle: bottle.unwrap_or_else(empty_bottle),
         revision,
         keg_only: KegOnly::default(),
-        build_dependencies: Vec::new(),
-        urls: None,
+        build_dependencies,
+        urls: source_url.map(|stable| FormulaUrls {
+            stable: Some(stable),
+            head: None,
+        }),
         ruby_source_path: None,
         ruby_source_checksum: None,
         uses_from_macos: Vec::new(),
@@ -120,32 +144,144 @@ fn parse_revision(source: &str) -> Option<u32> {
         .and_then(|m| m.as_str().parse::<u32>().ok())
 }
 
-fn parse_dependencies(source: &str) -> Vec<String> {
+fn parse_runtime_dependencies(source: &str) -> Vec<String> {
     let mut deps = Vec::new();
-    for cap in DEPENDS_ON_RE.captures_iter(source) {
-        let options = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        if options.contains(":build") || options.contains(":test") {
-            continue;
+    let body = extract_formula_class_body(source).unwrap_or(source);
+    let mut depth = 0usize;
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if depth == 0
+            && let Some(cap) = DEPENDS_ON_RE.captures(trimmed)
+        {
+            let options = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+            if !options.contains(":build")
+                && !options.contains(":test")
+                && let Some(dep) = cap.get(1)
+            {
+                deps.push(dep.as_str().to_string());
+            }
         }
-        if let Some(dep) = cap.get(1) {
-            deps.push(dep.as_str().to_string());
-        }
+        update_depth(&mut depth, trimmed);
     }
+
     deps.sort_unstable();
     deps.dedup();
     deps
 }
 
-fn parse_bottle(
-    spec: &TapFormulaRef,
-    source: &str,
-    stable: &str,
-    revision: u32,
-) -> Result<Bottle, Error> {
-    let block = extract_bottle_block(source).ok_or_else(|| Error::UnsupportedFormula {
-        name: spec.formula.clone(),
-        reason: "tap formula does not contain a bottle block".to_string(),
-    })?;
+fn parse_build_dependencies(source: &str) -> Vec<String> {
+    let mut deps = Vec::new();
+    let body = extract_formula_class_body(source).unwrap_or(source);
+    let mut depth = 0usize;
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if depth == 0
+            && let Some(cap) = DEPENDS_ON_RE.captures(trimmed)
+        {
+            let options = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+            if options.contains(":build")
+                && let Some(dep) = cap.get(1)
+            {
+                deps.push(dep.as_str().to_string());
+            }
+        }
+        update_depth(&mut depth, trimmed);
+    }
+
+    deps.sort_unstable();
+    deps.dedup();
+    deps
+}
+
+fn parse_source_url(source: &str) -> Option<SourceUrl> {
+    let body = extract_formula_class_body(source).unwrap_or(source);
+    let mut depth = 0usize;
+    let mut url: Option<String> = None;
+    let mut checksum: Option<String> = None;
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+
+        if depth == 0 {
+            if url.is_none()
+                && let Some(cap) = SOURCE_URL_RE.captures(trimmed)
+            {
+                url = cap.get(1).map(|m| m.as_str().to_string());
+            }
+
+            if checksum.is_none()
+                && let Some(cap) = SOURCE_SHA_RE.captures(trimmed)
+            {
+                checksum = cap.get(1).map(|m| m.as_str().to_string());
+            }
+
+            if url.is_some() && checksum.is_some() {
+                break;
+            }
+        }
+
+        update_depth(&mut depth, trimmed);
+    }
+
+    url.map(|url| SourceUrl {
+        url,
+        checksum,
+        tag: None,
+        revision: None,
+    })
+}
+
+fn update_depth(depth: &mut usize, trimmed: &str) {
+    if END_RE.is_match(trimmed) {
+        *depth = depth.saturating_sub(1);
+        return;
+    }
+
+    *depth += DO_RE.find_iter(trimmed).count();
+    if KEYWORD_START_RE.is_match(trimmed) {
+        *depth += 1;
+    }
+}
+
+fn extract_formula_class_body(source: &str) -> Option<&str> {
+    let mut offset = 0usize;
+    let mut class_body_start: Option<usize> = None;
+    let mut depth = 0usize;
+
+    for line in source.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len();
+        let trimmed = line.trim();
+
+        if class_body_start.is_none() {
+            if CLASS_START_RE.is_match(trimmed) {
+                class_body_start = Some(offset);
+                depth = 1;
+            }
+            continue;
+        }
+
+        if END_RE.is_match(trimmed) {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return class_body_start.map(|start| &source[start..line_start]);
+            }
+            continue;
+        }
+
+        depth += DO_RE.find_iter(trimmed).count();
+        if KEYWORD_START_RE.is_match(trimmed) {
+            depth += 1;
+        }
+    }
+
+    None
+}
+
+fn parse_bottle(spec: &TapFormulaRef, source: &str, stable: &str, revision: u32) -> Option<Bottle> {
+    let block = extract_bottle_block(source)?;
 
     let root_url = parse_root_url(block)
         .unwrap_or_else(|| format!("https://ghcr.io/v2/{}/{}", spec.owner, spec.repo));
@@ -153,15 +289,21 @@ fn parse_bottle(
     let files = parse_bottle_files(spec, &root_url, stable, revision, rebuild, block);
 
     if files.is_empty() {
-        return Err(Error::UnsupportedFormula {
-            name: spec.formula.clone(),
-            reason: "tap formula does not contain supported bottle sha256 entries".to_string(),
-        });
+        return None;
     }
 
-    Ok(Bottle {
+    Some(Bottle {
         stable: BottleStable { files, rebuild },
     })
+}
+
+fn empty_bottle() -> Bottle {
+    Bottle {
+        stable: BottleStable {
+            files: BTreeMap::new(),
+            rebuild: 0,
+        },
+    }
 }
 
 fn extract_bottle_block(source: &str) -> Option<&str> {
@@ -328,6 +470,7 @@ end
         assert_eq!(formula.revision, 1);
         assert_eq!(formula.bottle.stable.rebuild, 2);
         assert_eq!(formula.dependencies, vec!["openssl@3".to_string()]);
+        assert_eq!(formula.build_dependencies, vec!["go".to_string()]);
         assert!(formula.bottle.stable.files.contains_key("arm64_sonoma"));
         assert!(formula.bottle.stable.files.contains_key("x86_64_linux"));
     }
@@ -433,32 +576,106 @@ end
     }
 
     #[test]
-    fn returns_unsupported_formula_when_bottle_block_is_missing() {
+    fn supports_source_only_tap_formula_without_bottle_block() {
         let source = r#"
-class Terraform < Formula
-  version "1.10.0"
+class OhMyPosh < Formula
+  version "29.3.0"
+  url "https://github.com/JanDeDobbeleer/oh-my-posh/archive/v29.3.0.tar.gz"
+  sha256 "ff39f6ef2b4ca2d7d766f2802520b023986a5d6dbcd59fba685a9e5bacf41993"
+  depends_on "go@1.26" => :build
 end
 "#;
 
         let spec = TapFormulaRef {
-            owner: "hashicorp".to_string(),
-            repo: "tap".to_string(),
-            formula: "terraform".to_string(),
+            owner: "jandedobbeleer".to_string(),
+            repo: "oh-my-posh".to_string(),
+            formula: "oh-my-posh".to_string(),
         };
 
-        let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
-        assert!(matches!(err, Error::UnsupportedFormula { .. }));
+        let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+        assert!(formula.bottle.stable.files.is_empty());
+        assert_eq!(formula.build_dependencies, vec!["go@1.26".to_string()]);
+
+        let stable = formula
+            .urls
+            .as_ref()
+            .and_then(|u| u.stable.as_ref())
+            .expect("stable source url should be parsed");
+        assert_eq!(
+            stable.url,
+            "https://github.com/JanDeDobbeleer/oh-my-posh/archive/v29.3.0.tar.gz"
+        );
+        assert_eq!(
+            stable.checksum.as_deref(),
+            Some("ff39f6ef2b4ca2d7d766f2802520b023986a5d6dbcd59fba685a9e5bacf41993")
+        );
     }
 
     #[test]
-    fn returns_unsupported_formula_when_bottle_has_no_supported_sha_entries() {
+    fn source_url_parsing_ignores_nested_resource_blocks() {
+        let source = r#"
+class Example < Formula
+  url "https://example.com/example-1.0.0.tar.gz"
+  sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+  resource "extra" do
+    url "https://example.com/resource.tar.gz"
+    sha256 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  end
+end
+"#;
+
+        let spec = TapFormulaRef {
+            owner: "someone".to_string(),
+            repo: "tap".to_string(),
+            formula: "example".to_string(),
+        };
+
+        let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+        let stable = formula
+            .urls
+            .as_ref()
+            .and_then(|u| u.stable.as_ref())
+            .expect("stable source url should be parsed");
+
+        assert_eq!(stable.url, "https://example.com/example-1.0.0.tar.gz");
+        assert_eq!(
+            stable.checksum.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+    }
+
+    #[test]
+    fn dependency_parsing_ignores_nested_blocks() {
+        let source = r#"
+class Example < Formula
+  url "https://example.com/example-1.0.0.tar.gz"
+  sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  depends_on "openssl@3"
+  depends_on "go" => :build
+
+  resource "extra" do
+    depends_on "python@3.12"
+  end
+end
+"#;
+
+        let spec = TapFormulaRef {
+            owner: "someone".to_string(),
+            repo: "tap".to_string(),
+            formula: "example".to_string(),
+        };
+
+        let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+        assert_eq!(formula.dependencies, vec!["openssl@3".to_string()]);
+        assert_eq!(formula.build_dependencies, vec!["go".to_string()]);
+    }
+
+    #[test]
+    fn returns_unsupported_formula_when_neither_bottle_nor_source_is_available() {
         let source = r#"
 class Terraform < Formula
   version "1.10.0"
-  bottle do
-    root_url "https://ghcr.io/v2/hashicorp/tap"
-    sha256 cellar: :any_skip_relocation
-  end
 end
 "#;
 
