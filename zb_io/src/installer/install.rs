@@ -1106,6 +1106,24 @@ mod tests {
         assert!(path.ends_with("cellar/openssl@3/3.3.2"));
     }
 
+    #[test]
+    fn dependency_cellar_path_uses_name_from_db_record() {
+        let tmp = TempDir::new().unwrap();
+        let cellar = Cellar::new(tmp.path()).unwrap();
+
+        let db_path = tmp.path().join("zb.sqlite3");
+        let mut db = Database::open(&db_path).unwrap();
+        let tx = db.transaction().unwrap();
+        tx.record_install("hashicorp/tap/terraform", "1.10.0", "store-key")
+            .unwrap();
+        tx.commit().unwrap();
+
+        let keg = db.get_installed("hashicorp/tap/terraform").unwrap();
+        let path = dependency_cellar_path(&cellar, &keg.name, &keg.version);
+
+        assert!(path.ends_with("cellar/terraform/1.10.0"));
+    }
+
     #[tokio::test]
     async fn install_completes_successfully() {
         let mock_server = MockServer::start().await;
