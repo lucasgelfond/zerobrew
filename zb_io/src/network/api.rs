@@ -4,6 +4,8 @@ use crate::network::tap_formula::{parse_tap_formula_ref, parse_tap_formula_ruby}
 use futures_util::stream::{self, StreamExt};
 use zb_core::{Error, Formula};
 
+const TAP_RB_URL_PREFIX: &str = "tap-rb-url:";
+
 pub struct ApiClient {
     base_url: String,
     cask_base_url: String,
@@ -57,9 +59,17 @@ impl ApiClient {
         cache_dir: &std::path::Path,
         expected_sha256: Option<&str>,
     ) -> Result<std::path::PathBuf, Error> {
-        let url = format!(
-            "https://raw.githubusercontent.com/Homebrew/homebrew-core/main/{ruby_source_path}"
-        );
+        let url = if let Some(encoded_url) = ruby_source_path.strip_prefix(TAP_RB_URL_PREFIX) {
+            encoded_url.to_string()
+        } else if ruby_source_path.starts_with("https://")
+            || ruby_source_path.starts_with("http://")
+        {
+            ruby_source_path.to_string()
+        } else {
+            format!(
+                "https://raw.githubusercontent.com/Homebrew/homebrew-core/main/{ruby_source_path}"
+            )
+        };
         self.fetch_formula_rb_from_url(ruby_source_path, &url, cache_dir, expected_sha256)
             .await
     }
@@ -288,11 +298,11 @@ impl ApiClient {
                 let mut responses = stream::iter(candidate_paths.iter().map(|candidate_path| {
                     let client = client.clone();
                     let url = format!("{base_prefix}{candidate_path}");
-                    async move { client.get(&url).send().await }
+                    async move { (url.clone(), client.get(&url).send().await) }
                 }))
                 .buffered(2);
 
-                while let Some(response) = responses.next().await {
+                while let Some((url, response)) = responses.next().await {
                     match response {
                         Ok(response) => {
                             let status = response.status();
@@ -301,7 +311,10 @@ impl ApiClient {
                                     response.text().await.map_err(|e| Error::NetworkFailure {
                                         message: format!("failed to read tap formula body: {e}"),
                                     })?;
-                                return parse_tap_formula_ruby(spec, &body);
+                                let mut formula = parse_tap_formula_ruby(spec, &body)?;
+                                formula.ruby_source_path =
+                                    Some(format!("{TAP_RB_URL_PREFIX}{url}"));
+                                return Ok(formula);
                             }
 
                             if status != reqwest::StatusCode::NOT_FOUND {
@@ -531,6 +544,53 @@ end
         assert_eq!(formula.versions.stable, "1.10.0");
         assert!(formula.dependencies.contains(&"go".to_string()));
         assert!(formula.bottle.stable.files.contains_key("arm64_sonoma"));
+        let expected_path = format!(
+            "{TAP_RB_URL_PREFIX}{}/hashicorp/homebrew-tap/main/Formula/terraform.rb",
+            mock_server.uri()
+        );
+        assert_eq!(
+            formula.ruby_source_path.as_deref(),
+            Some(expected_path.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn supports_source_only_tap_formula_without_bottle_block() {
+        let mock_server = MockServer::start().await;
+        let rb = r#"
+class OhMyPosh < Formula
+  version "29.3.0"
+  url "https://github.com/JanDeDobbeleer/oh-my-posh/archive/v29.3.0.tar.gz"
+  sha256 "ff39f6ef2b4ca2d7d766f2802520b023986a5d6dbcd59fba685a9e5bacf41993"
+  depends_on "go@1.26" => :build
+end
+"#;
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/jandedobbeleer/homebrew-oh-my-posh/main/oh-my-posh.rb",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string(rb))
+            .mount(&mock_server)
+            .await;
+
+        let client =
+            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let formula = client
+            .get_formula("jandedobbeleer/oh-my-posh/oh-my-posh")
+            .await
+            .unwrap();
+
+        assert_eq!(formula.name, "oh-my-posh");
+        assert!(formula.bottle.stable.files.is_empty());
+        assert_eq!(formula.build_dependencies, vec!["go@1.26".to_string()]);
+        assert!(formula.has_source_url());
+        assert!(
+            formula
+                .ruby_source_path
+                .as_deref()
+                .is_some_and(|path| path.starts_with(TAP_RB_URL_PREFIX))
+        );
     }
 
     #[tokio::test]
@@ -713,6 +773,32 @@ end
             .unwrap_err();
 
         assert!(matches!(err, Error::NetworkFailure { .. }));
+    }
+
+    #[tokio::test]
+    async fn fetch_formula_rb_supports_absolute_url_paths() {
+        let mock_server = MockServer::start().await;
+        let ruby_body = "class Foo < Formula\nend\n";
+
+        Mock::given(method("GET"))
+            .and(path("/custom/foo.rb"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(ruby_body))
+            .mount(&mock_server)
+            .await;
+
+        let cache_dir = tempdir().unwrap();
+        let client = ApiClient::new();
+
+        let fetched = client
+            .fetch_formula_rb(
+                &format!("{}/custom/foo.rb", mock_server.uri()),
+                cache_dir.path(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(fetched.exists());
     }
 
     #[tokio::test]
