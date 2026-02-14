@@ -14,7 +14,13 @@ ZEROBREW_ROOT := if env('ZEROBREW_ROOT', '') != '' {
 }
 ZEROBREW_DIR := env('ZEROBREW_DIR', env('HOME', '~') / '.zerobrew')
 ZEROBREW_BIN := env('ZEROBREW_BIN', env('HOME', '~') / '.local' / 'bin')
-ZEROBREW_PREFIX := env('ZEROBREW_PREFIX', ZEROBREW_ROOT / 'prefix')
+ZEROBREW_PREFIX := if env('ZEROBREW_PREFIX', '') != '' {
+    env('ZEROBREW_PREFIX')
+} else if os() == 'macos' {
+    ZEROBREW_ROOT
+} else {
+    ZEROBREW_ROOT / 'prefix'
+}
 ZEROBREW_INSTALLED_BIN := ZEROBREW_BIN / 'zb'
 
 SUDO := if which('doas') != '' {
