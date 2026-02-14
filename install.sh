@@ -68,8 +68,11 @@ else
     ZEROBREW_ROOT="$XDG_DATA_HOME/zerobrew"
 fi
 
-# Allow custom prefix, default to $ZEROBREW_ROOT/prefix
-: "${ZEROBREW_PREFIX:=$ZEROBREW_ROOT/prefix}"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    : "${ZEROBREW_PREFIX:=$ZEROBREW_ROOT}"
+else
+    : "${ZEROBREW_PREFIX:=$ZEROBREW_ROOT/prefix}"
+fi
 
 export ZEROBREW_ROOT
 export ZEROBREW_PREFIX
