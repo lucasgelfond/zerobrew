@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -109,6 +111,17 @@ jobs:
           path: assets
           pattern: "zb*-*"
           merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd assets
+          sha256sum -- * > SHA256SUMS
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v3.2.0
+        with:
+          subject-checksums: assets/SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
