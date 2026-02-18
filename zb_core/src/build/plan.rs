@@ -100,6 +100,7 @@ mod tests {
             },
             revision: 0,
             keg_only: KegOnly::default(),
+            keg_only_reason: None,
             build_dependencies: build_deps.iter().map(|s| s.to_string()).collect(),
             urls: Some(FormulaUrls {
                 stable: Some(SourceUrl {

@@ -20,6 +20,23 @@ impl<'de> Deserialize<'de> for KegOnly {
     }
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct KegOnlyReason {
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub explanation: String,
+}
+
+impl KegOnlyReason {
+    pub fn is_macos_specific(&self) -> bool {
+        matches!(
+            self.reason.as_str(),
+            ":provided_by_macos" | ":shadowed_by_macos"
+        )
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct SourceUrl {
     pub url: String,
@@ -88,6 +105,8 @@ pub struct Formula {
     #[serde(default)]
     pub keg_only: KegOnly,
     #[serde(default)]
+    pub keg_only_reason: Option<KegOnlyReason>,
+    #[serde(default)]
     pub build_dependencies: Vec<String>,
     #[serde(default)]
     pub urls: Option<FormulaUrls>,
@@ -113,7 +132,19 @@ impl Formula {
     }
 
     pub fn is_keg_only(&self) -> bool {
-        self.name.contains('@') || !matches!(self.keg_only, KegOnly::No)
+        if self.name.contains('@') {
+            return true;
+        }
+        if matches!(self.keg_only, KegOnly::No) {
+            return false;
+        }
+        #[cfg(not(target_os = "macos"))]
+        if let Some(ref reason) = self.keg_only_reason
+            && reason.is_macos_specific()
+        {
+            return false;
+        }
+        true
     }
 
     pub fn source_url(&self) -> Option<&SourceUrl> {
@@ -275,6 +306,109 @@ mod tests {
         }"#;
         let formula: Formula = serde_json::from_str(json).unwrap();
         assert_eq!(formula.keg_only, KegOnly::No);
+        assert!(formula.is_keg_only());
+    }
+
+    #[test]
+    fn keg_only_reason_deserializes_provided_by_macos() {
+        let json = r#"{
+            "name": "sqlite",
+            "versions": { "stable": "3.51.2" },
+            "dependencies": [],
+            "keg_only": true,
+            "keg_only_reason": { "reason": ":provided_by_macos", "explanation": "" },
+            "bottle": { "stable": { "files": {
+                "arm64_sonoma": { "url": "https://x.com/a.tar.gz", "sha256": "aa" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        assert_eq!(formula.keg_only, KegOnly::Yes);
+        let reason = formula.keg_only_reason.as_ref().unwrap();
+        assert_eq!(reason.reason, ":provided_by_macos");
+        assert!(reason.is_macos_specific());
+    }
+
+    #[test]
+    fn keg_only_reason_shadowed_by_macos_is_macos_specific() {
+        let reason = KegOnlyReason {
+            reason: ":shadowed_by_macos".to_string(),
+            explanation: String::new(),
+        };
+        assert!(reason.is_macos_specific());
+    }
+
+    #[test]
+    fn keg_only_reason_generic_is_not_macos_specific() {
+        let reason = KegOnlyReason {
+            reason: ":versioned_formula".to_string(),
+            explanation: String::new(),
+        };
+        assert!(!reason.is_macos_specific());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn provided_by_macos_not_keg_only_on_linux() {
+        let json = r#"{
+            "name": "sqlite",
+            "versions": { "stable": "3.51.2" },
+            "dependencies": [],
+            "keg_only": true,
+            "keg_only_reason": { "reason": ":provided_by_macos", "explanation": "" },
+            "bottle": { "stable": { "files": {
+                "x86_64_linux": { "url": "https://x.com/a.tar.gz", "sha256": "aa" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        assert!(!formula.is_keg_only());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn provided_by_macos_still_keg_only_on_macos() {
+        let json = r#"{
+            "name": "sqlite",
+            "versions": { "stable": "3.51.2" },
+            "dependencies": [],
+            "keg_only": true,
+            "keg_only_reason": { "reason": ":provided_by_macos", "explanation": "" },
+            "bottle": { "stable": { "files": {
+                "arm64_sonoma": { "url": "https://x.com/a.tar.gz", "sha256": "aa" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        assert!(formula.is_keg_only());
+    }
+
+    #[test]
+    fn keg_only_without_macos_reason_stays_keg_only() {
+        let json = r#"{
+            "name": "libfoo",
+            "versions": { "stable": "1.0" },
+            "dependencies": [],
+            "keg_only": true,
+            "keg_only_reason": { "reason": ":versioned_formula", "explanation": "" },
+            "bottle": { "stable": { "files": {
+                "arm64_sonoma": { "url": "https://x.com/a.tar.gz", "sha256": "aa" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        assert!(formula.is_keg_only());
+    }
+
+    #[test]
+    fn keg_only_true_without_reason_field_stays_keg_only() {
+        let json = r#"{
+            "name": "libfoo",
+            "versions": { "stable": "1.0" },
+            "dependencies": [],
+            "keg_only": true,
+            "bottle": { "stable": { "files": {
+                "arm64_sonoma": { "url": "https://x.com/a.tar.gz", "sha256": "aa" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        assert!(formula.keg_only_reason.is_none());
         assert!(formula.is_keg_only());
     }
 }

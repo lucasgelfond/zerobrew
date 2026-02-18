@@ -7,5 +7,5 @@ pub use build::{BuildPlan, BuildSystem, InstallMethod};
 pub use context::{ConcurrencyLimits, Context, LogLevel, LoggerHandle, Paths};
 pub use errors::{ConflictedLink, Error};
 pub use formula::{
-    Formula, KegOnly, SelectedBottle, formula_token, resolve_closure, select_bottle,
+    Formula, KegOnly, KegOnlyReason, SelectedBottle, formula_token, resolve_closure, select_bottle,
 };

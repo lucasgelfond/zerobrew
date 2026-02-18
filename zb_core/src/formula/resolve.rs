@@ -136,6 +136,7 @@ mod tests {
             },
             revision: 0,
             keg_only: KegOnly::default(),
+            keg_only_reason: None,
             build_dependencies: Vec::new(),
             urls: None,
             ruby_source_path: None,
