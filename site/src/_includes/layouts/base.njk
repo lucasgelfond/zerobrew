@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% if title %}{{ title }} · {% endif %}{{ site.title }}</title>
+    <meta name="description" content="{{ site.description }}" />
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+    <link rel="shortcut icon" href="/assets/favicon.svg" />
+    <link rel="stylesheet" href="/assets/css/main.css" />
+  </head>
+  <body class="{% if page.url == '/' %}is-home {% endif %}{% if page.url and page.url.indexOf('/docs/') == 0 %}is-docs{% endif %}">
+    {% include "partials/site-header.njk" %}
+
+    <main id="main-content">
+      {% block content %}
+        {{ content | safe }}
+      {% endblock %}
+    </main>
+
+    {% include "partials/site-footer.njk" %}
+  </body>
+</html>
