@@ -374,6 +374,7 @@ pub fn parse_tap_formula_ruby(spec: &TapFormulaRef, source: &str) -> Result<Form
         bottle: bottle.unwrap_or_else(empty_bottle),
         revision,
         keg_only: KegOnly::default(),
+        keg_only_reason: None,
         build_dependencies,
         urls: source_url.map(|stable| FormulaUrls {
             stable: Some(stable),
