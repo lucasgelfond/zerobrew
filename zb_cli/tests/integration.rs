@@ -165,14 +165,27 @@ fn test_curl_keg_only() {
 
     assert_success(&t.zb(&["install", "curl"]), "zb install curl");
 
-    // curl is keg-only (:provided_by_macos), so it should NOT be linked into bin
-    assert!(
-        !t.bin_dir().join("curl").exists(),
-        "curl should not be linked (keg-only)"
-    );
+    // curl is keg-only with reason :provided_by_macos.
+    // On macOS the reason applies, so it should NOT be linked.
+    // On Linux the reason is irrelevant, so it SHOULD be linked.
+    if cfg!(target_os = "macos") {
+        assert!(
+            !t.bin_dir().join("curl").exists(),
+            "curl should not be linked (keg-only on macOS)"
+        );
+    } else {
+        assert!(
+            t.bin_dir().join("curl").exists(),
+            "curl should be linked on Linux (provided_by_macos is not applicable)"
+        );
+    }
 
-    // but the binary should exist in the cellar and work
-    let output = t.run_cellar_binary("curl", "curl", &["https://www.githubstatus.com"]);
+    // the binary should exist in the cellar and work either way
+    let output = if t.bin_dir().join("curl").exists() {
+        t.run_binary("curl", &["https://www.githubstatus.com"])
+    } else {
+        t.run_cellar_binary("curl", "curl", &["https://www.githubstatus.com"])
+    };
     assert_success(&output, "curl https://www.githubstatus.com");
     assert_stdout_contains(&output, "GitHub");
 }
