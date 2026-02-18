@@ -5,6 +5,18 @@ use std::path::{Component, Path, PathBuf};
 use zb_core::{ConflictedLink, Error};
 
 const LINK_DIRS: &[&str] = &["bin", "lib", "libexec", "include", "share", "etc"];
+const LIBEXEC_SKIP_FILES: &[&str] = &[".gitignore", "pyvenv.cfg"];
+
+fn should_skip_link_entry(src_dir: &Path, entry_name: &std::ffi::OsStr) -> bool {
+    // Homebrew-style Python virtualenv formulae commonly place metadata files at
+    // libexec/.gitignore and libexec/pyvenv.cfg. Linking these into a shared
+    // prefix/libexec causes cross-formula conflicts (e.g. ranger vs ansible-lint)
+    // even though they are not executable entrypoints users need on PATH.
+    src_dir.file_name().and_then(|n| n.to_str()) == Some("libexec")
+        && entry_name
+            .to_str()
+            .is_some_and(|name| LIBEXEC_SKIP_FILES.contains(&name))
+}
 
 pub struct Linker {
     prefix: PathBuf,
@@ -86,8 +98,13 @@ impl Linker {
             Err(_) => return,
         };
         for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            if should_skip_link_entry(src, &file_name) {
+                continue;
+            }
+
             let src_path = entry.path();
-            let dst_path = dst.join(entry.file_name());
+            let dst_path = dst.join(&file_name);
 
             // Use src_path.is_dir() which follows symlinks, so that keg entries
             // like `man -> ../gnuman` (symlinks to directories) are treated as dirs.
@@ -200,8 +217,13 @@ impl Linker {
             let entry = entry.map_err(|e| Error::StoreCorruption {
                 message: e.to_string(),
             })?;
+            let file_name = entry.file_name();
+            if should_skip_link_entry(src, &file_name) {
+                continue;
+            }
+
             let src_path = entry.path();
-            let dst_path = dst.join(entry.file_name());
+            let dst_path = dst.join(&file_name);
 
             // Use src_path.is_dir() which follows symlinks, so that keg entries
             // like `man -> ../gnuman` (symlinks to directories) are expanded
@@ -460,6 +482,48 @@ mod tests {
         let linked_helper = tmp.path().join("libexec/git-core/git-remote-https");
         assert!(linked_helper.exists(), "git-remote-https should be linked");
         assert!(linked_helper.is_symlink(), "should be a symlink");
+    }
+
+    #[test]
+    fn skips_libexec_virtualenv_metadata_to_avoid_conflicts() {
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+
+        let keg1 = prefix.join("cellar/ranger/1.0.0");
+        fs::create_dir_all(keg1.join("libexec")).unwrap();
+        fs::create_dir_all(keg1.join("bin")).unwrap();
+        fs::write(keg1.join("libexec/.gitignore"), b"# ranger").unwrap();
+        fs::write(keg1.join("libexec/pyvenv.cfg"), b"home=/tmp/ranger").unwrap();
+        fs::write(keg1.join("bin/ranger"), b"#!/bin/sh\necho ranger").unwrap();
+        fs::set_permissions(keg1.join("bin/ranger"), PermissionsExt::from_mode(0o755)).unwrap();
+
+        let keg2 = prefix.join("cellar/ansible-lint/1.0.0");
+        fs::create_dir_all(keg2.join("libexec")).unwrap();
+        fs::create_dir_all(keg2.join("bin")).unwrap();
+        fs::write(keg2.join("libexec/.gitignore"), b"# ansible-lint").unwrap();
+        fs::write(keg2.join("libexec/pyvenv.cfg"), b"home=/tmp/ansible-lint").unwrap();
+        fs::write(
+            keg2.join("bin/ansible-lint"),
+            b"#!/bin/sh\necho ansible-lint",
+        )
+        .unwrap();
+        fs::set_permissions(
+            keg2.join("bin/ansible-lint"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        linker.link_keg(&keg1).unwrap();
+        linker.link_keg(&keg2).unwrap();
+
+        // Metadata files should not be linked into shared prefix/libexec.
+        assert!(!prefix.join("libexec/.gitignore").exists());
+        assert!(!prefix.join("libexec/pyvenv.cfg").exists());
+
+        // Useful entrypoints still link correctly.
+        assert!(prefix.join("bin/ranger").exists());
+        assert!(prefix.join("bin/ansible-lint").exists());
     }
 
     #[test]
