@@ -71,6 +71,11 @@ impl Installer {
         }
     }
 
+    /// Clear the API cache, forcing fresh metadata on next operation.
+    pub fn clear_api_cache(&self) -> Result<usize, Error> {
+        self.api_client.clear_cache()
+    }
+
     pub async fn plan(&self, names: &[String]) -> Result<InstallPlan, Error> {
         self.plan_with_options(names, false).await
     }
