@@ -59,6 +59,24 @@ mod tests {
         let err = result.err().map(|e| e.to_string()).unwrap_or_default();
         assert!(err.contains("at least 1"));
     }
+
+    #[test]
+    fn outdated_quiet_and_verbose_conflict() {
+        let result = Cli::try_parse_from(["zb", "outdated", "--quiet", "--verbose"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn outdated_quiet_and_json_conflict() {
+        let result = Cli::try_parse_from(["zb", "outdated", "--quiet", "--json"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn outdated_verbose_and_json_conflict() {
+        let result = Cli::try_parse_from(["zb", "outdated", "--verbose", "--json"]);
+        assert!(result.is_err());
+    }
 }
 
 #[derive(Subcommand)]
@@ -111,6 +129,19 @@ pub enum Commands {
         args: Vec<String>,
     },
     Update,
+    Outdated {
+        /// Show only package names
+        #[arg(short, long, conflicts_with_all = ["verbose", "json"])]
+        quiet: bool,
+
+        /// Show detailed version information
+        #[arg(short, long, conflicts_with_all = ["quiet", "json"])]
+        verbose: bool,
+
+        /// Output as JSON
+        #[arg(long, conflicts_with_all = ["quiet", "verbose"])]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
