@@ -5,6 +5,12 @@ pub struct ApiCache {
     conn: Connection,
 }
 
+impl std::fmt::Debug for ApiCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiCache").finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
     pub etag: Option<String>,

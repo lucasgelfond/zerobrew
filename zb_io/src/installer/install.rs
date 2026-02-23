@@ -7,6 +7,7 @@ use crate::cellar::link::Linker;
 use crate::cellar::materialize::Cellar;
 use crate::installer::cask::resolve_cask;
 use crate::network::api::ApiClient;
+use crate::network::cache::ApiCache;
 use crate::network::download::{
     DownloadProgressCallback, DownloadRequest, DownloadResult, ParallelDownloader,
 };
@@ -1106,7 +1107,18 @@ pub fn create_installer(
         message: format!("failed to create db directory: {e}"),
     })?;
 
-    let api_client = ApiClient::new();
+    // Ensure cache directory exists before opening API cache SQLite
+    fs::create_dir_all(root.join("cache")).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create cache directory: {e}"),
+    })?;
+
+    // Wire persistent API cache for HTTP response caching (ETag/Last-Modified)
+    let api_cache_path = root.join("cache/api-cache.sqlite");
+    let api_cache = ApiCache::open(&api_cache_path).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to open API cache: {e}"),
+    })?;
+    let api_client = ApiClient::new()?.with_cache(api_cache);
+
     let blob_cache = BlobCache::new(&root.join("cache")).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create blob cache: {e}"),
     })?;
