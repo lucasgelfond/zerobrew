@@ -61,6 +61,12 @@ impl ApiCache {
             .ok()
     }
 
+    /// Clear all cached entries. Returns the number of entries removed.
+    pub fn clear(&self) -> Result<usize, rusqlite::Error> {
+        let removed = self.conn.execute("DELETE FROM api_cache", [])?;
+        Ok(removed)
+    }
+
     pub fn put(&self, url: &str, entry: &CacheEntry) -> Result<(), rusqlite::Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -101,5 +107,28 @@ mod tests {
     fn returns_none_for_missing_entry() {
         let cache = ApiCache::in_memory().unwrap();
         assert!(cache.get("https://example.com/nonexistent.json").is_none());
+    }
+
+    #[test]
+    fn clear_removes_all_entries() {
+        let cache = ApiCache::in_memory().unwrap();
+        let entry = CacheEntry {
+            etag: None,
+            last_modified: None,
+            body: "{}".to_string(),
+        };
+        cache.put("https://example.com/a.json", &entry).unwrap();
+        cache.put("https://example.com/b.json", &entry).unwrap();
+
+        let removed = cache.clear().unwrap();
+        assert_eq!(removed, 2);
+        assert!(cache.get("https://example.com/a.json").is_none());
+        assert!(cache.get("https://example.com/b.json").is_none());
+    }
+
+    #[test]
+    fn clear_on_empty_cache_returns_zero() {
+        let cache = ApiCache::in_memory().unwrap();
+        assert_eq!(cache.clear().unwrap(), 0);
     }
 }

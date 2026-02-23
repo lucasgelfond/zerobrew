@@ -120,6 +120,16 @@ impl ApiClient {
         self
     }
 
+    /// Clear all cached API responses. Returns the number removed.
+    pub fn clear_cache(&self) -> Result<usize, Error> {
+        match &self.cache {
+            Some(cache) => cache.clear().map_err(|e| Error::StoreCorruption {
+                message: format!("failed to clear API cache: {e}"),
+            }),
+            None => Ok(0),
+        }
+    }
+
     pub async fn fetch_formula_rb(
         &self,
         ruby_source_path: &str,
