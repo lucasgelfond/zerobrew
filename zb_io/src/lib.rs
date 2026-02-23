@@ -13,7 +13,7 @@ pub use cellar::{Cellar, LinkedFile, Linker};
 pub use extraction::extract_tarball;
 pub use installer::{
     ExecuteResult, HomebrewMigrationPackages, HomebrewPackage, InstallPlan, Installer,
-    OutdatedPackage, create_installer, get_homebrew_packages,
+    OutdatedPackage, UpgradeResult, create_installer, get_homebrew_packages,
 };
 pub use network::{
     ApiCache, ApiClient, DownloadProgressCallback, DownloadRequest, Downloader, ParallelDownloader,
