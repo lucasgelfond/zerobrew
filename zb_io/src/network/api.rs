@@ -49,6 +49,11 @@ impl<'a> RubySourceLocator<'a> {
     }
 }
 
+enum CachedGetResult {
+    Cached(String),
+    Fresh(reqwest::Response),
+}
+
 #[derive(Debug)]
 pub struct ApiClient {
     base_url: String,
@@ -220,16 +225,10 @@ impl ApiClient {
         }
     }
 
-    pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
-        if let Some(spec) = parse_tap_formula_ref(name) {
-            return self.get_tap_formula(&spec).await;
-        }
+    async fn cached_get(&self, url: &str) -> Result<CachedGetResult, Error> {
+        let cached_entry = self.cache.as_ref().and_then(|c| c.get(url));
 
-        let url = format!("{}/{}.json", self.base_url, name);
-
-        let cached_entry = self.cache.as_ref().and_then(|c| c.get(&url));
-
-        let mut request = self.client.get(&url);
+        let mut request = self.client.get(url);
 
         if let Some(ref entry) = cached_entry {
             if let Some(ref etag) = entry.etag {
@@ -247,55 +246,106 @@ impl ApiClient {
         if response.status() == reqwest::StatusCode::NOT_MODIFIED
             && let Some(entry) = cached_entry
         {
-            let formula: Formula =
-                serde_json::from_str(&entry.body).map_err(|e| Error::NetworkFailure {
-                    message: format!("failed to parse cached formula JSON: {e}"),
-                })?;
-            return Ok(formula);
+            return Ok(CachedGetResult::Cached(entry.body));
         }
 
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(Error::MissingFormula {
-                name: name.to_string(),
-            });
-        }
+        Ok(CachedGetResult::Fresh(response))
+    }
 
-        if !response.status().is_success() {
-            return Err(Error::NetworkFailure {
-                message: format!("HTTP {}", response.status()),
-            });
-        }
-
-        let etag = response
-            .headers()
-            .get("etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let last_modified = response
-            .headers()
-            .get("last-modified")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let body = response.text().await.map_err(|e| Error::NetworkFailure {
-            message: format!("failed to read response body: {e}"),
-        })?;
-
+    fn store_response_in_cache(
+        &self,
+        url: &str,
+        etag: Option<String>,
+        last_modified: Option<String>,
+        body: &str,
+    ) {
         if let Some(ref cache) = self.cache {
             let entry = CacheEntry {
                 etag,
                 last_modified,
-                body: body.clone(),
+                body: body.to_string(),
             };
-            let _ = cache.put(&url, &entry);
+            let _ = cache.put(url, &entry);
+        }
+    }
+
+    pub async fn get_formula(&self, name: &str) -> Result<Formula, Error> {
+        if let Some(spec) = parse_tap_formula_ref(name) {
+            return self.get_tap_formula(&spec).await;
         }
 
-        let formula: Formula = serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
-            message: format!("failed to parse formula JSON: {e}"),
-        })?;
+        let url = format!("{}/{}.json", self.base_url, name);
 
-        Ok(formula)
+        let body = match self.cached_get(&url).await? {
+            CachedGetResult::Cached(body) => body,
+            CachedGetResult::Fresh(response) => {
+                if response.status() == reqwest::StatusCode::NOT_FOUND {
+                    return Err(Error::MissingFormula {
+                        name: name.to_string(),
+                    });
+                }
+                if !response.status().is_success() {
+                    return Err(Error::NetworkFailure {
+                        message: format!("HTTP {}", response.status()),
+                    });
+                }
+
+                let etag = response
+                    .headers()
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                let last_modified = response
+                    .headers()
+                    .get("last-modified")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+
+                let body = response.text().await.map_err(|e| Error::NetworkFailure {
+                    message: format!("failed to read response body: {e}"),
+                })?;
+
+                self.store_response_in_cache(&url, etag, last_modified, &body);
+                body
+            }
+        };
+
+        serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
+            message: format!("failed to parse formula JSON: {e}"),
+        })
+    }
+
+    pub async fn get_all_formulas_raw(&self) -> Result<String, Error> {
+        let url = format!("{}.json", self.base_url);
+
+        match self.cached_get(&url).await? {
+            CachedGetResult::Cached(body) => Ok(body),
+            CachedGetResult::Fresh(response) => {
+                if !response.status().is_success() {
+                    return Err(Error::NetworkFailure {
+                        message: format!("bulk formula fetch returned HTTP {}", response.status()),
+                    });
+                }
+
+                let etag = response
+                    .headers()
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                let last_modified = response
+                    .headers()
+                    .get("last-modified")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+
+                let body = response.text().await.map_err(|e| Error::NetworkFailure {
+                    message: format!("failed to read bulk formula response body: {e}"),
+                })?;
+
+                self.store_response_in_cache(&url, etag, last_modified, &body);
+                Ok(body)
+            }
+        }
     }
 
     pub async fn get_cask(&self, token: &str) -> Result<serde_json::Value, Error> {
@@ -1036,5 +1086,26 @@ end
         let cask = client.get_cask("iterm2").await.unwrap();
         assert_eq!(cask["token"], "iterm2");
         assert_eq!(cask["version"], "3.5.0");
+    }
+
+    #[tokio::test]
+    async fn get_all_formulas_raw_returns_bulk_json() {
+        let mock_server = MockServer::start().await;
+        let fixture = include_str!("../../../zb_core/fixtures/formula_foo.json");
+        let bulk_body = format!("[{}]", fixture);
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&bulk_body))
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+        let raw = client.get_all_formulas_raw().await.unwrap();
+
+        let formulas: Vec<Formula> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(formulas.len(), 1);
+        assert_eq!(formulas[0].name, "foo");
+        assert_eq!(formulas[0].versions.stable, "1.2.3");
     }
 }
