@@ -63,6 +63,7 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         Commands::List => commands::list::execute(&mut installer),
         Commands::Info { formula } => commands::info::execute(&mut installer, formula),
         Commands::Gc => commands::gc::execute(&mut installer),
+        Commands::Update => commands::update::execute(&mut installer),
         Commands::Reset { yes } => commands::reset::execute(&root, &prefix, yes),
         Commands::Run { formula, args } => {
             commands::run::execute(&mut installer, formula, args).await
