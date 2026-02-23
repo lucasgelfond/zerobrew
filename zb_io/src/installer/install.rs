@@ -50,6 +50,21 @@ pub struct ExecuteResult {
     pub installed: usize,
 }
 
+/// A package that has a newer version available upstream.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutdatedPackage {
+    pub name: String,
+    pub installed_version: String,
+    pub current_version: String,
+    #[serde(skip)]
+    pub installed_sha256: String,
+    #[serde(skip)]
+    pub current_sha256: String,
+    /// Whether this was installed from source (vs bottle)
+    #[serde(skip)]
+    pub is_source_build: bool,
+}
+
 impl Installer {
     pub fn new(
         api_client: ApiClient,
@@ -74,6 +89,120 @@ impl Installer {
     /// Clear the API cache, forcing fresh metadata on next operation.
     pub fn clear_api_cache(&self) -> Result<usize, Error> {
         self.api_client.clear_cache()
+    }
+
+    /// Check if a specific installed package is outdated.
+    /// Returns Ok(None) if up-to-date, Ok(Some(..)) if outdated.
+    pub async fn is_outdated(&self, name: &str) -> Result<Option<OutdatedPackage>, Error> {
+        let installed = self.db.get_installed(name).ok_or(Error::NotInstalled {
+            name: name.to_string(),
+        })?;
+
+        let formula = self.api_client.get_formula(name).await?;
+        let is_source = installed.store_key.starts_with("source:");
+
+        if is_source {
+            let current_version = formula.effective_version();
+            if installed.version == current_version {
+                Ok(None)
+            } else {
+                Ok(Some(OutdatedPackage {
+                    name: name.to_string(),
+                    installed_version: installed.version,
+                    installed_sha256: installed.store_key,
+                    current_version,
+                    current_sha256: String::new(),
+                    is_source_build: true,
+                }))
+            }
+        } else {
+            let bottle = select_bottle(&formula)?;
+            if installed.store_key == bottle.sha256 {
+                Ok(None)
+            } else {
+                Ok(Some(OutdatedPackage {
+                    name: name.to_string(),
+                    installed_version: installed.version,
+                    installed_sha256: installed.store_key,
+                    current_version: formula.effective_version(),
+                    current_sha256: bottle.sha256,
+                    is_source_build: false,
+                }))
+            }
+        }
+    }
+
+    /// Check all installed packages for available updates.
+    /// Parallel API fetches; individual failures collected as warnings.
+    pub async fn check_outdated(&self) -> Result<(Vec<OutdatedPackage>, Vec<String>), Error> {
+        use futures_util::stream::StreamExt;
+        use std::collections::HashMap;
+
+        let installed = self.db.list_installed()?;
+        if installed.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let installed_map: HashMap<&str, &crate::storage::db::InstalledKeg> =
+            installed.iter().map(|k| (k.name.as_str(), k)).collect();
+
+        let mut outdated = Vec::new();
+        let mut warnings = Vec::new();
+
+        let api = &self.api_client;
+        let fetches: Vec<_> = futures_util::stream::iter(installed.iter().map(|keg| {
+            let name = keg.name.clone();
+            async move {
+                let result = api.get_formula(&name).await;
+                (name, result)
+            }
+        }))
+        .buffer_unordered(10)
+        .collect()
+        .await;
+
+        for (name, result) in fetches {
+            match result {
+                Ok(formula) => {
+                    let keg = installed_map[name.as_str()];
+                    let is_source = keg.store_key.starts_with("source:");
+
+                    if is_source {
+                        let current_version = formula.effective_version();
+                        if keg.version != current_version {
+                            outdated.push(OutdatedPackage {
+                                name: name.clone(),
+                                installed_version: keg.version.clone(),
+                                installed_sha256: keg.store_key.clone(),
+                                current_version,
+                                current_sha256: String::new(),
+                                is_source_build: true,
+                            });
+                        }
+                    } else {
+                        match select_bottle(&formula) {
+                            Ok(bottle) => {
+                                if keg.store_key != bottle.sha256 {
+                                    outdated.push(OutdatedPackage {
+                                        name: name.clone(),
+                                        installed_version: keg.version.clone(),
+                                        installed_sha256: keg.store_key.clone(),
+                                        current_version: formula.effective_version(),
+                                        current_sha256: bottle.sha256,
+                                        is_source_build: false,
+                                    });
+                                }
+                            }
+                            Err(e) => warnings.push(format!("{}: {}", name, e)),
+                        }
+                    }
+                }
+                Err(e) => warnings.push(format!("{}: {}", name, e)),
+            }
+        }
+
+        outdated.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok((outdated, warnings))
     }
 
     pub async fn plan(&self, names: &[String]) -> Result<InstallPlan, Error> {
@@ -2795,5 +2924,227 @@ end
             result.unwrap_err(),
             zb_core::Error::MissingFormula { .. }
         ));
+    }
+
+    /// Helper: create a minimal Installer backed by a mock server and temp dir.
+    /// Returns (installer, mock_server, tmp_dir).
+    async fn test_installer() -> (Installer, MockServer, TempDir) {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(mock_server.uri());
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix);
+        (installer, mock_server, tmp)
+    }
+
+    fn formula_json(name: &str, version: &str, sha256: &str) -> String {
+        let tag = get_test_bottle_tag();
+        format!(
+            r#"{{
+                "name": "{}",
+                "versions": {{ "stable": "{}" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "{}": {{
+                                "url": "https://example.com/{}-{}.{}.bottle.tar.gz",
+                                "sha256": "{}"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            name, version, tag, name, version, tag, sha256
+        )
+    }
+
+    #[tokio::test]
+    async fn is_outdated_returns_none_when_sha256_matches() {
+        let (mut installer, mock_server, _tmp) = test_installer().await;
+        let sha = "abc123def456";
+
+        {
+            let tx = installer.db.transaction().unwrap();
+            tx.record_install("jq", "1.7.1", sha).unwrap();
+            tx.commit().unwrap();
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/jq.json"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(formula_json("jq", "1.7.1", sha)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let result = installer.is_outdated("jq").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn is_outdated_returns_some_when_sha256_differs() {
+        let (mut installer, mock_server, _tmp) = test_installer().await;
+
+        {
+            let tx = installer.db.transaction().unwrap();
+            tx.record_install("jq", "1.7.0", "old_sha256").unwrap();
+            tx.commit().unwrap();
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/jq.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(formula_json(
+                "jq",
+                "1.7.1",
+                "new_sha256",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let result = installer.is_outdated("jq").await.unwrap().unwrap();
+        assert_eq!(result.name, "jq");
+        assert_eq!(result.installed_version, "1.7.0");
+        assert_eq!(result.current_version, "1.7.1");
+        assert!(!result.is_source_build);
+    }
+
+    #[tokio::test]
+    async fn is_outdated_errors_for_not_installed() {
+        let (installer, _mock_server, _tmp) = test_installer().await;
+
+        let err = installer.is_outdated("jq").await.unwrap_err();
+        assert!(matches!(err, zb_core::Error::NotInstalled { .. }));
+    }
+
+    #[tokio::test]
+    async fn is_outdated_source_build_compares_version_only() {
+        let (mut installer, mock_server, _tmp) = test_installer().await;
+
+        {
+            let tx = installer.db.transaction().unwrap();
+            tx.record_install("jq", "1.7.1", "source:jq:1.7.1").unwrap();
+            tx.commit().unwrap();
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/jq.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(formula_json(
+                "jq",
+                "1.7.1",
+                "irrelevant",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let result = installer.is_outdated("jq").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn is_outdated_source_build_detects_new_version() {
+        let (mut installer, mock_server, _tmp) = test_installer().await;
+
+        {
+            let tx = installer.db.transaction().unwrap();
+            tx.record_install("jq", "1.6", "source:jq:1.6").unwrap();
+            tx.commit().unwrap();
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/jq.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(formula_json(
+                "jq",
+                "1.7.1",
+                "irrelevant",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let result = installer.is_outdated("jq").await.unwrap().unwrap();
+        assert_eq!(result.installed_version, "1.6");
+        assert_eq!(result.current_version, "1.7.1");
+        assert!(result.is_source_build);
+    }
+
+    #[tokio::test]
+    async fn check_outdated_empty_when_nothing_installed() {
+        let (installer, _mock_server, _tmp) = test_installer().await;
+
+        let (outdated, warnings) = installer.check_outdated().await.unwrap();
+        assert!(outdated.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn check_outdated_continues_on_network_failure() {
+        let (mut installer, mock_server, _tmp) = test_installer().await;
+
+        {
+            let tx = installer.db.transaction().unwrap();
+            tx.record_install("good", "1.0.0", "old_sha").unwrap();
+            tx.record_install("bad", "1.0.0", "old_sha").unwrap();
+            tx.commit().unwrap();
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/good.json"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(formula_json("good", "2.0.0", "new_sha")),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/bad.json"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock_server)
+            .await;
+
+        let (outdated, warnings) = installer.check_outdated().await.unwrap();
+        assert_eq!(outdated.len(), 1);
+        assert_eq!(outdated[0].name, "good");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("bad"));
+    }
+
+    #[tokio::test]
+    async fn check_outdated_warns_on_missing_bottle() {
+        let (mut installer, mock_server, _tmp) = test_installer().await;
+
+        {
+            let tx = installer.db.transaction().unwrap();
+            tx.record_install("nobottle", "1.0.0", "old_sha").unwrap();
+            tx.commit().unwrap();
+        }
+
+        // Formula with empty bottle files — select_bottle will fail
+        let json = r#"{
+            "name": "nobottle",
+            "versions": { "stable": "2.0.0" },
+            "dependencies": [],
+            "bottle": { "stable": { "files": {} } }
+        }"#;
+
+        Mock::given(method("GET"))
+            .and(path("/nobottle.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(json))
+            .mount(&mock_server)
+            .await;
+
+        let (outdated, warnings) = installer.check_outdated().await.unwrap();
+        assert!(outdated.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("nobottle"));
     }
 }
