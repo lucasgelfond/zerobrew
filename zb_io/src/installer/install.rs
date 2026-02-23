@@ -13,7 +13,7 @@ use crate::network::download::{
 };
 use crate::progress::{InstallProgress, ProgressCallback};
 use crate::storage::blob::BlobCache;
-use crate::storage::db::Database;
+use crate::storage::db::{Database, InstalledKeg};
 use crate::storage::store::Store;
 
 use zb_core::{
@@ -63,6 +63,17 @@ pub struct OutdatedPackage {
     /// Whether this was installed from source (vs bottle)
     #[serde(skip)]
     pub is_source_build: bool,
+}
+
+/// Result of an upgrade attempt, with rollback status.
+#[derive(Debug)]
+pub enum UpgradeResult {
+    /// Upgrade succeeded — new version installed and linked.
+    Success,
+    /// Upgrade failed but previous version was fully restored.
+    FailedWithRollback { error: Error },
+    /// Upgrade failed AND rollback was incomplete — package may be broken.
+    FailedRollbackIncomplete { error: Error },
 }
 
 impl Installer {
@@ -905,6 +916,185 @@ impl Installer {
                 name, version, e
             );
         }
+    }
+
+    /// Upgrade a single package atomically.
+    /// On failure, attempts to restore the previous version (filesystem, DB, links).
+    pub async fn upgrade_package(&mut self, name: &str) -> Result<UpgradeResult, Error> {
+        let installed = self.db.get_installed(name).ok_or(Error::NotInstalled {
+            name: name.to_string(),
+        })?;
+        let keg_name = formula_token(&installed.name);
+        let keg_path = self.cellar.keg_path(keg_name, &installed.version);
+
+        // Check keg-only status for correct rollback linking
+        let formula = self.api_client.get_formula(name).await?;
+        let was_keg_only = formula.is_keg_only();
+
+        // 1. Unlink old keg FIRST (while keg still exists at original path)
+        self.linker.unlink_keg(&keg_path)?;
+
+        let relink = |linker: &Linker, path: &Path| -> bool {
+            let mut ok = true;
+            if let Err(e) = linker.link_opt(path) {
+                eprintln!("CRITICAL: failed to restore opt link: {}", e);
+                ok = false;
+            }
+            if !was_keg_only && let Err(e) = linker.link_keg(path) {
+                eprintln!("CRITICAL: failed to restore keg links: {}", e);
+                ok = false;
+            }
+            ok
+        };
+
+        // 2. Backup old keg
+        let backup = match Self::backup_existing_source_keg(&keg_path, keg_name, &installed.version)
+        {
+            Ok(b) => b,
+            Err(e) => {
+                if !relink(&self.linker, &keg_path) {
+                    return Ok(UpgradeResult::FailedRollbackIncomplete { error: e });
+                }
+                return Ok(UpgradeResult::FailedWithRollback { error: e });
+            }
+        };
+
+        // 3. Remove DB record
+        let db_removed = (|| -> Result<(), Error> {
+            let tx = self.db.transaction()?;
+            tx.record_uninstall(name)?;
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(e) = db_removed {
+            let mut rollback_ok = true;
+            if let Some(ref backup_path) = backup
+                && let Err(re) = Self::restore_source_keg_from_backup(
+                    &keg_path,
+                    backup_path,
+                    keg_name,
+                    &installed.version,
+                )
+            {
+                eprintln!("CRITICAL: failed to restore backup: {}", re);
+                rollback_ok = false;
+            }
+            if rollback_ok {
+                rollback_ok = relink(&self.linker, &keg_path);
+            }
+            if rollback_ok {
+                return Ok(UpgradeResult::FailedWithRollback { error: e });
+            } else {
+                return Ok(UpgradeResult::FailedRollbackIncomplete { error: e });
+            }
+        }
+
+        // 4. Remove cellar entry
+        if let Err(e) = self.cellar.remove_keg(keg_name, &installed.version) {
+            let rollback_ok = self.restore_full_state(
+                name,
+                &installed,
+                &keg_path,
+                &backup,
+                keg_name,
+                was_keg_only,
+            );
+            if rollback_ok {
+                return Ok(UpgradeResult::FailedWithRollback { error: e });
+            } else {
+                return Ok(UpgradeResult::FailedRollbackIncomplete { error: e });
+            }
+        }
+
+        // 5. Install new version
+        let names = vec![name.to_string()];
+        match self.install(&names, true).await {
+            Ok(_) => {
+                // 6. Success — remove backup (best-effort)
+                if let Some(ref backup_path) = backup
+                    && let Err(e) =
+                        Self::remove_source_keg_backup(backup_path, keg_name, &installed.version)
+                {
+                    eprintln!(
+                        "Warning: failed to clean up backup at {}: {}",
+                        backup_path.display(),
+                        e
+                    );
+                }
+                Ok(UpgradeResult::Success)
+            }
+            Err(e) => {
+                // 7. Install failed — restore everything
+                let rollback_ok = self.restore_full_state(
+                    name,
+                    &installed,
+                    &keg_path,
+                    &backup,
+                    keg_name,
+                    was_keg_only,
+                );
+                if rollback_ok {
+                    Ok(UpgradeResult::FailedWithRollback { error: e })
+                } else {
+                    Ok(UpgradeResult::FailedRollbackIncomplete { error: e })
+                }
+            }
+        }
+    }
+
+    /// Restore filesystem, DB, and links after a failed upgrade.
+    fn restore_full_state(
+        &mut self,
+        name: &str,
+        installed: &InstalledKeg,
+        keg_path: &Path,
+        backup: &Option<PathBuf>,
+        keg_name: &str,
+        was_keg_only: bool,
+    ) -> bool {
+        if let Some(backup_path) = backup
+            && let Err(e) = Self::restore_source_keg_from_backup(
+                keg_path,
+                backup_path,
+                keg_name,
+                &installed.version,
+            )
+        {
+            eprintln!("CRITICAL: failed to restore keg backup: {}", e);
+            return false;
+        }
+
+        match self.db.transaction() {
+            Ok(tx) => {
+                if let Err(e) = tx.record_install(name, &installed.version, &installed.store_key) {
+                    eprintln!("CRITICAL: failed to restore DB record: {}", e);
+                    return false;
+                }
+                if let Err(e) = tx.commit() {
+                    eprintln!("CRITICAL: failed to commit DB restore: {}", e);
+                    return false;
+                }
+            }
+            Err(e) => {
+                eprintln!("CRITICAL: failed to open DB transaction for restore: {}", e);
+                return false;
+            }
+        }
+
+        if let Err(e) = self.linker.link_opt(keg_path) {
+            eprintln!("CRITICAL: failed to restore opt link for {}: {}", name, e);
+            return false;
+        }
+        if !was_keg_only && let Err(e) = self.linker.link_keg(keg_path) {
+            eprintln!(
+                "CRITICAL: failed to re-link {} after upgrade rollback: {}. \
+                 Run `zb uninstall {} && zb install {}` to fix.",
+                name, e, name, name
+            );
+            return false;
+        }
+
+        true
     }
 
     /// Convenience method to plan and execute in one call
