@@ -129,6 +129,15 @@ pub enum Commands {
         args: Vec<String>,
     },
     Update,
+    Upgrade {
+        /// Formulas to upgrade (all outdated if omitted)
+        #[arg(num_args = 0..)]
+        formulas: Vec<String>,
+
+        /// Preview upgrades without executing
+        #[arg(long, short = 'n')]
+        dry_run: bool,
+    },
     Outdated {
         /// Show only package names
         #[arg(short, long, conflicts_with_all = ["verbose", "json"])]
