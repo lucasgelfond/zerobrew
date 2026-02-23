@@ -49,6 +49,7 @@ impl<'a> RubySourceLocator<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct ApiClient {
     base_url: String,
     cask_base_url: String,
@@ -58,8 +59,31 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    pub fn new() -> Self {
-        Self::with_base_url("https://formulae.brew.sh/api/formula".to_string())
+    /// Create a new ApiClient. If `ZEROBREW_API_URL` is set, uses it as the
+    /// base URL (validated: http/https only, no embedded credentials).
+    pub fn new() -> Result<Self, Error> {
+        let base_url = std::env::var("ZEROBREW_API_URL")
+            .unwrap_or_else(|_| "https://formulae.brew.sh/api/formula".to_string());
+
+        // Validate URL when overridden via env var
+        let parsed = reqwest::Url::parse(&base_url).map_err(|e| Error::InvalidArgument {
+            message: format!("ZEROBREW_API_URL is not a valid URL: {e}"),
+        })?;
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "ZEROBREW_API_URL must use http or https scheme, got: {}",
+                    parsed.scheme()
+                ),
+            });
+        }
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(Error::InvalidArgument {
+                message: "ZEROBREW_API_URL must not contain credentials".to_string(),
+            });
+        }
+
+        Ok(Self::with_base_url(base_url))
     }
 
     pub fn with_base_url(base_url: String) -> Self {
@@ -397,7 +421,7 @@ impl ApiClient {
 
 impl Default for ApiClient {
     fn default() -> Self {
-        Self::new()
+        Self::new().expect("failed to create default ApiClient")
     }
 }
 
@@ -407,6 +431,39 @@ mod tests {
     use tempfile::tempdir;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Test ZEROBREW_API_URL validation. Combined into one test because
+    /// env var mutations are process-global and can race in parallel tests.
+    #[test]
+    fn new_validates_zerobrew_api_url() {
+        // Helper to test with a specific env var value
+        let test_url = |url: &str| -> Result<ApiClient, Error> {
+            // SAFETY: This test is single-threaded (#[test], not #[tokio::test])
+            // and no other code reads ZEROBREW_API_URL concurrently.
+            unsafe { std::env::set_var("ZEROBREW_API_URL", url) };
+            let result = ApiClient::new();
+            unsafe { std::env::remove_var("ZEROBREW_API_URL") };
+            result
+        };
+
+        // Rejects non-http/https schemes
+        let err = test_url("ftp://example.com/api").unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument { .. }));
+        assert!(err.to_string().contains("http or https"));
+
+        // Rejects embedded credentials
+        let err = test_url("https://user:pass@example.com/api").unwrap_err();
+        assert!(err.to_string().contains("credentials"));
+
+        // Rejects garbage URLs
+        assert!(test_url("not a url").is_err());
+
+        // Accepts valid https
+        assert!(test_url("https://mirror.example.com/api/formula").is_ok());
+
+        // Accepts valid http (for local dev/testing)
+        assert!(test_url("http://localhost:8080/api").is_ok());
+    }
 
     #[test]
     fn ruby_source_locator_parses_all_supported_kinds() {
@@ -864,7 +921,7 @@ end
             .await;
 
         let cache_dir = tempdir().unwrap();
-        let client = ApiClient::new();
+        let client = ApiClient::new().unwrap();
 
         let fetched = client
             .fetch_formula_rb(
@@ -890,7 +947,7 @@ end
             .await;
 
         let cache_dir = tempdir().unwrap();
-        let client = ApiClient::new();
+        let client = ApiClient::new().unwrap();
 
         let err = client
             .fetch_formula_rb_from_url(
@@ -921,7 +978,7 @@ end
             .unwrap();
 
         let cache_dir = tempdir().unwrap();
-        let client = ApiClient::new().with_cache(cache);
+        let client = ApiClient::new().unwrap().with_cache(cache);
 
         let err = client
             .fetch_formula_rb_from_url(
