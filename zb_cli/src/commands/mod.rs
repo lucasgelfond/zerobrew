@@ -9,3 +9,4 @@ pub mod migrate;
 pub mod reset;
 pub mod run;
 pub mod uninstall;
+pub mod update;
