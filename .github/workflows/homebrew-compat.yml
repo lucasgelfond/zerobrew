@@ -55,7 +55,7 @@ jobs:
         run: cargo build --release
 
       - name: Install zerobrew
-        run: cargo install --path zb_cli
+        run: cargo install --force --path zb_cli
 
       - name: Initialize zerobrew
         run: zb init
