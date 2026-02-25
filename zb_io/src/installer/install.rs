@@ -1328,7 +1328,7 @@ mod tests {
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -1417,7 +1417,7 @@ mod tests {
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -1505,7 +1505,7 @@ mod tests {
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -1603,7 +1603,7 @@ mod tests {
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -1728,7 +1728,7 @@ mod tests {
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -1817,7 +1817,8 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let api_client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
@@ -1890,7 +1891,8 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let api_client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
@@ -1970,7 +1972,7 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -2087,7 +2089,7 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -2165,7 +2167,7 @@ end
         fs::create_dir_all(root.join("db")).unwrap();
 
         let db_path = root.join("db/zb.sqlite3");
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -2238,7 +2240,8 @@ end
         fs::create_dir_all(root.join("db")).unwrap();
 
         let db_path = root.join("db/zb.sqlite3");
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let api_client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
@@ -2358,7 +2361,7 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -2456,7 +2459,7 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -2571,7 +2574,7 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -2647,7 +2650,7 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -2722,7 +2725,7 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();
@@ -2770,7 +2773,7 @@ end
         let prefix = tmp.path().join("homebrew");
         fs::create_dir_all(root.join("db")).unwrap();
 
-        let api_client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let api_client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
         let store = Store::new(&root).unwrap();
         let cellar = Cellar::new(&root).unwrap();

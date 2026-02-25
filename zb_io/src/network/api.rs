@@ -104,11 +104,6 @@ impl ApiClient {
     }
 
     #[cfg(test)]
-    pub fn with_base_url_unchecked(base_url: String) -> Self {
-        Self::build_client(base_url)
-    }
-
-    #[cfg(test)]
     pub fn with_tap_raw_base_url(mut self, tap_raw_base_url: String) -> Self {
         self.tap_raw_base_url = tap_raw_base_url;
         self
@@ -517,7 +512,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let formula = client.get_formula("foo").await.unwrap();
 
         assert_eq!(formula.name, "foo");
@@ -534,7 +529,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri());
+        let client = ApiClient::with_base_url(mock_server.uri()).unwrap();
         let err = client.get_formula("nonexistent").await.unwrap_err();
 
         assert!(matches!(
@@ -559,7 +554,9 @@ mod tests {
             .await;
 
         let cache = ApiCache::in_memory().unwrap();
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri()).with_cache(cache);
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
+            .with_cache(cache);
 
         let _ = client.get_formula("foo").await.unwrap();
 
@@ -590,7 +587,9 @@ mod tests {
             .await;
 
         let cache = ApiCache::in_memory().unwrap();
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri()).with_cache(cache);
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
+            .with_cache(cache);
 
         // First request
         let _ = client.get_formula("foo").await.unwrap();
@@ -628,7 +627,9 @@ mod tests {
             .await;
 
         let cache = ApiCache::in_memory().unwrap();
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri()).with_cache(cache);
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
+            .with_cache(cache);
 
         // First request populates cache
         let _ = client.get_formula("foo").await.unwrap();
@@ -669,7 +670,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
@@ -708,7 +710,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let formula = client
             .get_formula("jandedobbeleer/oh-my-posh/oh-my-posh")
@@ -752,7 +755,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
@@ -779,7 +783,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
@@ -808,7 +813,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
@@ -837,7 +843,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
@@ -864,7 +871,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
@@ -876,7 +884,8 @@ end
     async fn returns_missing_formula_when_all_tap_candidates_are_404() {
         let mock_server = MockServer::start().await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let err = client
             .get_formula("hashicorp/tap/terraform")
@@ -899,7 +908,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_tap_raw_base_url(mock_server.uri());
         let err = client
             .get_formula("hashicorp/tap/terraform")
@@ -1010,7 +1020,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+        let client = ApiClient::with_base_url(mock_server.uri())
+            .unwrap()
             .with_cask_base_url(mock_server.uri());
         let cask = client.get_cask("iterm2").await.unwrap();
         assert_eq!(cask["token"], "iterm2");
