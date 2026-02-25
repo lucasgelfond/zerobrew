@@ -59,35 +59,35 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    /// Create a new ApiClient. If `ZEROBREW_API_URL` is set, uses it as the
-    /// base URL (validated: http/https only, no embedded credentials).
-    pub fn new() -> Result<Self, Error> {
-        let base_url = std::env::var("ZEROBREW_API_URL")
-            .unwrap_or_else(|_| "https://formulae.brew.sh/api/formula".to_string());
+    const DEFAULT_BASE_URL: &'static str = "https://formulae.brew.sh/api/formula";
 
-        // Validate URL when overridden via env var
+    pub fn new() -> Self {
+        Self::build_client(Self::DEFAULT_BASE_URL.to_string())
+    }
+
+    /// Rejects non-http(s) schemes and URLs containing credentials.
+    pub fn with_base_url(base_url: String) -> Result<Self, Error> {
         let parsed = reqwest::Url::parse(&base_url).map_err(|e| Error::InvalidArgument {
-            message: format!("ZEROBREW_API_URL is not a valid URL: {e}"),
+            message: format!("invalid API base URL: {e}"),
         })?;
         if parsed.scheme() != "http" && parsed.scheme() != "https" {
             return Err(Error::InvalidArgument {
                 message: format!(
-                    "ZEROBREW_API_URL must use http or https scheme, got: {}",
+                    "API base URL must use http or https scheme, got: {}",
                     parsed.scheme()
                 ),
             });
         }
         if !parsed.username().is_empty() || parsed.password().is_some() {
             return Err(Error::InvalidArgument {
-                message: "ZEROBREW_API_URL must not contain credentials".to_string(),
+                message: "Bad ZEROBREW_API_URL configuration".to_string(),
             });
         }
 
-        Ok(Self::with_base_url(base_url))
+        Ok(Self::build_client(base_url))
     }
 
-    pub fn with_base_url(base_url: String) -> Self {
-        // Use HTTP/2 with connection pooling for better multiplexing of parallel requests
+    fn build_client(base_url: String) -> Self {
         let client = reqwest::Client::builder()
             .user_agent("zerobrew/0.1")
             .pool_max_idle_per_host(20)
@@ -101,6 +101,11 @@ impl ApiClient {
             client,
             cache: None,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_base_url_unchecked(base_url: String) -> Self {
+        Self::build_client(base_url)
     }
 
     #[cfg(test)]
@@ -421,7 +426,7 @@ impl ApiClient {
 
 impl Default for ApiClient {
     fn default() -> Self {
-        Self::new().expect("failed to create default ApiClient")
+        Self::new()
     }
 }
 
@@ -432,37 +437,32 @@ mod tests {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    /// Test ZEROBREW_API_URL validation. Combined into one test because
-    /// env var mutations are process-global and can race in parallel tests.
     #[test]
-    fn new_validates_zerobrew_api_url() {
-        // Helper to test with a specific env var value
-        let test_url = |url: &str| -> Result<ApiClient, Error> {
-            // SAFETY: This test is single-threaded (#[test], not #[tokio::test])
-            // and no other code reads ZEROBREW_API_URL concurrently.
-            unsafe { std::env::set_var("ZEROBREW_API_URL", url) };
-            let result = ApiClient::new();
-            unsafe { std::env::remove_var("ZEROBREW_API_URL") };
-            result
-        };
-
-        // Rejects non-http/https schemes
-        let err = test_url("ftp://example.com/api").unwrap_err();
+    fn with_base_url_rejects_non_http_schemes() {
+        let err = ApiClient::with_base_url("ftp://example.com/api".into()).unwrap_err();
         assert!(matches!(err, Error::InvalidArgument { .. }));
         assert!(err.to_string().contains("http or https"));
+    }
 
-        // Rejects embedded credentials
-        let err = test_url("https://user:pass@example.com/api").unwrap_err();
-        assert!(err.to_string().contains("credentials"));
+    #[test]
+    fn with_base_url_rejects_embedded_credentials() {
+        let err = ApiClient::with_base_url("https://user:pass@example.com/api".into()).unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument { .. }));
+    }
 
-        // Rejects garbage URLs
-        assert!(test_url("not a url").is_err());
+    #[test]
+    fn with_base_url_rejects_garbage() {
+        assert!(ApiClient::with_base_url("not a url".into()).is_err());
+    }
 
-        // Accepts valid https
-        assert!(test_url("https://mirror.example.com/api/formula").is_ok());
+    #[test]
+    fn with_base_url_accepts_valid_https() {
+        assert!(ApiClient::with_base_url("https://mirror.example.com/api/formula".into()).is_ok());
+    }
 
-        // Accepts valid http (for local dev/testing)
-        assert!(test_url("http://localhost:8080/api").is_ok());
+    #[test]
+    fn with_base_url_accepts_valid_http() {
+        assert!(ApiClient::with_base_url("http://localhost:8080/api".into()).is_ok());
     }
 
     #[test]
@@ -517,7 +517,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri());
         let formula = client.get_formula("foo").await.unwrap();
 
         assert_eq!(formula.name, "foo");
@@ -534,7 +534,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = ApiClient::with_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri());
         let err = client.get_formula("nonexistent").await.unwrap_err();
 
         assert!(matches!(
@@ -559,7 +559,7 @@ mod tests {
             .await;
 
         let cache = ApiCache::in_memory().unwrap();
-        let client = ApiClient::with_base_url(mock_server.uri()).with_cache(cache);
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri()).with_cache(cache);
 
         let _ = client.get_formula("foo").await.unwrap();
 
@@ -590,7 +590,7 @@ mod tests {
             .await;
 
         let cache = ApiCache::in_memory().unwrap();
-        let client = ApiClient::with_base_url(mock_server.uri()).with_cache(cache);
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri()).with_cache(cache);
 
         // First request
         let _ = client.get_formula("foo").await.unwrap();
@@ -628,7 +628,7 @@ mod tests {
             .await;
 
         let cache = ApiCache::in_memory().unwrap();
-        let client = ApiClient::with_base_url(mock_server.uri()).with_cache(cache);
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri()).with_cache(cache);
 
         // First request populates cache
         let _ = client.get_formula("foo").await.unwrap();
@@ -669,8 +669,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
         assert_eq!(formula.name, "terraform");
@@ -708,8 +708,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let formula = client
             .get_formula("jandedobbeleer/oh-my-posh/oh-my-posh")
             .await
@@ -752,8 +752,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
         assert_eq!(formula.name, "terraform");
@@ -779,8 +779,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
         assert_eq!(formula.name, "terraform");
@@ -808,8 +808,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
         assert_eq!(formula.name, "terraform");
@@ -837,8 +837,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
         assert_eq!(formula.name, "terraform");
@@ -864,8 +864,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
 
         assert_eq!(formula.name, "terraform");
@@ -876,8 +876,8 @@ end
     async fn returns_missing_formula_when_all_tap_candidates_are_404() {
         let mock_server = MockServer::start().await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let err = client
             .get_formula("hashicorp/tap/terraform")
             .await
@@ -899,8 +899,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_tap_raw_base_url(mock_server.uri());
         let err = client
             .get_formula("hashicorp/tap/terraform")
             .await
@@ -921,7 +921,7 @@ end
             .await;
 
         let cache_dir = tempdir().unwrap();
-        let client = ApiClient::new().unwrap();
+        let client = ApiClient::new();
 
         let fetched = client
             .fetch_formula_rb(
@@ -947,7 +947,7 @@ end
             .await;
 
         let cache_dir = tempdir().unwrap();
-        let client = ApiClient::new().unwrap();
+        let client = ApiClient::new();
 
         let err = client
             .fetch_formula_rb_from_url(
@@ -978,7 +978,7 @@ end
             .unwrap();
 
         let cache_dir = tempdir().unwrap();
-        let client = ApiClient::new().unwrap().with_cache(cache);
+        let client = ApiClient::new().with_cache(cache);
 
         let err = client
             .fetch_formula_rb_from_url(
@@ -1010,8 +1010,8 @@ end
             .mount(&mock_server)
             .await;
 
-        let client =
-            ApiClient::with_base_url(mock_server.uri()).with_cask_base_url(mock_server.uri());
+        let client = ApiClient::with_base_url_unchecked(mock_server.uri())
+            .with_cask_base_url(mock_server.uri());
         let cask = client.get_cask("iterm2").await.unwrap();
         assert_eq!(cask["token"], "iterm2");
         assert_eq!(cask["version"], "3.5.0");

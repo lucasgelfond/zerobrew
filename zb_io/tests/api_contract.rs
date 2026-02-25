@@ -53,7 +53,7 @@ async fn homebrew_api_returns_expected_formula_schema() {
 #[ignore = "network: Homebrew API contract test via ApiClient"]
 async fn api_client_parses_formula_correctly() {
     use zb_io::ApiClient;
-    let client = ApiClient::new().expect("failed to create ApiClient");
+    let client = ApiClient::new();
     let formula = tokio::time::timeout(Duration::from_secs(60), client.get_formula("jq"))
         .await
         .expect("ApiClient timed out after 60s")
