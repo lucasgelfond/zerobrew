@@ -340,9 +340,15 @@ impl Downloader {
                 }
             }
 
-            return Err(last_error.unwrap_or_else(|| Error::NetworkFailure {
-                message: "all chunked download attempts failed".to_string(),
-            }));
+            // All chunked download attempts failed, fall back to single-connection download
+            // This provides graceful degradation for transient chunk failures
+            eprintln!(
+                "warning: chunked download failed ({}), falling back to single-connection download",
+                last_error
+                    .as_ref()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "unknown error".to_string())
+            );
         }
 
         // Otherwise, use the existing racing logic
@@ -531,33 +537,60 @@ async fn fetch_range_response_internal(
     url: &str,
     range: &str,
 ) -> Result<reqwest::Response, Error> {
-    let cached_token = get_cached_token_for_url_internal(token_cache, url).await;
+    let mut last_error = None;
 
-    let mut request = client.get(url).header("Range", range);
-    if let Some(token) = &cached_token {
-        request = request.header(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-        );
+    for attempt in 0..=MAX_CHUNK_RETRIES {
+        let cached_token = get_cached_token_for_url_internal(token_cache, url).await;
+
+        let mut request = client.get(url).header("Range", range);
+        if let Some(token) = &cached_token {
+            request = request.header(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+            );
+        }
+
+        match request.send().await {
+            Ok(response) => {
+                let response = if response.status() == StatusCode::UNAUTHORIZED {
+                    match handle_auth_challenge_internal(client, token_cache, url, response).await {
+                        Ok(resp) => resp,
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    response
+                };
+
+                if !response.status().is_success() {
+                    last_error = Some(Error::NetworkFailure {
+                        message: format!("HTTP {}", response.status()),
+                    });
+
+                    if response.status().is_server_error() && attempt < MAX_CHUNK_RETRIES {
+                        tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+
+                return Ok(response);
+            }
+            Err(e) => {
+                last_error = Some(Error::NetworkFailure {
+                    message: e.to_string(),
+                });
+
+                if attempt < MAX_CHUNK_RETRIES {
+                    tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
+                    continue;
+                }
+            }
+        }
     }
 
-    let response = request.send().await.map_err(|e| Error::NetworkFailure {
-        message: e.to_string(),
-    })?;
-
-    let response = if response.status() == StatusCode::UNAUTHORIZED {
-        handle_auth_challenge_internal(client, token_cache, url, response).await?
-    } else {
-        response
-    };
-
-    if !response.status().is_success() {
-        return Err(Error::NetworkFailure {
-            message: format!("HTTP {}", response.status()),
-        });
-    }
-
-    Ok(response)
+    Err(last_error.unwrap_or_else(|| Error::NetworkFailure {
+        message: "range request failed after retries".to_string(),
+    }))
 }
 
 async fn get_cached_token_for_url_internal(token_cache: &TokenCache, url: &str) -> Option<String> {
@@ -705,6 +738,9 @@ fn calculate_chunk_ranges(file_size: u64) -> Vec<ChunkRange> {
     chunks
 }
 
+/// Here we download a specific chunk of the file, with retries and progress reporting.
+/// This is called by multiple concurrent tasks for different chunks of the same file.
+/// Each chunk is validated for correct size and content-range header, but we rely on the final hash check at the end to ensure overall integrity.
 async fn download_chunk(
     ctx: &ChunkDownloadContext<'_>,
     chunk: &ChunkRange,
@@ -866,7 +902,7 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
     }
 
     // Create output file early for streaming writes
-    let mut writer = ctx
+    let writer = ctx
         .blob_cache
         .start_write(ctx.expected_sha256)
         .map_err(|e| Error::NetworkFailure {
@@ -882,7 +918,8 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
 
     let total_downloaded = Arc::new(AtomicU64::new(0));
 
-    // Spawn download tasks and collect handles
+    let writer = Arc::new(Mutex::new(writer));
+
     let mut handles = Vec::new();
     for chunk in chunks {
         let client = ctx.client.clone();
@@ -894,6 +931,7 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
         let name = ctx.name.clone();
         let chunk_tx = chunk_tx.clone();
         let file_size = ctx.file_size;
+        let writer = writer.clone();
 
         let handle = tokio::spawn(async move {
             // Acquire permit from global semaphore
@@ -916,10 +954,24 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
 
             let chunk_data = download_chunk(&chunk_ctx, &chunk).await?;
 
+            {
+                let mut writer = writer.lock().await;
+                writer
+                    .seek(std::io::SeekFrom::Start(chunk.offset))
+                    .map_err(|e| Error::NetworkFailure {
+                        message: format!("failed to seek to offset {}: {e}", chunk.offset),
+                    })?;
+                writer
+                    .write_all(&chunk_data)
+                    .map_err(|e| Error::NetworkFailure {
+                        message: format!("failed to write chunk at offset {}: {e}", chunk.offset),
+                    })?;
+            }
+
             chunk_tx
                 .send((chunk_data, chunk.offset))
                 .map_err(|e| Error::NetworkFailure {
-                    message: format!("failed to send chunk: {e}"),
+                    message: format!("failed to send chunk metadata: {e}"),
                 })?;
 
             Ok::<(), Error>(())
@@ -931,11 +983,8 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
     // Drop our sender so the channel closes when all tasks complete
     drop(chunk_tx);
 
-    // Track next expected offset for streaming writes
-    let mut next_expected_offset: u64 = 0;
-    let mut received_chunks = BTreeMap::new(); // Only buffer out-of-order chunks
+    let mut received_chunks = BTreeMap::new();
     let mut chunks_written = 0u64;
-    let mut hasher = Sha256::new();
 
     while let Some((chunk_data, offset)) = chunk_rx.recv().await {
         // Validate chunk size matches expected
@@ -958,25 +1007,6 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
 
         received_chunks.insert(offset, chunk_data);
         chunks_written += 1;
-
-        while let Some((offset, _chunk_data)) = received_chunks.first_key_value() {
-            if *offset != next_expected_offset {
-                break;
-            }
-
-            let (_, chunk_data) = received_chunks.pop_first().unwrap();
-            hasher.update(&chunk_data);
-            writer
-                .write_all(&chunk_data)
-                .map_err(|e| Error::NetworkFailure {
-                    message: format!(
-                        "failed to write chunk at offset {}: {e}",
-                        next_expected_offset
-                    ),
-                })?;
-
-            next_expected_offset += chunk_data.len() as u64;
-        }
     }
 
     // Wait for all download tasks to complete and check for errors
@@ -995,11 +1025,27 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
         });
     }
 
-    if next_expected_offset != ctx.file_size {
+    // Compute hash from chunks in order
+    let mut hasher = Sha256::new();
+    let mut total_size = 0u64;
+    for (offset, chunk_data) in received_chunks {
+        if offset != total_size {
+            return Err(Error::NetworkFailure {
+                message: format!(
+                    "chunk gap detected: expected offset {}, got {}",
+                    total_size, offset
+                ),
+            });
+        }
+        hasher.update(&chunk_data);
+        total_size += chunk_data.len() as u64;
+    }
+
+    if total_size != ctx.file_size {
         return Err(Error::NetworkFailure {
             message: format!(
                 "incomplete write: expected {} bytes, wrote {} bytes",
-                ctx.file_size, next_expected_offset
+                ctx.file_size, total_size
             ),
         });
     }
@@ -1012,6 +1058,12 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
             actual: actual_hash,
         });
     }
+
+    let mut writer = Arc::try_unwrap(writer)
+        .map_err(|_| Error::NetworkFailure {
+            message: "failed to unwrap writer Arc".to_string(),
+        })?
+        .into_inner();
 
     writer.flush().map_err(|e| Error::NetworkFailure {
         message: format!("failed to flush download: {e}"),
@@ -1849,5 +1901,353 @@ mod tests {
         )
         .unwrap();
         assert_eq!(scope, "repository:hashicorp/tap/terraform:pull");
+    }
+
+    #[tokio::test]
+    async fn chunk_retry_logic_succeeds_after_transient_failure() {
+        let mock_server = MockServer::start().await;
+
+        let large_content = vec![0xABu8; 15 * 1024 * 1024];
+        let actual_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(&large_content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        Mock::given(method("HEAD"))
+            .and(path("/large.tar.gz"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Accept-Ranges", "bytes")
+                    .append_header("Content-Length", large_content.len().to_string()),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // Track number of attempts per chunk
+        let attempt_count = Arc::new(AtomicUsize::new(0));
+        let attempt_count_clone = attempt_count.clone();
+        let large_content_for_closure = large_content.clone();
+
+        Mock::given(method("GET"))
+            .and(path("/large.tar.gz"))
+            .respond_with(move |req: &wiremock::Request| {
+                if let Some(range_header) = req.headers.get("Range") {
+                    let current_attempt = attempt_count_clone.fetch_add(1, Ordering::SeqCst);
+
+                    // Fail the first attempt of the first chunk with a 500 error
+                    if current_attempt == 0 {
+                        return ResponseTemplate::new(500);
+                    }
+
+                    // Parse Range header
+                    let range_str = range_header.to_str().unwrap();
+                    let range_part = range_str.strip_prefix("bytes=").unwrap();
+                    let (start_str, end_str) = range_part.split_once('-').unwrap();
+                    let start: usize = start_str.parse().unwrap();
+                    let end: usize = end_str.parse().unwrap();
+
+                    let chunk = &large_content_for_closure[start..=end];
+                    ResponseTemplate::new(206)
+                        .append_header("Content-Length", chunk.len().to_string())
+                        .append_header(
+                            "Content-Range",
+                            format!(
+                                "bytes {}-{}/{}",
+                                start,
+                                end,
+                                large_content_for_closure.len()
+                            ),
+                        )
+                        .set_body_bytes(chunk.to_vec())
+                } else {
+                    ResponseTemplate::new(200).set_body_bytes(large_content_for_closure.clone())
+                }
+            })
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader = Downloader::new(blob_cache);
+
+        let url = format!("{}/large.tar.gz", mock_server.uri());
+        let result = downloader.download(&url, &actual_sha256).await;
+
+        assert!(result.is_ok(), "Download should succeed after retry");
+        let blob_path = result.unwrap();
+        assert!(blob_path.exists());
+
+        // Verify at least one retry occurred
+        let total_attempts = attempt_count.load(Ordering::SeqCst);
+        assert!(
+            total_attempts > 3,
+            "Expected retry to occur (attempts: {})",
+            total_attempts
+        );
+
+        let downloaded_content = std::fs::read(&blob_path).unwrap();
+        assert_eq!(downloaded_content, large_content);
+    }
+
+    #[tokio::test]
+    async fn auth_token_refresh_during_chunked_download() {
+        let mock_server = MockServer::start().await;
+
+        let large_content = vec![0xCDu8; 15 * 1024 * 1024];
+        let actual_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(&large_content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        Mock::given(method("HEAD"))
+            .and(path("/v2/homebrew/core/test/blobs/sha256:abc"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Accept-Ranges", "bytes")
+                    .append_header("Content-Length", large_content.len().to_string()),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // Track number of 401s returned
+        let auth_challenges = Arc::new(AtomicUsize::new(0));
+        let auth_challenges_clone = auth_challenges.clone();
+        let large_content_for_closure = large_content.clone();
+
+        Mock::given(method("GET"))
+            .and(path("/v2/homebrew/core/test/blobs/sha256:abc"))
+            .respond_with(move |req: &wiremock::Request| {
+                if let Some(range_header) = req.headers.get("Range") {
+                    // Return 401 for first chunk request without auth
+                    if req.headers.get("Authorization").is_none() {
+                        let count = auth_challenges_clone.fetch_add(1, Ordering::SeqCst);
+                        if count == 0 {
+                            return ResponseTemplate::new(401).append_header(
+                                "WWW-Authenticate",
+                                "Bearer realm=\"https://ghcr.io/token\",service=\"ghcr.io\",scope=\"repository:homebrew/core/test:pull\"",
+                            );
+                        }
+                    }
+
+                    // Parse Range header
+                    let range_str = range_header.to_str().unwrap();
+                    let range_part = range_str.strip_prefix("bytes=").unwrap();
+                    let (start_str, end_str) = range_part.split_once('-').unwrap();
+                    let start: usize = start_str.parse().unwrap();
+                    let end: usize = end_str.parse().unwrap();
+
+                    let chunk = &large_content_for_closure[start..=end];
+                    ResponseTemplate::new(206)
+                        .append_header("Content-Length", chunk.len().to_string())
+                        .append_header(
+                            "Content-Range",
+                            format!(
+                                "bytes {}-{}/{}",
+                                start,
+                                end,
+                                large_content_for_closure.len()
+                            ),
+                        )
+                        .set_body_bytes(chunk.to_vec())
+                } else {
+                    ResponseTemplate::new(200).set_body_bytes(large_content_for_closure.clone())
+                }
+            })
+            .mount(&mock_server)
+            .await;
+
+        // Mock token endpoint
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token": "test-token-12345"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader = Downloader::new(blob_cache);
+
+        let url = format!(
+            "{}/v2/homebrew/core/test/blobs/sha256:abc",
+            mock_server.uri()
+        );
+        let result = downloader.download(&url, &actual_sha256).await;
+
+        assert!(result.is_ok(), "Download should succeed after auth refresh");
+        let blob_path = result.unwrap();
+        assert!(blob_path.exists());
+
+        // Verify auth challenge occurred
+        let challenges = auth_challenges.load(Ordering::SeqCst);
+        assert!(
+            challenges > 0,
+            "Expected at least one auth challenge (got {})",
+            challenges
+        );
+
+        let downloaded_content = std::fs::read(&blob_path).unwrap();
+        assert_eq!(downloaded_content, large_content);
+    }
+
+    #[tokio::test]
+    async fn fallback_to_single_connection_on_chunk_failure() {
+        let mock_server = MockServer::start().await;
+
+        let large_content = vec![0xEFu8; 15 * 1024 * 1024];
+        let actual_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(&large_content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        Mock::given(method("HEAD"))
+            .and(path("/large.tar.gz"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Accept-Ranges", "bytes")
+                    .append_header("Content-Length", large_content.len().to_string()),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let range_requests = Arc::new(AtomicUsize::new(0));
+        let range_requests_clone = range_requests.clone();
+        let large_content_for_closure = large_content.clone();
+
+        Mock::given(method("GET"))
+            .and(path("/large.tar.gz"))
+            .respond_with(move |req: &wiremock::Request| {
+                if let Some(range_header) = req.headers.get("Range") {
+                    range_requests_clone.fetch_add(1, Ordering::SeqCst);
+
+                    // Always fail range requests to trigger fallback
+                    if range_header.to_str().unwrap() == "bytes=0-0" {
+                        // Validation request - return success
+                        return ResponseTemplate::new(206)
+                            .append_header("Content-Length", "1")
+                            .append_header(
+                                "Content-Range",
+                                format!("bytes 0-0/{}", large_content_for_closure.len()),
+                            )
+                            .set_body_bytes(vec![large_content_for_closure[0]]);
+                    }
+
+                    // Other range requests fail with 500
+                    ResponseTemplate::new(500)
+                } else {
+                    // Non-range request succeeds (fallback path)
+                    ResponseTemplate::new(200).set_body_bytes(large_content_for_closure.clone())
+                }
+            })
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader = Downloader::new(blob_cache);
+
+        let url = format!("{}/large.tar.gz", mock_server.uri());
+        let result = downloader.download(&url, &actual_sha256).await;
+
+        assert!(
+            result.is_ok(),
+            "Download should succeed via fallback: {:?}",
+            result.err()
+        );
+        let blob_path = result.unwrap();
+        assert!(blob_path.exists());
+
+        let downloaded_content = std::fs::read(&blob_path).unwrap();
+        assert_eq!(downloaded_content, large_content);
+    }
+
+    #[tokio::test]
+    async fn incorrect_content_range_triggers_fallback() {
+        let mock_server = MockServer::start().await;
+
+        let large_content = vec![0x12u8; 15 * 1024 * 1024];
+        let actual_sha256 = {
+            let mut hasher = Sha256::new();
+            hasher.update(&large_content);
+            format!("{:x}", hasher.finalize())
+        };
+
+        Mock::given(method("HEAD"))
+            .and(path("/large.tar.gz"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Accept-Ranges", "bytes")
+                    .append_header("Content-Length", large_content.len().to_string()),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let large_content_for_closure = large_content.clone();
+
+        Mock::given(method("GET"))
+            .and(path("/large.tar.gz"))
+            .respond_with(move |req: &wiremock::Request| {
+                if let Some(range_header) = req.headers.get("Range") {
+                    let range_str = range_header.to_str().unwrap();
+
+                    // Validation request
+                    if range_str == "bytes=0-0" {
+                        return ResponseTemplate::new(206)
+                            .append_header("Content-Length", "1")
+                            .append_header(
+                                "Content-Range",
+                                format!("bytes 0-0/{}", large_content_for_closure.len()),
+                            )
+                            .set_body_bytes(vec![large_content_for_closure[0]]);
+                    }
+
+                    // For actual chunk requests, return wrong Content-Range header
+                    let range_part = range_str.strip_prefix("bytes=").unwrap();
+                    let (start_str, end_str) = range_part.split_once('-').unwrap();
+                    let start: usize = start_str.parse().unwrap();
+                    let end: usize = end_str.parse().unwrap();
+
+                    let chunk = &large_content_for_closure[start..=end];
+                    ResponseTemplate::new(206)
+                        .append_header("Content-Length", chunk.len().to_string())
+                        .append_header(
+                            "Content-Range",
+                            // Wrong range - server claims different bytes
+                            format!(
+                                "bytes 0-{}/{}",
+                                chunk.len() - 1,
+                                large_content_for_closure.len()
+                            ),
+                        )
+                        .set_body_bytes(chunk.to_vec())
+                } else {
+                    // Non-range request succeeds (fallback path)
+                    ResponseTemplate::new(200).set_body_bytes(large_content_for_closure.clone())
+                }
+            })
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let blob_cache = BlobCache::new(tmp.path()).unwrap();
+        let downloader = Downloader::new(blob_cache);
+
+        let url = format!("{}/large.tar.gz", mock_server.uri());
+        let result = downloader.download(&url, &actual_sha256).await;
+
+        assert!(
+            result.is_ok(),
+            "Download should succeed via fallback after incorrect Content-Range: {:?}",
+            result.err()
+        );
+        let blob_path = result.unwrap();
+        assert!(blob_path.exists());
+
+        let downloaded_content = std::fs::read(&blob_path).unwrap();
+        assert_eq!(downloaded_content, large_content);
     }
 }
