@@ -1,5 +1,5 @@
+use crate::ui::{PromptDefault, Ui};
 use console::style;
-use std::io::{self, Write};
 use std::process::Command;
 
 pub async fn execute(
@@ -7,10 +7,10 @@ pub async fn execute(
     yes: bool,
     force: bool,
 ) -> Result<(), zb_core::Error> {
-    println!(
-        "{} Fetching installed Homebrew packages...",
-        style("==>").cyan().bold()
-    );
+    let mut ui = Ui::new();
+
+    ui.heading("Fetching installed Homebrew packages...")
+        .map_err(ui_error)?;
 
     let packages = match zb_io::get_homebrew_packages() {
         Ok(pkgs) => pkgs,
@@ -25,153 +25,141 @@ pub async fn execute(
         && packages.non_core_formulas.is_empty()
         && packages.casks.is_empty()
     {
-        println!("No Homebrew packages installed.");
+        ui.info("No Homebrew packages installed.")
+            .map_err(ui_error)?;
         return Ok(());
     }
 
-    println!(
-        "    {} core formulas, {} non-core formulas, {} casks found",
+    ui.info(format!(
+        "{} core formulas, {} non-core formulas, {} casks found",
         style(packages.formulas.len()).green(),
         style(packages.non_core_formulas.len()).yellow(),
         style(packages.casks.len()).green()
-    );
-    println!();
+    ))
+    .map_err(ui_error)?;
+    ui.blank_line().map_err(ui_error)?;
 
     if !packages.non_core_formulas.is_empty() {
-        println!(
-            "{} Formulas from non-core taps cannot be migrated to zerobrew:",
-            style("Note:").yellow().bold()
-        );
+        ui.note("Formulas from non-core taps cannot be migrated to zerobrew:")
+            .map_err(ui_error)?;
         for pkg in &packages.non_core_formulas {
-            println!("    • {} ({})", pkg.name, pkg.tap);
+            ui.bullet(format!("{} ({})", pkg.name, pkg.tap))
+                .map_err(ui_error)?;
         }
-        println!();
+        ui.blank_line().map_err(ui_error)?;
     }
 
     if !packages.casks.is_empty() {
-        println!(
-            "{} Casks cannot be migrated to zerobrew (only CLI formulas are supported):",
-            style("Note:").yellow().bold()
-        );
+        ui.note("Casks cannot be migrated to zerobrew (only CLI formulas are supported):")
+            .map_err(ui_error)?;
         for cask in &packages.casks {
-            println!("    • {}", cask.name);
+            ui.bullet(&cask.name).map_err(ui_error)?;
         }
-        println!();
+        ui.blank_line().map_err(ui_error)?;
     }
 
     if packages.formulas.is_empty() {
-        println!("No core formulas to migrate.");
+        ui.info("No core formulas to migrate.").map_err(ui_error)?;
         return Ok(());
     }
 
-    println!(
+    ui.info(format!(
         "The following {} formulas will be migrated:",
         packages.formulas.len()
-    );
+    ))
+    .map_err(ui_error)?;
     for pkg in &packages.formulas {
-        println!("    • {}", pkg.name);
+        ui.bullet(&pkg.name).map_err(ui_error)?;
     }
-    println!();
+    ui.blank_line().map_err(ui_error)?;
 
-    if !yes {
-        print!("Continue with migration? [y/N] ");
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        if !input.trim().eq_ignore_ascii_case("y") {
-            println!("Aborted.");
-            return Ok(());
-        }
+    if !yes
+        && !ui
+            .prompt_yes_no("Continue with migration? [y/N]", PromptDefault::No)
+            .map_err(ui_error)?
+    {
+        ui.info("Aborted.").map_err(ui_error)?;
+        return Ok(());
     }
 
-    println!();
-    println!(
-        "{} Migrating {} formulas to zerobrew...",
-        style("==>").cyan().bold(),
+    ui.blank_line().map_err(ui_error)?;
+    ui.heading(format!(
+        "Migrating {} formulas to zerobrew...",
         style(packages.formulas.len()).green().bold()
-    );
+    ))
+    .map_err(ui_error)?;
 
     let mut success_count = 0;
     let mut failed: Vec<String> = Vec::new();
 
     for pkg in &packages.formulas {
-        print!("    {} {}...", style("○").dim(), pkg.name);
+        ui.step_start(&pkg.name).map_err(ui_error)?;
 
         match installer.plan(std::slice::from_ref(&pkg.name)).await {
             Ok(plan) => match installer.execute(plan, true).await {
                 Ok(_) => {
-                    println!(" {}", style("✓").green());
+                    ui.step_ok().map_err(ui_error)?;
                     success_count += 1;
                 }
                 Err(e) => {
-                    println!(" {}", style("✗").red());
-                    eprintln!(
-                        "      {} Failed to install: {}",
-                        style("error:").red().bold(),
-                        e
-                    );
+                    ui.step_fail().map_err(ui_error)?;
+                    ui.error(format!("Failed to install: {}", e))
+                        .map_err(ui_error)?;
                     failed.push(pkg.name.clone());
                 }
             },
             Err(e) => {
-                println!(" {}", style("✗").red());
-                eprintln!(
-                    "      {} Failed to plan: {}",
-                    style("error:").red().bold(),
-                    e
-                );
+                ui.step_fail().map_err(ui_error)?;
+                ui.error(format!("Failed to plan: {}", e))
+                    .map_err(ui_error)?;
                 failed.push(pkg.name.clone());
             }
         }
     }
 
-    println!();
-    println!(
-        "{} Migrated {} of {} formulas to zerobrew",
-        style("==>").cyan().bold(),
+    ui.blank_line().map_err(ui_error)?;
+    ui.heading(format!(
+        "Migrated {} of {} formulas to zerobrew",
         style(success_count).green().bold(),
         packages.formulas.len()
-    );
+    ))
+    .map_err(ui_error)?;
 
     if !failed.is_empty() {
-        println!(
-            "{} Failed to migrate {} formula(s):",
-            style("Warning:").yellow().bold(),
-            failed.len()
-        );
+        ui.note(format!("Failed to migrate {} formula(s):", failed.len()))
+            .map_err(ui_error)?;
         for name in &failed {
-            println!("    • {}", name);
+            ui.bullet(name).map_err(ui_error)?;
         }
-        println!();
+        ui.blank_line().map_err(ui_error)?;
     }
 
     if success_count == 0 {
-        println!("No formulas were successfully migrated. Skipping uninstall from Homebrew.");
+        ui.info("No formulas were successfully migrated. Skipping uninstall from Homebrew.")
+            .map_err(ui_error)?;
         return Ok(());
     }
 
-    println!();
-    if !yes {
-        print!(
-            "Uninstall {} formula(s) from Homebrew? [y/N] ",
-            style(success_count).green()
-        );
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        if !input.trim().eq_ignore_ascii_case("y") {
-            println!("Skipped uninstall from Homebrew.");
-            return Ok(());
-        }
+    ui.blank_line().map_err(ui_error)?;
+    if !yes
+        && !ui
+            .prompt_yes_no(
+                &format!(
+                    "Uninstall {} formula(s) from Homebrew? [y/N]",
+                    style(success_count).green()
+                ),
+                PromptDefault::No,
+            )
+            .map_err(ui_error)?
+    {
+        ui.info("Skipped uninstall from Homebrew.")
+            .map_err(ui_error)?;
+        return Ok(());
     }
 
-    println!();
-    println!(
-        "{} Uninstalling from Homebrew...",
-        style("==>").cyan().bold()
-    );
+    ui.blank_line().map_err(ui_error)?;
+    ui.heading("Uninstalling from Homebrew...")
+        .map_err(ui_error)?;
 
     let mut uninstalled = 0;
     let mut uninstall_failed: Vec<String> = Vec::new();
@@ -181,7 +169,7 @@ pub async fn execute(
             continue;
         }
 
-        print!("    {} {}...", style("○").dim(), pkg.name);
+        ui.step_start(&pkg.name).map_err(ui_error)?;
 
         let mut args = vec!["uninstall"];
         if force {
@@ -196,41 +184,49 @@ pub async fn execute(
 
         match status {
             Ok(s) if s.success() => {
-                println!(" {}", style("✓").green());
+                ui.step_ok().map_err(ui_error)?;
                 uninstalled += 1;
             }
             Ok(_) => {
-                println!(" {}", style("✗").red());
+                ui.step_fail().map_err(ui_error)?;
                 uninstall_failed.push(pkg.name.clone());
             }
             Err(e) => {
-                println!(" {}", style("✗").red());
-                eprintln!("      {}: {}", style("error:").red().bold(), e);
+                ui.step_fail().map_err(ui_error)?;
+                ui.error(e).map_err(ui_error)?;
                 uninstall_failed.push(pkg.name.clone());
             }
         }
     }
 
-    println!();
-    println!(
-        "{} Uninstalled {} of {} formula(s) from Homebrew",
-        style("==>").cyan().bold(),
+    ui.blank_line().map_err(ui_error)?;
+    ui.heading(format!(
+        "Uninstalled {} of {} formula(s) from Homebrew",
         style(uninstalled).green().bold(),
         success_count
-    );
+    ))
+    .map_err(ui_error)?;
 
     if !uninstall_failed.is_empty() {
-        println!(
-            "{} Failed to uninstall {} formula(s) from Homebrew:",
-            style("Warning:").yellow().bold(),
+        ui.note(format!(
+            "Failed to uninstall {} formula(s) from Homebrew:",
             uninstall_failed.len()
-        );
+        ))
+        .map_err(ui_error)?;
         for name in &uninstall_failed {
-            println!("    • {}", name);
+            ui.bullet(name).map_err(ui_error)?;
         }
-        println!("You may need to uninstall these manually with:");
-        println!("    brew uninstall --force <formula>");
+        ui.info("You may need to uninstall these manually with:")
+            .map_err(ui_error)?;
+        ui.info("    brew uninstall --force <formula>")
+            .map_err(ui_error)?;
     }
 
     Ok(())
+}
+
+fn ui_error(err: std::io::Error) -> zb_core::Error {
+    zb_core::Error::StoreCorruption {
+        message: format!("failed to write CLI output: {err}"),
+    }
 }

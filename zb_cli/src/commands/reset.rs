@@ -1,30 +1,29 @@
-use console::style;
-use std::io::{self, Write};
+use crate::ui::{PromptDefault, Ui};
 use std::path::Path;
 use std::process::Command;
 
 use crate::init::{InitError, run_init};
 
 pub fn execute(root: &Path, prefix: &Path, yes: bool) -> Result<(), zb_core::Error> {
+    let mut ui = Ui::new();
+
     if !root.exists() && !prefix.exists() {
-        println!("Nothing to reset - directories do not exist.");
+        ui.info("Nothing to reset - directories do not exist.")
+            .map_err(ui_error)?;
         return Ok(());
     }
 
     if !yes {
-        println!(
-            "{} This will delete all zerobrew data at:",
-            style("Warning:").yellow().bold()
-        );
-        println!("      • {}", root.display());
-        println!("      • {}", prefix.display());
-        print!("Continue? [y/N] ");
-        io::stdout().flush().unwrap();
+        ui.note("This will delete all zerobrew data at:")
+            .map_err(ui_error)?;
+        ui.bullet(root.display()).map_err(ui_error)?;
+        ui.bullet(prefix.display()).map_err(ui_error)?;
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        if !input.trim().eq_ignore_ascii_case("y") {
-            println!("Aborted.");
+        if !ui
+            .prompt_yes_no("Continue? [y/N]", PromptDefault::No)
+            .map_err(ui_error)?
+        {
+            ui.info("Aborted.").map_err(ui_error)?;
             return Ok(());
         }
     }
@@ -34,11 +33,8 @@ pub fn execute(root: &Path, prefix: &Path, yes: bool) -> Result<(), zb_core::Err
             continue;
         }
 
-        println!(
-            "{} Clearing {}...",
-            style("==>").cyan().bold(),
-            dir.display()
-        );
+        ui.heading(format!("Clearing {}...", dir.display()))
+            .map_err(ui_error)?;
 
         // Instead of removing the directory entirely (which would require sudo to recreate),
         // just remove its contents. This avoids needing sudo when run_init recreates subdirs.
@@ -63,11 +59,10 @@ pub fn execute(root: &Path, prefix: &Path, yes: bool) -> Result<(), zb_core::Err
         // Only fall back to sudo if we couldn't clear contents AND stdout is a terminal
         if failed {
             if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-                eprintln!(
-                    "{} Failed to clear {} (permission denied, non-interactive mode)",
-                    style("error:").red().bold(),
+                let _ = ui.error(format!(
+                    "Failed to clear {} (permission denied, non-interactive mode)",
                     dir.display()
-                );
+                ));
                 std::process::exit(1);
             }
 
@@ -77,11 +72,7 @@ pub fn execute(root: &Path, prefix: &Path, yes: bool) -> Result<(), zb_core::Err
                 .status();
 
             if status.is_err() || !status.unwrap().success() {
-                eprintln!(
-                    "{} Failed to remove {}",
-                    style("error:").red().bold(),
-                    dir.display()
-                );
+                let _ = ui.error(format!("Failed to remove {}", dir.display()));
                 std::process::exit(1);
             }
         }
@@ -92,10 +83,14 @@ pub fn execute(root: &Path, prefix: &Path, yes: bool) -> Result<(), zb_core::Err
         InitError::Message(msg) => zb_core::Error::StoreCorruption { message: msg },
     })?;
 
-    println!(
-        "{} Reset complete. Ready for cold install.",
-        style("==>").cyan().bold()
-    );
+    ui.heading("Reset complete. Ready for cold install.")
+        .map_err(ui_error)?;
 
     Ok(())
+}
+
+fn ui_error(err: std::io::Error) -> zb_core::Error {
+    zb_core::Error::StoreCorruption {
+        message: format!("failed to write CLI output: {err}"),
+    }
 }

@@ -3,6 +3,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::ui::{PromptDefault, Ui};
+
 #[derive(Debug)]
 pub enum InitError {
     Message(String),
@@ -34,27 +36,32 @@ pub fn is_writable(path: &Path) -> bool {
 const MAX_PREFIX_LEN_MACOS: usize = 13;
 
 pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), InitError> {
+    let mut ui = Ui::new();
+
     // On macOS, warn early if the chosen prefix is too long for Mach-O patching.
     if cfg!(target_os = "macos") {
         let prefix_str = prefix.to_string_lossy();
         if prefix_str.len() > MAX_PREFIX_LEN_MACOS {
-            println!(
-                "{} Prefix \"{}\" ({} chars) exceeds the macOS Mach-O limit of {} characters.",
-                style("Warning:").yellow().bold(),
+            ui.note(format!(
+                "Prefix \"{}\" ({} chars) exceeds the macOS Mach-O limit of {} characters.",
                 prefix_str,
                 prefix_str.len(),
                 MAX_PREFIX_LEN_MACOS,
-            );
-            println!("         Path-sensitive packages (e.g. git, curl) will fail to install.");
-            println!(
-                "         Consider a shorter prefix, e.g.: {}",
+            ))
+            .map_err(io_to_init_error)?;
+            ui.info("Path-sensitive packages (e.g. git, curl) will fail to install.")
+                .map_err(io_to_init_error)?;
+            ui.info(format!(
+                "Consider a shorter prefix, e.g.: {}",
                 style("zb init <root> /opt/zerobrew").cyan(),
-            );
-            println!();
+            ))
+            .map_err(io_to_init_error)?;
+            ui.blank_line().map_err(io_to_init_error)?;
         }
     }
 
-    println!("{} Initializing zerobrew...", style("==>").cyan().bold());
+    ui.heading("Initializing zerobrew...")
+        .map_err(io_to_init_error)?;
 
     let zerobrew_dir = match std::env::var("ZEROBREW_DIR") {
         Ok(dir) => dir,
@@ -88,10 +95,8 @@ pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), 
     });
 
     if need_sudo {
-        println!(
-            "{}",
-            style("    Creating directories (requires sudo)...").dim()
-        );
+        ui.info("Creating directories (requires sudo)...")
+            .map_err(io_to_init_error)?;
 
         for dir in &dirs_to_create {
             let status = Command::new("sudo")
@@ -147,7 +152,8 @@ pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), 
 
     add_to_path(prefix, &zerobrew_dir, &zerobrew_bin, root, no_modify_path)?;
 
-    println!("{} Initialization complete!", style("==>").cyan().bold());
+    ui.heading("Initialization complete!")
+        .map_err(io_to_init_error)?;
 
     Ok(())
 }
@@ -192,6 +198,8 @@ fn add_to_path(
     root: &Path,
     no_modify_path: bool,
 ) -> Result<(), InitError> {
+    let mut ui = Ui::new();
+
     enum ShellConfigKind {
         Posix,
         Fish,
@@ -361,48 +369,41 @@ end
             .and_then(|mut f| f.write_all(updated_config.as_bytes()));
 
         if let Err(e) = write_result {
-            println!(
-                "{} Could not write to {} due to error: {}",
-                style("Warning:").yellow().bold(),
-                config_file,
-                e
-            );
-            println!(
-                "{} Please add the following to {}:",
-                style("Info:").cyan().bold(),
-                config_file
-            );
-            println!("{}", managed_block);
+            ui.note(format!(
+                "Could not write to {} due to error: {}",
+                config_file, e
+            ))
+            .map_err(io_to_init_error)?;
+            ui.info(format!("Please add the following to {}:", config_file))
+                .map_err(io_to_init_error)?;
+            ui.info(&managed_block).map_err(io_to_init_error)?;
         } else {
-            println!(
-                "    {} Updated zerobrew configuration in {}",
-                style("✓").green(),
-                config_file
-            );
-            println!(
-                "    {} Added {} and {} to PATH",
-                style("✓").green(),
+            ui.info(format!("Updated zerobrew configuration in {}", config_file))
+                .map_err(io_to_init_error)?;
+            ui.info(format!(
+                "Added {} and {} to PATH",
                 zerobrew_bin,
                 prefix_bin.display()
-            );
+            ))
+            .map_err(io_to_init_error)?;
         }
     } else if no_modify_path {
-        println!(
-            "    {} Skipped shell configuration (--no-modify-path)",
-            style("→").cyan()
-        );
-        println!(
-            "    {} To use zerobrew, add {} and {} to your PATH",
-            style("→").cyan(),
+        ui.info("Skipped shell configuration (--no-modify-path)")
+            .map_err(io_to_init_error)?;
+        ui.info(format!(
+            "To use zerobrew, add {} and {} to your PATH",
             zerobrew_bin,
             prefix_bin.display()
-        );
+        ))
+        .map_err(io_to_init_error)?;
     }
 
     Ok(())
 }
 
 pub fn ensure_init(root: &Path, prefix: &Path, auto_init: bool) -> Result<(), zb_core::Error> {
+    let mut ui = Ui::new();
+
     if !needs_init(root, prefix) {
         return Ok(());
     }
@@ -414,25 +415,17 @@ pub fn ensure_init(root: &Path, prefix: &Path, auto_init: bool) -> Result<(), zb
         && std::io::IsTerminal::is_terminal(&std::io::stdout());
 
     if is_interactive && !auto_init {
-        println!(
-            "{} Zerobrew needs to be initialized first.",
-            style("Note:").yellow().bold()
-        );
-        println!("    This will create directories at:");
-        println!("      • {}", root.display());
-        println!("      • {}", prefix.display());
-        println!();
+        ui.note("Zerobrew needs to be initialized first.")
+            .map_err(io_to_core_error)?;
+        ui.info("This will create directories at:")
+            .map_err(io_to_core_error)?;
+        ui.bullet(root.display()).map_err(io_to_core_error)?;
+        ui.bullet(prefix.display()).map_err(io_to_core_error)?;
+        ui.blank_line().map_err(io_to_core_error)?;
 
-        print!("Initialize now? [Y/n] ");
-        std::io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-        let input = input.trim();
-
-        if !input.is_empty()
-            && !input.eq_ignore_ascii_case("y")
-            && !input.eq_ignore_ascii_case("yes")
+        if !ui
+            .prompt_yes_no("Initialize now? [Y/n]", PromptDefault::Yes)
+            .map_err(io_to_core_error)?
         {
             return Err(zb_core::Error::StoreCorruption {
                 message: "Initialization required. Run 'zb init' first.".to_string(),
@@ -450,6 +443,16 @@ pub fn ensure_init(root: &Path, prefix: &Path, auto_init: bool) -> Result<(), zb
     run_init(root, prefix, false).map_err(|e| match e {
         InitError::Message(msg) => zb_core::Error::StoreCorruption { message: msg },
     })
+}
+
+fn io_to_init_error(err: std::io::Error) -> InitError {
+    InitError::Message(format!("Failed to write CLI output: {err}"))
+}
+
+fn io_to_core_error(err: std::io::Error) -> zb_core::Error {
+    zb_core::Error::StoreCorruption {
+        message: format!("failed to write CLI output: {err}"),
+    }
 }
 
 #[cfg(test)]
