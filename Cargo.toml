@@ -30,6 +30,8 @@ sha2 = "0.10.9"
 walkdir = "2.5.0"
 fs4 = "0.13.1"
 libc = "0.2.180"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 # Dev dependencies
 tempfile = "3"
