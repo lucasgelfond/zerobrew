@@ -78,6 +78,8 @@ pub struct Ui<O: Write, E: Write> {
     pub theme: UiTheme,
 }
 
+pub type StdUi = Ui<io::Stdout, io::Stderr>;
+
 impl Ui<io::Stdout, io::Stderr> {
     pub fn new() -> Self {
         Self::with_theme(UiTheme::default())
@@ -195,6 +197,14 @@ impl<O: Write, E: Write> Ui<O, E> {
                 .step_fail
                 .apply_to(self.theme.symbols.step_fail)
         )
+    }
+
+    pub fn println(&mut self, message: impl Display) -> io::Result<()> {
+        writeln!(self.out, "{message}")
+    }
+
+    pub fn eprintln(&mut self, message: impl Display) -> io::Result<()> {
+        writeln!(self.err, "{message}")
     }
 
     pub fn blank_line(&mut self) -> io::Result<()> {

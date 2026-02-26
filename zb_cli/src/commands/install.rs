@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use zb_io::{InstallProgress, ProgressCallback};
 
-use crate::ui::Ui;
+use crate::ui::StdUi;
 use crate::utils::{normalize_formula_name, suggest_homebrew};
 
 pub async fn execute(
@@ -13,9 +13,9 @@ pub async fn execute(
     formulas: Vec<String>,
     no_link: bool,
     build_from_source: bool,
+    ui: &mut StdUi,
 ) -> Result<(), zb_core::Error> {
     let start = Instant::now();
-    let mut ui = Ui::new();
     ui.heading(format!(
         "Installing {}...",
         style(formulas.join(", ")).bold()
@@ -186,24 +186,28 @@ pub async fn execute(
         let result = match result_val {
             Ok(r) => r,
             Err(ref e @ zb_core::Error::LinkConflict { ref conflicts }) => {
-                eprintln!();
+                ui.blank_line().map_err(ui_error)?;
                 ui.error("The link step did not complete successfully.")
                     .map_err(ui_error)?;
-                eprintln!("The formula was installed, but is not symlinked into the prefix.");
-                eprintln!();
-                eprintln!("Possible conflicting files:");
+                ui.println("The formula was installed, but is not symlinked into the prefix.")
+                    .map_err(ui_error)?;
+                ui.blank_line().map_err(ui_error)?;
+                ui.println("Possible conflicting files:")
+                    .map_err(ui_error)?;
                 for c in conflicts {
                     if let Some(ref owner) = c.owned_by {
-                        eprintln!(
+                        ui.println(format!(
                             "  {} (symlink belonging to {})",
                             c.path.display(),
                             style(owner).yellow()
-                        );
+                        ))
+                        .map_err(ui_error)?;
                     } else {
-                        eprintln!("  {}", c.path.display());
+                        ui.println(format!("  {}", c.path.display()))
+                            .map_err(ui_error)?;
                     }
                 }
-                eprintln!();
+                ui.blank_line().map_err(ui_error)?;
                 return Err(e.clone());
             }
             Err(e) => {
@@ -239,7 +243,7 @@ pub async fn execute(
 }
 
 fn ui_error(err: std::io::Error) -> zb_core::Error {
-    zb_core::Error::StoreCorruption {
+    zb_core::Error::FileError {
         message: format!("failed to write CLI output: {err}"),
     }
 }

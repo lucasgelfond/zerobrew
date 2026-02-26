@@ -5,17 +5,19 @@ use std::time::Instant;
 
 use super::install;
 use crate::cli::BundleCommands;
+use crate::ui::StdUi;
 
 pub async fn execute(
     installer: &mut zb_io::Installer,
     command: Option<BundleCommands>,
+    ui: &mut StdUi,
 ) -> Result<(), zb_core::Error> {
     match command.unwrap_or(BundleCommands::Install {
         file: PathBuf::from("Brewfile"),
         no_link: false,
     }) {
         BundleCommands::Install { file, no_link } => {
-            install_from_file(installer, &file, no_link).await
+            install_from_file(installer, &file, no_link, ui).await
         }
         BundleCommands::Dump { file, force } => dump_to_file(installer, &file, force),
     }
@@ -25,6 +27,7 @@ async fn install_from_file(
     installer: &mut zb_io::Installer,
     manifest_path: &Path,
     no_link: bool,
+    ui: &mut StdUi,
 ) -> Result<(), zb_core::Error> {
     let formulas = load_manifest(manifest_path)?;
     println!(
@@ -36,7 +39,7 @@ async fn install_from_file(
 
     let start = Instant::now();
     for formula in formulas {
-        install::execute(installer, vec![formula], no_link, false).await?;
+        install::execute(installer, vec![formula], no_link, false, ui).await?;
     }
 
     println!(

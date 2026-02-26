@@ -1,3 +1,4 @@
+use crate::ui::StdUi;
 use crate::utils::normalize_formula_name;
 use console::style;
 
@@ -5,11 +6,12 @@ pub fn execute(
     installer: &mut zb_io::Installer,
     formulas: Vec<String>,
     all: bool,
+    ui: &mut StdUi,
 ) -> Result<(), zb_core::Error> {
     let formulas = if all {
         let installed = installer.list_installed()?;
         if installed.is_empty() {
-            println!("No formulas installed.");
+            ui.info("No formulas installed.").map_err(ui_error)?;
             return Ok(());
         }
         installed.into_iter().map(|k| k.name).collect()
@@ -21,21 +23,21 @@ pub fn execute(
         normalized
     };
 
-    println!(
-        "{} Uninstalling {}...",
-        style("==>").cyan().bold(),
+    ui.heading(format!(
+        "Uninstalling {}...",
         style(formulas.join(", ")).bold()
-    );
+    ))
+    .map_err(ui_error)?;
 
     let mut errors: Vec<(String, zb_core::Error)> = Vec::new();
 
     if formulas.len() > 1 {
         for name in &formulas {
-            print!("    {} {}...", style("○").dim(), name);
+            ui.step_start(name).map_err(ui_error)?;
             match installer.uninstall(name) {
-                Ok(()) => println!(" {}", style("✓").green()),
+                Ok(()) => ui.step_ok().map_err(ui_error)?,
                 Err(e) => {
-                    println!(" {}", style("✗").red());
+                    ui.step_fail().map_err(ui_error)?;
                     errors.push((name.clone(), e));
                 }
             }
@@ -48,14 +50,20 @@ pub fn execute(
         Ok(())
     } else {
         for (name, err) in &errors {
-            eprintln!(
-                "{} Failed to uninstall {}: {}",
-                style("Error:").red().bold(),
+            ui.error(format!(
+                "Failed to uninstall {}: {}",
                 style(name).bold(),
                 err
-            );
+            ))
+            .map_err(ui_error)?;
         }
         // Return just the first error up. TODO: don't return errors from this fn?
         Err(errors.remove(0).1)
+    }
+}
+
+fn ui_error(err: std::io::Error) -> zb_core::Error {
+    zb_core::Error::StoreCorruption {
+        message: format!("failed to write CLI output: {err}"),
     }
 }
