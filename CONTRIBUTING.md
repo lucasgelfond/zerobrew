@@ -89,10 +89,36 @@ perf     # -> performance related
 build    # -> changes to build system (i.e. ext deps, tooling, scripts, etc)
 ```
 
-Generally speaking, we also ask that you please write isolated, [atomic commits](https://en.wikipedia.org/wiki/Atomic_commit). 
+Generally speaking, we also ask that you please write isolated, [atomic commits](https://en.wikipedia.org/wiki/Atomic_commit).
 This means if you are approaching a PR that touches various parts of the codebase for example, ensure that your commits
 are contained and cleanly seperated, properly describing/notating which commits belong where.
 
+### Addressing review feedback
+
+When a reviewer requests changes on your PR, **do not** add a new commit like `fix: address review feedback` or
+`chore: PR comments`. These commits have no meaning in the final history.
+
+Instead, use interactive rebase to fold each fix into the commit it belongs to:
+
+```bash
+# 1. Make your fixes in the working tree
+# 2. Stage them
+git add -p
+
+# 3. Interactive rebase back to the fork point
+git rebase -i origin/main
+
+# 4. Mark the relevant commit as "edit", or use "fixup" commits:
+#    - Change "pick" to "edit" for the commit you want to amend
+#    - Apply your staged changes with: git commit --amend
+#    - Continue with: git rebase --continue
+
+# 5. Force-push the cleaned branch
+git push --force-with-lease
+```
+
+The goal: every commit in the final history should be a self-contained, meaningful unit of work. A reviewer
+reading `git log` should see the logical progression of the feature — not a back-and-forth conversation.
 
 ## Testing
 
