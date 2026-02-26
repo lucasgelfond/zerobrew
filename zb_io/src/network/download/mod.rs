@@ -14,6 +14,7 @@ use reqwest::header::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
+use tracing::warn;
 
 use crate::progress::InstallProgress;
 use crate::storage::blob::BlobCache;
@@ -141,10 +142,10 @@ fn build_rustls_config() -> Option<rustls::ClientConfig> {
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ");
-        eprintln!(
-            "warning: failed to load {} native certificate(s): {}",
-            cert_result.errors.len(),
-            details
+        warn!(
+            errors = cert_result.errors.len(),
+            details = %details,
+            "failed to load native certificates"
         );
     }
 
@@ -156,8 +157,9 @@ fn build_rustls_config() -> Option<rustls::ClientConfig> {
     let builder = match builder.with_safe_default_protocol_versions() {
         Ok(builder) => builder,
         Err(e) => {
-            eprintln!(
-                "warning: failed to configure rustls protocol versions: {e}; falling back to reqwest default TLS"
+            warn!(
+                error = %e,
+                "failed to configure rustls protocol versions; falling back to reqwest default TLS"
             );
             return None;
         }
@@ -342,12 +344,12 @@ impl Downloader {
 
             // All chunked download attempts failed, fall back to single-connection download
             // This provides graceful degradation for transient chunk failures
-            eprintln!(
-                "warning: chunked download failed ({}), falling back to single-connection download",
-                last_error
+            warn!(
+                error = %last_error
                     .as_ref()
                     .map(|e| e.to_string())
-                    .unwrap_or_else(|| "unknown error".to_string())
+                    .unwrap_or_else(|| "unknown error".to_string()),
+                "chunked download failed; falling back to single-connection download"
             );
         }
 

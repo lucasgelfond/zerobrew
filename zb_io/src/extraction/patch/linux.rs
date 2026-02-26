@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
+use tracing::warn;
 use zb_core::Error;
 
 /// Patch @@HOMEBREW_CELLAR@@ and @@HOMEBREW_PREFIX@@ placeholders in both ELF binaries and text files.
@@ -188,10 +189,10 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
             let mut perms = metadata.permissions();
             perms.set_mode(original_mode | 0o200);
             if let Err(e) = fs::set_permissions(path, perms) {
-                eprintln!(
-                    "Warning: Failed to make file writable: {}: {}",
-                    path.display(),
-                    e
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to make ELF writable for patching"
                 );
                 patch_failures.fetch_add(1, Ordering::Relaxed);
                 return;
@@ -281,15 +282,16 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
         })();
 
         if let Err(e) = result {
-            eprintln!("Warning: Failed to patch ELF at {}: {}", path.display(), e);
+            warn!(path = %path.display(), error = %e, "failed to patch ELF");
             patch_failures.fetch_add(1, Ordering::Relaxed);
         }
     });
 
     let failures = patch_failures.load(Ordering::Relaxed);
     if failures > 0 {
-        eprintln!(
-            "Warning: Failed to patch {failures} ELF files. These packages may not work correctly until manually patched."
+        warn!(
+            failures,
+            "failed to patch ELF files; packages may not work correctly until manually patched"
         );
     }
 
@@ -369,10 +371,10 @@ fn patch_text_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Err
         })();
 
         if let Err(e) = result {
-            eprintln!(
-                "Warning: Failed to patch text file at {}: {}",
-                path.display(),
-                e
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to patch text file"
             );
             patch_failures.fetch_add(1, Ordering::Relaxed);
         }
