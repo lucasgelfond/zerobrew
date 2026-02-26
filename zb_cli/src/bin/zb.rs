@@ -4,6 +4,7 @@ use zb_cli::{
     cli::{Cli, Commands},
     commands,
     init::ensure_init,
+    logging,
     utils::get_root_path,
 };
 use zb_io::create_installer;
@@ -11,6 +12,7 @@ use zb_io::create_installer;
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    logging::init(cli.verbose, cli.quiet);
 
     if let Err(e) = run(cli).await {
         eprintln!("{} {}", style("error:").red().bold(), e);
