@@ -27,6 +27,12 @@ pub struct Cli {
     )]
     pub auto_init: bool,
 
+    #[arg(long, short = 'v', global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
+
+    #[arg(long, short = 'q', global = true, conflicts_with = "verbose")]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -58,6 +64,19 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().map(|e| e.to_string()).unwrap_or_default();
         assert!(err.contains("at least 1"));
+    }
+
+    #[test]
+    fn accepts_verbose_levels() {
+        let cli = Cli::try_parse_from(["zb", "-vv", "list"]).unwrap();
+        assert_eq!(cli.verbose, 2);
+        assert!(!cli.quiet);
+    }
+
+    #[test]
+    fn rejects_quiet_with_verbose() {
+        let result = Cli::try_parse_from(["zb", "-v", "-q", "list"]);
+        assert!(result.is_err());
     }
 }
 
