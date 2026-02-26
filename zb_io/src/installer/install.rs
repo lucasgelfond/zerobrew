@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tracing::warn;
 
 use crate::cellar::link::Linker;
 use crate::cellar::materialize::Cellar;
@@ -285,11 +286,11 @@ impl Installer {
 
                     if attempt + 1 < MAX_CORRUPTION_RETRIES {
                         // Log retry attempt
-                        eprintln!(
-                            "    Corrupted download detected for {}, retrying ({}/{})...",
-                            formula.name,
-                            attempt + 2,
-                            MAX_CORRUPTION_RETRIES
+                        warn!(
+                            formula = %formula.name,
+                            attempt = attempt + 2,
+                            max_retries = MAX_CORRUPTION_RETRIES,
+                            "corrupted download detected; retrying"
                         );
 
                         // Re-download
@@ -377,9 +378,9 @@ impl Installer {
                 };
 
                 if select_bottle(&formula).is_err() && !formula.has_source_url() {
-                    eprintln!(
-                        "    Skipping {} (no bottle or source available for this platform)",
-                        formula.name
+                    warn!(
+                        formula = %formula.name,
+                        "skipping formula with no bottle or source available for this platform"
                     );
                     continue;
                 }
@@ -540,10 +541,7 @@ impl Installer {
                         }
 
                         if let Err(e) = self.linker.link_opt(&keg_path) {
-                            eprintln!(
-                                "warning: failed to create opt link for {}: {}",
-                                processed_name, e
-                            );
+                            warn!(formula = %processed_name, error = %e, "failed to create opt link");
                         }
 
                         let should_link = link && !item.formula.is_keg_only();
@@ -659,16 +657,20 @@ impl Installer {
         unlink: bool,
     ) {
         if unlink && let Err(e) = linker.unlink_keg(keg_path) {
-            eprintln!(
-                "warning: failed to clean up links for {}@{} after install error: {}",
-                name, version, e
+            warn!(
+                formula = %name,
+                version = %version,
+                error = %e,
+                "failed to clean up links after install error"
             );
         }
 
         if let Err(e) = cellar.remove_keg(name, version) {
-            eprintln!(
-                "warning: failed to remove keg for {}@{} after install error: {}",
-                name, version, e
+            warn!(
+                formula = %name,
+                version = %version,
+                error = %e,
+                "failed to remove keg after install error"
             );
         }
     }
@@ -762,7 +764,7 @@ impl Installer {
         }
 
         if let Err(e) = self.linker.link_opt(&keg_path) {
-            eprintln!("warning: failed to create opt link for {install_name}: {e}");
+            warn!(formula = %install_name, error = %e, "failed to create opt link");
         }
 
         let should_link = link && !item.formula.is_keg_only();
@@ -910,9 +912,11 @@ impl Installer {
     /// Remove a materialized keg that was never registered in the database.
     fn cleanup_materialized(cellar: &Cellar, name: &str, version: &str) {
         if let Err(e) = cellar.remove_keg(name, version) {
-            eprintln!(
-                "warning: failed to remove keg for {}@{} after install error: {}",
-                name, version, e
+            warn!(
+                formula = %name,
+                version = %version,
+                error = %e,
+                "failed to remove keg after install error"
             );
         }
     }

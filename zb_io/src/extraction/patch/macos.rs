@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 use zb_core::Error;
 
 const HOMEBREW_PREFIXES: &[&str] = &[
@@ -193,17 +194,17 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
             .output()
         {
             Ok(output) if !output.status.success() => {
-                eprintln!(
-                    "Warning: Failed to re-sign {}: {}",
-                    path.display(),
-                    String::from_utf8_lossy(&output.stderr)
+                warn!(
+                    path = %path.display(),
+                    error = %String::from_utf8_lossy(&output.stderr),
+                    "failed to re-sign patched file"
                 );
             }
             Err(e) => {
-                eprintln!(
-                    "Warning: Failed to execute codesign for {}: {}",
-                    path.display(),
-                    e
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to execute codesign for patched file"
                 );
             }
             _ => {}
