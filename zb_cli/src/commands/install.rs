@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use zb_io::{InstallProgress, ProgressCallback};
 
+use crate::ui::Ui;
 use crate::utils::{normalize_formula_name, suggest_homebrew};
 
 pub async fn execute(
@@ -14,11 +15,12 @@ pub async fn execute(
     build_from_source: bool,
 ) -> Result<(), zb_core::Error> {
     let start = Instant::now();
-    println!(
-        "{} Installing {}...",
-        style("==>").cyan().bold(),
+    let mut ui = Ui::new();
+    ui.heading(format!(
+        "Installing {}...",
         style(formulas.join(", ")).bold()
-    );
+    ))
+    .map_err(ui_error)?;
 
     let mut normalized_names = Vec::new();
     let mut cask_names = Vec::new();
@@ -54,17 +56,18 @@ pub async fn execute(
             }
         };
 
-        println!(
-            "{} Resolving dependencies ({} packages)...",
-            style("==>").cyan().bold(),
+        ui.heading(format!(
+            "Resolving dependencies ({} packages)...",
             plan.items.len()
-        );
+        ))
+        .map_err(ui_error)?;
         for item in &plan.items {
-            println!(
-                "    {} {}",
+            ui.bullet(format!(
+                "{} {}",
                 style(&item.formula.name).green(),
                 style(&item.formula.versions.stable).dim()
-            );
+            ))
+            .map_err(ui_error)?;
         }
 
         let multi = MultiProgress::new();
@@ -84,10 +87,8 @@ pub async fn execute(
             .template("    {prefix:<16} {msg}")
             .unwrap();
 
-        println!(
-            "{} Downloading and installing formulas...",
-            style("==>").cyan().bold()
-        );
+        ui.heading("Downloading and installing formulas...")
+            .map_err(ui_error)?;
 
         let bars_clone = bars.clone();
         let multi_clone = multi.clone();
@@ -186,10 +187,8 @@ pub async fn execute(
             Ok(r) => r,
             Err(ref e @ zb_core::Error::LinkConflict { ref conflicts }) => {
                 eprintln!();
-                eprintln!(
-                    "{} The link step did not complete successfully.",
-                    style("Error:").red().bold()
-                );
+                ui.error("The link step did not complete successfully.")
+                    .map_err(ui_error)?;
                 eprintln!("The formula was installed, but is not symlinked into the prefix.");
                 eprintln!();
                 eprintln!("Possible conflicting files:");
@@ -218,23 +217,29 @@ pub async fn execute(
     }
 
     if !cask_names.is_empty() {
-        println!(
-            "{} Installing casks ({} packages)...",
-            style("==>").cyan().bold(),
+        ui.heading(format!(
+            "Installing casks ({} packages)...",
             cask_names.len()
-        );
+        ))
+        .map_err(ui_error)?;
         let result = installer.install_casks(&cask_names, !no_link).await?;
         installed_count += result.installed;
     }
 
     let elapsed = start.elapsed();
-    println!();
-    println!(
-        "{} Installed {} packages in {:.2}s",
-        style("==>").cyan().bold(),
+    ui.blank_line().map_err(ui_error)?;
+    ui.heading(format!(
+        "Installed {} packages in {:.2}s",
         style(installed_count).green().bold(),
         elapsed.as_secs_f64()
-    );
+    ))
+    .map_err(ui_error)?;
 
     Ok(())
+}
+
+fn ui_error(err: std::io::Error) -> zb_core::Error {
+    zb_core::Error::StoreCorruption {
+        message: format!("failed to write CLI output: {err}"),
+    }
 }
