@@ -1,0 +1,9 @@
+{
+  "title": "Install",
+  "tabs": [
+    { "name": "bash", "command": "curl -fsSL https://zerobrew.rs/install | bash" },
+    { "name": "brew", "command": "brew install zerobrew" },
+    { "name": "aur", "command": "yay -S zerobrew-bin" }
+  ],
+  "description": "Install zerobrew in seconds and keep your existing Homebrew formulas."
+}
