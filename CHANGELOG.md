@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--build-from-source` / `-s` flag for `zb install` ([#212](https://github.com/lucasgelfond/zerobrew/pull/212))
 - External tap and cask support with safer install/uninstall behavior ([#203](https://github.com/lucasgelfond/zerobrew/pull/203))
 - GitHub release installs with clone fallback ([#198](https://github.com/lucasgelfond/zerobrew/pull/198))
+- `zb upgrade` command for formula and cask upgrades, including targeted upgrades
 
 ### Fixed
 - Include zbx binaries in GitHub releases (fixes "zbx-darwin-arm64 not found" on macOS ARM)([#229](https://github.com/lucasgelfond/zerobrew/pull/229))

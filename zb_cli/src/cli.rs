@@ -77,6 +77,51 @@ mod tests {
         let result = Cli::try_parse_from(["zb", "outdated", "--verbose", "--json"]);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn upgrade_parses_without_packages() {
+        let cli = Cli::try_parse_from(["zb", "upgrade"]).unwrap();
+        match cli.command {
+            super::Commands::Upgrade {
+                packages,
+                build_from_source,
+            } => {
+                assert!(packages.is_empty());
+                assert!(!build_from_source);
+            }
+            _ => panic!("expected upgrade command"),
+        }
+    }
+
+    #[test]
+    fn upgrade_parses_with_packages() {
+        let cli = Cli::try_parse_from(["zb", "upgrade", "jq"]).unwrap();
+        match cli.command {
+            super::Commands::Upgrade {
+                packages,
+                build_from_source,
+            } => {
+                assert_eq!(packages, vec!["jq"]);
+                assert!(!build_from_source);
+            }
+            _ => panic!("expected upgrade command"),
+        }
+    }
+
+    #[test]
+    fn upgrade_parses_build_from_source() {
+        let cli = Cli::try_parse_from(["zb", "upgrade", "-s", "jq"]).unwrap();
+        match cli.command {
+            super::Commands::Upgrade {
+                packages,
+                build_from_source,
+            } => {
+                assert_eq!(packages, vec!["jq"]);
+                assert!(build_from_source);
+            }
+            _ => panic!("expected upgrade command"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -129,6 +174,12 @@ pub enum Commands {
         args: Vec<String>,
     },
     Update,
+    Upgrade {
+        #[arg(num_args = 0..)]
+        packages: Vec<String>,
+        #[arg(long, short = 's')]
+        build_from_source: bool,
+    },
     Outdated {
         /// Show only package names
         #[arg(short, long, conflicts_with_all = ["verbose", "json"])]

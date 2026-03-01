@@ -114,7 +114,6 @@ impl ApiClient {
         self
     }
 
-    #[cfg(test)]
     pub fn with_cask_base_url(mut self, cask_base_url: String) -> Self {
         self.cask_base_url = cask_base_url;
         self

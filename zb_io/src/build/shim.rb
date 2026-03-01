@@ -54,8 +54,12 @@ class MacOSVersion
     @version <=> other.to_s
   end
 
-  def to_s = @version
-  def to_i = @major
+  def to_s
+    @version
+  end
+  def to_i
+    @major
+  end
 end
 
 module Hardware
@@ -148,9 +152,15 @@ class PatchDSL
     @patch_sha256 = nil
   end
 
-  def url(u, **_kwargs) = @patch_url = u
-  def sha256(s) = @patch_sha256 = s
-  def mirror(_) = nil
+  def url(u, **_kwargs)
+    @patch_url = u
+  end
+  def sha256(s)
+    @patch_sha256 = s
+  end
+  def mirror(_)
+    nil
+  end
 end
 
 class ResourceDSL
@@ -162,14 +172,30 @@ class ResourceDSL
     @resource_sha256 = nil
   end
 
-  def url(u, **_kwargs) = @resource_url = u
-  def sha256(s) = @resource_sha256 = s
-  def mirror(_) = nil
-  def patch(&_block) = nil
-  def on_macos(&block) = yield if OS.mac?
-  def on_linux(&block) = yield if OS.linux?
-  def on_arm(&block) = yield if Hardware::CPU.arm?
-  def on_intel(&block) = yield if Hardware::CPU.intel?
+  def url(u, **_kwargs)
+    @resource_url = u
+  end
+  def sha256(s)
+    @resource_sha256 = s
+  end
+  def mirror(_)
+    nil
+  end
+  def patch(&_block)
+    nil
+  end
+  def on_macos(&block)
+    yield if OS.mac?
+  end
+  def on_linux(&block)
+    yield if OS.linux?
+  end
+  def on_arm(&block)
+    yield if Hardware::CPU.arm?
+  end
+  def on_intel(&block)
+    yield if Hardware::CPU.intel?
+  end
 end
 
 class StagedResource
@@ -221,10 +247,18 @@ class StagedResource
 end
 
 class BuildOptions
-  def head?  = false
-  def stable? = true
-  def with?(name) = false
-  def without?(name) = true
+  def head?
+    false
+  end
+  def stable?
+    true
+  end
+  def with?(name)
+    false
+  end
+  def without?(name)
+    true
+  end
 end
 
 class Pathname
@@ -283,21 +317,49 @@ class Formula
   class << self
     attr_accessor :formula_name, :formula_version
 
-    def desc(_) = nil
-    def homepage(_) = nil
-    def license(_) = nil
-    def url(*_args, **_kwargs) = nil
-    def sha256(_) = nil
-    def revision(_) = nil
-    def compatibility_version(_) = nil
-    def mirror(_) = nil
+    def desc(_)
+      nil
+    end
+    def homepage(_)
+      nil
+    end
+    def license(_)
+      nil
+    end
+    def url(*_args, **_kwargs)
+      nil
+    end
+    def sha256(_)
+      nil
+    end
+    def revision(_)
+      nil
+    end
+    def compatibility_version(_)
+      nil
+    end
+    def mirror(_)
+      nil
+    end
 
-    def depends_on(_) = nil
-    def uses_from_macos(*_args, **_kwargs) = nil
-    def on_macos(&block) = yield if OS.mac?
-    def on_linux(&block) = yield if OS.linux?
-    def on_intel(&block) = yield if Hardware::CPU.intel?
-    def on_arm(&block) = yield if Hardware::CPU.arm?
+    def depends_on(_)
+      nil
+    end
+    def uses_from_macos(*_args, **_kwargs)
+      nil
+    end
+    def on_macos(&block)
+      yield if OS.mac?
+    end
+    def on_linux(&block)
+      yield if OS.linux?
+    end
+    def on_intel(&block)
+      yield if Hardware::CPU.intel?
+    end
+    def on_arm(&block)
+      yield if Hardware::CPU.arm?
+    end
     def on_system(*args, **kwargs, &block)
       return unless block_given?
       if OS.linux?
@@ -307,16 +369,36 @@ class Formula
       end
     end
 
-    def head(*_args, **_kwargs, &_block) = nil
-    def no_autobump!(**_kwargs) = nil
-    def livecheck(&block) = nil
-    def bottle(&block) = nil
-    def skip_clean(*_args) = nil
-    def link_overwrite(*_args) = nil
-    def keg_only(*_args) = nil
-    def caveats = nil
-    def test(&block) = nil
-    def service(&block) = nil
+    def head(*_args, **_kwargs, &_block)
+      nil
+    end
+    def no_autobump!(**_kwargs)
+      nil
+    end
+    def livecheck(&block)
+      nil
+    end
+    def bottle(&block)
+      nil
+    end
+    def skip_clean(*_args)
+      nil
+    end
+    def link_overwrite(*_args)
+      nil
+    end
+    def keg_only(*_args)
+      nil
+    end
+    def caveats
+      nil
+    end
+    def test(&block)
+      nil
+    end
+    def service(&block)
+      nil
+    end
 
     def resource(name, &block)
       return unless block_given?
@@ -364,47 +446,115 @@ class Formula
     end
   end
 
-  def name = self.class.formula_name
-  def version = FormulaVersion.new(self.class.formula_version)
-  def build = BuildOptions.new
+  def name
+    self.class.formula_name
+  end
+  def version
+    FormulaVersion.new(self.class.formula_version)
+  end
+  def build
+    BuildOptions.new
+  end
 
   def prefix
     Pathname.new(ZEROBREW_CELLAR) + name + version
   end
 
-  def bin       = prefix + "bin"
-  def sbin      = prefix + "sbin"
-  def lib       = prefix + "lib"
-  def libexec   = prefix + "libexec"
-  def include   = prefix + "include"
-  def share     = prefix + "share"
-  def man       = share + "man"
-  def man1      = man + "man1"
-  def man2      = man + "man2"
-  def man3      = man + "man3"
-  def man4      = man + "man4"
-  def man5      = man + "man5"
-  def man6      = man + "man6"
-  def man7      = man + "man7"
-  def man8      = man + "man8"
-  def doc       = share + "doc" + name
-  def info      = share + "info"
-  def pkgshare  = share + name
-  def frameworks = prefix + "Frameworks"
-  def kext      = prefix + "Library" + "Extensions"
+  def bin
+    prefix + "bin"
+  end
+  def sbin
+    prefix + "sbin"
+  end
+  def lib
+    prefix + "lib"
+  end
+  def libexec
+    prefix + "libexec"
+  end
+  def include
+    prefix + "include"
+  end
+  def share
+    prefix + "share"
+  end
+  def man
+    share + "man"
+  end
+  def man1
+    man + "man1"
+  end
+  def man2
+    man + "man2"
+  end
+  def man3
+    man + "man3"
+  end
+  def man4
+    man + "man4"
+  end
+  def man5
+    man + "man5"
+  end
+  def man6
+    man + "man6"
+  end
+  def man7
+    man + "man7"
+  end
+  def man8
+    man + "man8"
+  end
+  def doc
+    share + "doc" + name
+  end
+  def info
+    share + "info"
+  end
+  def pkgshare
+    share + name
+  end
+  def frameworks
+    prefix + "Frameworks"
+  end
+  def kext
+    prefix + "Library" + "Extensions"
+  end
 
-  def opt_prefix   = Pathname.new(ZEROBREW_PREFIX) + "opt" + name
-  def opt_bin      = opt_prefix + "bin"
-  def opt_sbin     = opt_prefix + "sbin"
-  def opt_lib      = opt_prefix + "lib"
-  def opt_include  = opt_prefix + "include"
-  def opt_share    = opt_prefix + "share"
-  def opt_pkgshare = opt_prefix + "share" + name
+  def opt_prefix
+    Pathname.new(ZEROBREW_PREFIX) + "opt" + name
+  end
+  def opt_bin
+    opt_prefix + "bin"
+  end
+  def opt_sbin
+    opt_prefix + "sbin"
+  end
+  def opt_lib
+    opt_prefix + "lib"
+  end
+  def opt_include
+    opt_prefix + "include"
+  end
+  def opt_share
+    opt_prefix + "share"
+  end
+  def opt_pkgshare
+    opt_prefix + "share" + name
+  end
 
-  def bash_completion = prefix + "etc" + "bash_completion.d"
-  def zsh_completion  = share + "zsh" + "site-functions"
-  def fish_completion = share + "fish" + "vendor_completions.d"
-  def elisp           = share + "emacs" + "site-lisp" + name
+  def bash_completion
+    prefix + "etc" + "bash_completion.d"
+  end
+  def zsh_completion
+    share + "zsh" + "site-functions"
+  end
+  def fish_completion
+    share + "fish" + "vendor_completions.d"
+  end
+  def elisp
+    share + "emacs" + "site-lisp" + name
+  end
 
   def resource(name)
     res_info = self.class.instance_variable_get(:@_resources)&.dig(name.to_s)
@@ -501,11 +651,21 @@ class FormulaRef
     Pathname.new(ZEROBREW_PREFIX) + "opt" + @name
   end
 
-  def opt_lib     = opt_prefix + "lib"
-  def opt_include = opt_prefix + "include"
-  def opt_bin     = opt_prefix + "bin"
-  def lib         = opt_lib
-  def include     = opt_include
+  def opt_lib
+    opt_prefix + "lib"
+  end
+  def opt_include
+    opt_prefix + "include"
+  end
+  def opt_bin
+    opt_prefix + "bin"
+  end
+  def lib
+    opt_lib
+  end
+  def include
+    opt_include
+  end
 
   def prefix
     dep_info = INSTALLED_DEPS[@name]
@@ -513,9 +673,13 @@ class FormulaRef
     opt_prefix
   end
 
-  def any_installed_version = self
+  def any_installed_version
+    self
+  end
 
-  def to_s = @name
+  def to_s
+    @name
+  end
 end
 
 class InreplaceString
@@ -539,7 +703,9 @@ class InreplaceString
     @content = @content.gsub(/^#{Regexp.escape(name)}\s*[?:]?=.*$\n?/, "")
   end
 
-  def to_s = @content
+  def to_s
+    @content
+  end
 end
 
 module Language

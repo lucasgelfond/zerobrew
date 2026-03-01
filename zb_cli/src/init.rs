@@ -192,16 +192,54 @@ fn add_to_path(
     root: &Path,
     no_modify_path: bool,
 ) -> Result<(), InitError> {
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let home = std::env::var("HOME").map_err(|_| InitError::Message("HOME not set".to_string()))?;
+    let zdotdir = std::env::var("ZDOTDIR").ok();
+
+    let shell_env = ShellEnv {
+        shell: &shell,
+        home: &home,
+        zdotdir: zdotdir.as_deref(),
+    };
+
+    add_to_path_with_context(
+        prefix,
+        zerobrew_dir,
+        zerobrew_bin,
+        root,
+        no_modify_path,
+        shell_env,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct ShellEnv<'a> {
+    shell: &'a str,
+    home: &'a str,
+    zdotdir: Option<&'a str>,
+}
+
+fn add_to_path_with_context(
+    prefix: &Path,
+    zerobrew_dir: &str,
+    zerobrew_bin: &str,
+    root: &Path,
+    no_modify_path: bool,
+    shell_env: ShellEnv<'_>,
+) -> Result<(), InitError> {
     enum ShellConfigKind {
         Posix,
         Fish,
     }
 
-    let shell = std::env::var("SHELL").unwrap_or_default();
-    let home = std::env::var("HOME").map_err(|_| InitError::Message("HOME not set".to_string()))?;
+    let ShellEnv {
+        shell,
+        home,
+        zdotdir,
+    } = shell_env;
 
     let (config_file, shell_kind) = if shell.contains("zsh") {
-        let zdotdir = std::env::var("ZDOTDIR").unwrap_or_else(|_| home.clone());
+        let zdotdir = zdotdir.unwrap_or(home);
         let zshenv = format!("{}/.zshenv", zdotdir);
         let zshrc = format!("{}/.zshrc", zdotdir);
         let home_zshrc = format!("{}/.zshrc", home);
@@ -593,14 +631,19 @@ mod tests {
         fs::create_dir(&prefix).unwrap();
         fs::create_dir(&root).unwrap();
 
-        unsafe {
-            std::env::set_var("HOME", home.to_str().unwrap());
-        }
-        unsafe {
-            std::env::set_var("SHELL", "/bin/bash");
-        }
-
-        add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
+        add_to_path_with_context(
+            &prefix,
+            zerobrew_dir,
+            zerobrew_bin,
+            &root,
+            false,
+            ShellEnv {
+                shell: "/bin/bash",
+                home: home.to_str().unwrap(),
+                zdotdir: None,
+            },
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&shell_config).unwrap();
         assert!(content.contains("_zb_path_append()"));
@@ -621,14 +664,19 @@ mod tests {
         fs::create_dir(&prefix).unwrap();
         fs::create_dir(&root).unwrap();
 
-        unsafe {
-            std::env::set_var("HOME", home.to_str().unwrap());
-        }
-        unsafe {
-            std::env::set_var("SHELL", "/bin/bash");
-        }
-
-        add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
+        add_to_path_with_context(
+            &prefix,
+            zerobrew_dir,
+            zerobrew_bin,
+            &root,
+            false,
+            ShellEnv {
+                shell: "/bin/bash",
+                home: home.to_str().unwrap(),
+                zdotdir: None,
+            },
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&shell_config).unwrap();
         assert!(content.contains("_zb_path_append \"$ZEROBREW_BIN\""));
@@ -674,13 +722,6 @@ mod tests {
         fs::create_dir(&prefix).unwrap();
         fs::create_dir(&root).unwrap();
 
-        unsafe {
-            std::env::set_var("HOME", home.to_str().unwrap());
-        }
-        unsafe {
-            std::env::set_var("SHELL", "/bin/bash");
-        }
-
         // Write initial config with existing managed block and unrelated user content
         fs::write(
             &shell_config,
@@ -690,7 +731,19 @@ mod tests {
         )
         .unwrap();
 
-        add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
+        add_to_path_with_context(
+            &prefix,
+            zerobrew_dir,
+            zerobrew_bin,
+            &root,
+            false,
+            ShellEnv {
+                shell: "/bin/bash",
+                home: home.to_str().unwrap(),
+                zdotdir: None,
+            },
+        )
+        .unwrap();
 
         // Managed block should be replaced, preserving unrelated user content
         let content = fs::read_to_string(&shell_config).unwrap();
