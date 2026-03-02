@@ -1028,7 +1028,6 @@ impl Installer {
             )
             .await?;
 
-        let extracted = self.store.ensure_entry(&cask.sha256, &blob_path)?;
         let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
         let mut cleanup = FailedInstallGuard::new(
             &self.linker,
@@ -1039,7 +1038,12 @@ impl Installer {
             link,
         );
 
-        stage_cask_binaries(&extracted, &keg_path, &cask)?;
+        if crate::extraction::is_archive(&blob_path)? {
+            let extracted = self.store.ensure_entry(&cask.sha256, &blob_path)?;
+            stage_cask_binaries(&extracted, &keg_path, &cask)?;
+        } else {
+            stage_raw_cask_binary(&blob_path, &keg_path, &cask)?;
+        }
 
         let linked_files = if link {
             self.linker.link_keg(&keg_path)?
@@ -1168,6 +1172,51 @@ fn stage_cask_binaries(
                 })?;
             }
         }
+    }
+
+    Ok(())
+}
+
+fn stage_raw_cask_binary(
+    blob_path: &Path,
+    keg_path: &Path,
+    cask: &crate::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    if cask.binaries.len() != 1 {
+        return Err(Error::InvalidArgument {
+            message: format!(
+                "cask '{}' has {} binary artifacts but the download is a raw binary; expected exactly 1",
+                cask.token,
+                cask.binaries.len()
+            ),
+        });
+    }
+
+    let binary = &cask.binaries[0];
+    let bin_dir = keg_path.join("bin");
+    fs::create_dir_all(&bin_dir).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create cask bin dir: {e}"),
+    })?;
+
+    let target = bin_dir.join(&binary.target);
+    if target.exists() {
+        fs::remove_file(&target).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to replace existing cask binary: {e}"),
+        })?;
+    }
+
+    fs::copy(blob_path, &target).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to stage cask binary '{}': {e}", binary.target),
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).map_err(|e| {
+            Error::StoreCorruption {
+                message: format!("failed to make staged cask binary executable: {e}"),
+            }
+        })?;
     }
 
     Ok(())
@@ -3174,5 +3223,70 @@ end
         assert!(outdated.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("nobottle"));
+    }
+
+    #[test]
+    fn stage_raw_cask_binary_copies_and_marks_executable() {
+        let tmp = TempDir::new().unwrap();
+        let blob_path = tmp.path().join("claude");
+        fs::write(&blob_path, b"#!/bin/sh\necho hello").unwrap();
+
+        let keg_path = tmp.path().join("keg");
+        let cask = crate::installer::cask::ResolvedCask {
+            install_name: "cask:claude-code".to_string(),
+            token: "claude-code".to_string(),
+            version: "1.0.0".to_string(),
+            url: "https://example.com/claude".to_string(),
+            sha256: "aaa".to_string(),
+            binaries: vec![crate::installer::cask::CaskBinary {
+                source: "claude".to_string(),
+                target: "claude".to_string(),
+            }],
+        };
+
+        stage_raw_cask_binary(&blob_path, &keg_path, &cask).unwrap();
+
+        let target = keg_path.join("bin/claude");
+        assert!(target.exists());
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "#!/bin/sh\necho hello"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&target).unwrap().permissions().mode();
+            assert_eq!(mode & 0o755, 0o755);
+        }
+    }
+
+    #[test]
+    fn stage_raw_cask_binary_rejects_multiple_binaries() {
+        let tmp = TempDir::new().unwrap();
+        let blob_path = tmp.path().join("blob");
+        fs::write(&blob_path, b"data").unwrap();
+
+        let keg_path = tmp.path().join("keg");
+        let cask = crate::installer::cask::ResolvedCask {
+            install_name: "cask:multi".to_string(),
+            token: "multi".to_string(),
+            version: "1.0.0".to_string(),
+            url: "https://example.com/multi".to_string(),
+            sha256: "bbb".to_string(),
+            binaries: vec![
+                crate::installer::cask::CaskBinary {
+                    source: "a".to_string(),
+                    target: "a".to_string(),
+                },
+                crate::installer::cask::CaskBinary {
+                    source: "b".to_string(),
+                    target: "b".to_string(),
+                },
+            ],
+        };
+
+        let err = stage_raw_cask_binary(&blob_path, &keg_path, &cask).unwrap_err();
+        assert!(err.to_string().contains("raw binary"));
     }
 }

@@ -18,6 +18,10 @@ enum CompressionFormat {
     Unknown,
 }
 
+pub fn is_archive(path: &Path) -> Result<bool, Error> {
+    detect_compression(path).map(|fmt| !matches!(fmt, CompressionFormat::Unknown))
+}
+
 fn detect_compression(path: &Path) -> Result<CompressionFormat, Error> {
     let mut file = File::open(path).map_err(|e| Error::StoreCorruption {
         message: format!("failed to open tarball: {e}"),
@@ -616,5 +620,31 @@ mod tests {
         let safe_path = PathBuf::from("foo/file.tar.gz");
         let result = validate_path(&safe_path, &dest);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn is_archive_true_for_gzip() {
+        let tmp = TempDir::new().unwrap();
+        let tarball = create_test_tarball(vec![("a.txt", b"a", None)]);
+        let path = tmp.path().join("test.tar.gz");
+        fs::write(&path, &tarball).unwrap();
+        assert!(is_archive(&path).unwrap());
+    }
+
+    #[test]
+    fn is_archive_true_for_zip() {
+        let tmp = TempDir::new().unwrap();
+        let zip_data = create_test_zip(vec![("a.txt", b"a")]);
+        let path = tmp.path().join("test.zip");
+        fs::write(&path, &zip_data).unwrap();
+        assert!(is_archive(&path).unwrap());
+    }
+
+    #[test]
+    fn is_archive_false_for_raw_binary() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("raw-binary");
+        fs::write(&path, b"\x7fELF raw executable bytes").unwrap();
+        assert!(!is_archive(&path).unwrap());
     }
 }
