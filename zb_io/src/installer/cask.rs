@@ -39,8 +39,12 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
 
     let binaries = parse_binary_artifacts(cask)?;
     if binaries.is_empty() {
+        let found = artifact_types(cask);
         return Err(Error::InvalidArgument {
-            message: format!("cask '{token}' does not expose supported binary artifacts"),
+            message: format!(
+                "cask '{token}' has no binary artifacts (found: {found}); \
+                 only casks with 'binary' artifacts are currently supported"
+            ),
         });
     }
 
@@ -100,6 +104,24 @@ fn preferred_variation_keys() -> &'static [&'static str] {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         &[]
+    }
+}
+
+fn artifact_types(cask: &Value) -> String {
+    let types: Vec<&str> = cask
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a.as_object())
+        .flat_map(|obj| obj.keys())
+        .map(String::as_str)
+        .collect();
+
+    if types.is_empty() {
+        "none".to_string()
+    } else {
+        types.join(", ")
     }
 }
 
@@ -244,5 +266,25 @@ mod tests {
 
         let err = resolve_cask("test", &cask).unwrap_err();
         assert!(matches!(err, Error::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn resolve_cask_no_binary_artifacts_lists_found_types() {
+        let cask = serde_json::json!({
+            "token": "ghostty",
+            "version": "1.0.0",
+            "url": "https://example.com/Ghostty.dmg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [
+                { "app": ["Ghostty.app"] },
+                { "zap": [{ "trash": ["~/.config/ghostty/"] }] }
+            ]
+        });
+
+        let err = resolve_cask("ghostty", &cask).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no binary artifacts"), "got: {msg}");
+        assert!(msg.contains("app"), "got: {msg}");
+        assert!(msg.contains("zap"), "got: {msg}");
     }
 }
