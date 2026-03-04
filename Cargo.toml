@@ -32,6 +32,7 @@ fs4 = "0.13.1"
 libc = "0.2.180"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+strsim = "0.11.1"
 
 # Dev dependencies
 tempfile = "3"
