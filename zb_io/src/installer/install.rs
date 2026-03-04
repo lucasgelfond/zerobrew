@@ -216,6 +216,10 @@ impl Installer {
         Ok((outdated, warnings))
     }
 
+    pub async fn suggest_formulas(&self, query: &str, limit: usize) -> Result<Vec<String>, Error> {
+        self.api_client.suggest_formulas(query, limit).await
+    }
+
     pub async fn plan(&self, names: &[String]) -> Result<InstallPlan, Error> {
         self.plan_with_options(names, false).await
     }
@@ -1468,6 +1472,41 @@ mod tests {
             Installer::backup_existing_source_keg(&missing_keg, "example", "1.0.0").unwrap();
 
         assert!(backup.is_none());
+    }
+
+    #[tokio::test]
+    async fn suggest_formulas_returns_matches_from_api_client() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let bulk = r#"[
+            {"name":"python"},
+            {"name":"pytest"},
+            {"name":"pypy"}
+        ]"#;
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(bulk))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client =
+            ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix);
+
+        let suggestions = installer.suggest_formulas("pythn", 3).await.unwrap();
+        assert_eq!(suggestions.first().map(String::as_str), Some("python"));
     }
 
     #[tokio::test]
