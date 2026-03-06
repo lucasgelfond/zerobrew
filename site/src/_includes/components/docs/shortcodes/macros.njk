@@ -1,0 +1,116 @@
+{% macro note() %}
+<div class="docs-callout docs-callout--note">
+  <div class="docs-callout-title">Note</div>
+  <div class="docs-callout-body">{{ caller() | markdown | safe }}</div>
+</div>
+{% endmacro %}
+
+{% macro info() %}
+<div class="docs-callout docs-callout--info">
+  <div class="docs-callout-title">Info</div>
+  <div class="docs-callout-body">{{ caller() | markdown | safe }}</div>
+</div>
+{% endmacro %}
+
+{% macro warning() %}
+<div class="docs-callout docs-callout--warning">
+  <div class="docs-callout-title">Warning</div>
+  <div class="docs-callout-body">{{ caller() | markdown | safe }}</div>
+</div>
+{% endmacro %}
+
+{% macro tip() %}
+<div class="docs-callout docs-callout--tip">
+  <div class="docs-callout-title">Tip</div>
+  <div class="docs-callout-body">{{ caller() | markdown | safe }}</div>
+</div>
+{% endmacro %}
+
+{% macro card_group(cols=2) %}
+<div class="docs-card-group" data-cols="{{ cols }}">
+  {{ caller() }}
+</div>
+{% endmacro %}
+
+{% macro card(title='', href='#', icon='') %}
+<a class="docs-card" href="{{ href }}">
+  <div class="docs-card-body">
+    <div class="docs-card-title">{{ title }}</div>
+    <div class="docs-card-text">{{ caller() | markdown | safe }}</div>
+  </div>
+</a>
+{% endmacro %}
+
+{% macro tabs() %}
+<div class="docs-tabs" data-tabs>
+  <div class="docs-tab-list" role="tablist"></div>
+  <div class="docs-tab-panels">
+    {{ caller() }}
+  </div>
+</div>
+{% endmacro %}
+
+{% macro tab(title='Tab') %}
+<div class="docs-tab-panel" data-tab-title="{{ title }}" role="tabpanel">
+  {{ caller() | markdown | safe }}
+</div>
+{% endmacro %}
+
+{% macro accordion_group() %}
+<div class="docs-accordion-group">
+  {{ caller() }}
+</div>
+{% endmacro %}
+
+{% macro accordion(title='') %}
+<details class="docs-accordion-item">
+  <summary class="docs-accordion-summary">
+    <span>{{ title }}</span>
+    <span class="docs-accordion-icon" aria-hidden="true">+</span>
+  </summary>
+  <div class="docs-accordion-panel">{{ caller() | markdown | safe }}</div>
+</details>
+{% endmacro %}
+
+{% macro steps() %}
+<ol class="docs-steps">
+  {{ caller() }}
+</ol>
+{% endmacro %}
+
+{% macro step(title='') %}
+<li class="docs-step">
+  <div class="docs-step-title">{{ title }}</div>
+  <div class="docs-step-body">{{ caller() | markdown | safe }}</div>
+</li>
+{% endmacro %}
+
+{% macro param_fields() %}
+<div class="docs-param-table-wrap">
+  <table class="docs-param-table">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Type</th>
+        <th scope="col">Default</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{ caller() }}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{% macro param_field(path='', type='', defaultValue='', required=false) %}
+<tr>
+  <td>
+    <span class="docs-param-path">{{ path }}</span>
+    {% if required %}
+      <span class="docs-param-flag">required</span>
+    {% endif %}
+  </td>
+  <td>{{ type or '—' }}</td>
+  <td>{% if defaultValue %}<code>{{ defaultValue }}</code>{% else %}—{% endif %}</td>
+</tr>
+{% endmacro %}
