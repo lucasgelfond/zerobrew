@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use crate::checksum::verify_sha256_bytes;
 use crate::network::cache::{ApiCache, CacheEntry};
 use crate::network::suggest::rank_formula_suggestions;
@@ -62,6 +64,7 @@ pub struct ApiClient {
     tap_raw_base_url: String,
     client: reqwest::Client,
     cache: Option<ApiCache>,
+    formula_candidates: Arc<RwLock<Option<Vec<String>>>>,
 }
 
 impl ApiClient {
@@ -106,6 +109,7 @@ impl ApiClient {
             tap_raw_base_url: "https://raw.githubusercontent.com".to_string(),
             client,
             cache: None,
+            formula_candidates: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -358,9 +362,32 @@ impl ApiClient {
             return Ok(Vec::new());
         }
 
+        let candidates = self.formula_candidates().await?;
+        Ok(rank_formula_suggestions(query, &candidates, limit))
+    }
+
+    async fn formula_candidates(&self) -> Result<Vec<String>, Error> {
+        if let Some(candidates) = self.cached_formula_candidates() {
+            return Ok(candidates);
+        }
+
         let raw = self.get_all_formulas_raw().await?;
         let candidates = Self::extract_formula_candidates(&raw)?;
-        Ok(rank_formula_suggestions(query, &candidates, limit))
+        self.store_formula_candidates(candidates.clone());
+        Ok(candidates)
+    }
+
+    fn cached_formula_candidates(&self) -> Option<Vec<String>> {
+        self.formula_candidates
+            .read()
+            .ok()
+            .and_then(|candidates| candidates.clone())
+    }
+
+    fn store_formula_candidates(&self, candidates: Vec<String>) {
+        if let Ok(mut cached) = self.formula_candidates.write() {
+            *cached = Some(candidates);
+        }
     }
 
     fn extract_formula_candidates(raw: &str) -> Result<Vec<String>, Error> {
@@ -1202,6 +1229,31 @@ end
         let suggestions = client.suggest_formulas("pythn", 3).await.unwrap();
 
         assert_eq!(suggestions.first().map(String::as_str), Some("python"));
+    }
+
+    #[tokio::test]
+    async fn suggest_formulas_reuses_cached_candidates_across_calls() {
+        let mock_server = MockServer::start().await;
+        let bulk = r#"[
+            {"name":"python"},
+            {"name":"pytest"},
+            {"name":"pypy"}
+        ]"#;
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(bulk))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+
+        let first = client.suggest_formulas("pythn", 3).await.unwrap();
+        let second = client.suggest_formulas("pythn", 3).await.unwrap();
+
+        assert_eq!(first.first().map(String::as_str), Some("python"));
+        assert_eq!(second.first().map(String::as_str), Some("python"));
     }
 
     #[tokio::test]
