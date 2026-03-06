@@ -1,5 +1,6 @@
 use console::style;
 use std::path::PathBuf;
+use zb_io::Installer;
 
 pub fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
     let trimmed = name.trim();
@@ -56,6 +57,14 @@ pub fn suggest_formula_matches(requested: &str, suggestions: &[String]) {
         eprintln!();
         eprint!("{message}");
         eprintln!();
+    }
+}
+
+pub async fn suggest_missing_formula_matches(installer: &Installer, error: &zb_core::Error) {
+    if let zb_core::Error::MissingFormula { name } = error
+        && let Ok(suggestions) = installer.suggest_formulas(name, 3).await
+    {
+        suggest_formula_matches(name, &suggestions);
     }
 }
 
@@ -127,7 +136,19 @@ pub fn get_root_path(cli_root: Option<PathBuf>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_formula_suggestions, normalize_formula_name};
+    use std::fs;
+
+    use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use zb_io::cellar::Cellar;
+    use zb_io::network::ApiClient;
+    use zb_io::storage::{BlobCache, Database, Store};
+    use zb_io::{Installer, Linker};
+
+    use super::{
+        format_formula_suggestions, normalize_formula_name, suggest_missing_formula_matches,
+    };
 
     #[test]
     fn normalize_core_tap_formula() {
@@ -167,5 +188,42 @@ mod tests {
     #[test]
     fn format_formula_suggestions_returns_none_for_empty_input() {
         assert!(format_formula_suggestions("pythn", &[]).is_none());
+    }
+
+    #[tokio::test]
+    async fn suggest_missing_formula_matches_fetches_related_suggestions() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"[
+                    {"name":"python"},
+                    {"name":"pytest"}
+                ]"#,
+            ))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client =
+            ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix);
+
+        let error = zb_core::Error::MissingFormula {
+            name: "pythn".to_string(),
+        };
+
+        suggest_missing_formula_matches(&installer, &error).await;
     }
 }

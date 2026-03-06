@@ -6,7 +6,7 @@ use std::time::Instant;
 use zb_io::{InstallProgress, ProgressCallback};
 
 use crate::ui::StdUi;
-use crate::utils::{normalize_formula_name, suggest_formula_matches, suggest_homebrew};
+use crate::utils::{normalize_formula_name, suggest_homebrew, suggest_missing_formula_matches};
 
 pub async fn execute(
     installer: &mut zb_io::Installer,
@@ -49,11 +49,7 @@ pub async fn execute(
         {
             Ok(p) => p,
             Err(e) => {
-                if let zb_core::Error::MissingFormula { name } = &e
-                    && let Ok(suggestions) = installer.suggest_formulas(name, 3).await
-                {
-                    suggest_formula_matches(name, &suggestions);
-                }
+                suggest_missing_formula_matches(installer, &e).await;
 
                 for formula in &formulas {
                     suggest_homebrew(formula, &e);
@@ -217,11 +213,7 @@ pub async fn execute(
                 return Err(e.clone());
             }
             Err(e) => {
-                if let zb_core::Error::MissingFormula { name } = &e
-                    && let Ok(suggestions) = installer.suggest_formulas(name, 3).await
-                {
-                    suggest_formula_matches(name, &suggestions);
-                }
+                suggest_missing_formula_matches(installer, &e).await;
 
                 for formula in &formulas {
                     suggest_homebrew(formula, &e);

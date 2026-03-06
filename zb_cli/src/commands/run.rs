@@ -5,7 +5,7 @@ use std::process::Command;
 use zb_core::formula_token;
 use zb_io::Installer;
 
-use crate::utils::{normalize_formula_name, suggest_formula_matches};
+use crate::utils::{normalize_formula_name, suggest_missing_formula_matches};
 
 /// Prepare a package for execution by ensuring it's installed
 /// Returns the path to the executable
@@ -65,11 +65,7 @@ pub async fn execute(
     let bin_path = match prepare_execution(installer, &formula).await {
         Ok(path) => path,
         Err(e) => {
-            if let zb_core::Error::MissingFormula { name } = &e
-                && let Ok(suggestions) = installer.suggest_formulas(name, 3).await
-            {
-                suggest_formula_matches(name, &suggestions);
-            }
+            suggest_missing_formula_matches(installer, &e).await;
             return Err(e);
         }
     };
