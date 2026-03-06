@@ -1,5 +1,8 @@
+use std::sync::{Arc, RwLock};
+
 use crate::checksum::verify_sha256_bytes;
 use crate::network::cache::{ApiCache, CacheEntry};
+use crate::network::suggest::rank_formula_suggestions;
 use crate::network::tap_formula::{parse_tap_formula_ref, parse_tap_formula_ruby};
 use futures_util::stream::{self, StreamExt};
 use zb_core::{Error, Formula};
@@ -54,6 +57,16 @@ enum CachedGetResult {
     Fresh(reqwest::Response),
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct FormulaSuggestionEntry {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    oldnames: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct ApiClient {
     base_url: String,
@@ -61,6 +74,7 @@ pub struct ApiClient {
     tap_raw_base_url: String,
     client: reqwest::Client,
     cache: Option<ApiCache>,
+    formula_candidates: Arc<RwLock<Option<Vec<String>>>>,
 }
 
 impl ApiClient {
@@ -105,6 +119,7 @@ impl ApiClient {
             tap_raw_base_url: "https://raw.githubusercontent.com".to_string(),
             client,
             cache: None,
+            formula_candidates: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -345,6 +360,87 @@ impl ApiClient {
                 self.store_response_in_cache(&url, etag, last_modified, &body);
                 Ok(body)
             }
+        }
+    }
+
+    pub async fn suggest_formulas(&self, query: &str, limit: usize) -> Result<Vec<String>, Error> {
+        if limit == 0 || query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if parse_tap_formula_ref(query).is_some() || query.starts_with("cask:") {
+            return Ok(Vec::new());
+        }
+
+        let candidates = self.formula_candidates().await?;
+        Ok(rank_formula_suggestions(query, &candidates, limit))
+    }
+
+    async fn formula_candidates(&self) -> Result<Vec<String>, Error> {
+        if let Some(candidates) = self.cached_formula_candidates() {
+            return Ok(candidates);
+        }
+
+        let raw = self.get_all_formulas_raw().await?;
+        let candidates = Self::extract_formula_candidates(&raw)?;
+        self.store_formula_candidates(candidates.clone());
+        Ok(candidates)
+    }
+
+    fn cached_formula_candidates(&self) -> Option<Vec<String>> {
+        self.formula_candidates
+            .read()
+            .ok()
+            .and_then(|candidates| candidates.clone())
+    }
+
+    fn store_formula_candidates(&self, candidates: Vec<String>) {
+        if let Ok(mut cached) = self.formula_candidates.write() {
+            *cached = Some(candidates);
+        }
+    }
+
+    fn extract_formula_candidates(raw: &str) -> Result<Vec<String>, Error> {
+        use std::collections::HashSet;
+
+        let entries: Vec<FormulaSuggestionEntry> =
+            serde_json::from_str(raw).map_err(|e| Error::NetworkFailure {
+                message: format!("failed to parse bulk formula JSON: {e}"),
+            })?;
+
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+
+        for entry in entries {
+            Self::push_candidate(&mut candidates, &mut seen, entry.name.as_deref());
+
+            for alias in &entry.aliases {
+                Self::push_candidate(&mut candidates, &mut seen, Some(alias.as_str()));
+            }
+
+            for oldname in &entry.oldnames {
+                Self::push_candidate(&mut candidates, &mut seen, Some(oldname.as_str()));
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    fn push_candidate(
+        candidates: &mut Vec<String>,
+        seen: &mut std::collections::HashSet<String>,
+        value: Option<&str>,
+    ) {
+        let Some(name) = value.map(str::trim) else {
+            return;
+        };
+
+        if name.is_empty() {
+            return;
+        }
+
+        if seen.insert(name.to_string()) {
+            candidates.push(name.to_string());
         }
     }
 
@@ -1107,5 +1203,86 @@ end
         assert_eq!(formulas.len(), 1);
         assert_eq!(formulas[0].name, "foo");
         assert_eq!(formulas[0].versions.stable, "1.2.3");
+    }
+
+    #[test]
+    fn formula_suggestion_entry_defaults_optional_lists() {
+        let entry: FormulaSuggestionEntry = serde_json::from_str(r#"{"name":"python"}"#).unwrap();
+
+        assert_eq!(entry.name.as_deref(), Some("python"));
+        assert!(entry.aliases.is_empty());
+        assert!(entry.oldnames.is_empty());
+    }
+
+    #[test]
+    fn extract_formula_candidates_includes_name_aliases_and_oldnames() {
+        let bulk = r#"[
+            {"name":"python","aliases":["python@3.13"],"oldnames":["python3"]},
+            {"name":"ripgrep","aliases":["rg"]}
+        ]"#;
+
+        let candidates = ApiClient::extract_formula_candidates(bulk).unwrap();
+        assert!(candidates.contains(&"python".to_string()));
+        assert!(candidates.contains(&"python@3.13".to_string()));
+        assert!(candidates.contains(&"python3".to_string()));
+        assert!(candidates.contains(&"ripgrep".to_string()));
+        assert!(candidates.contains(&"rg".to_string()));
+    }
+
+    #[tokio::test]
+    async fn suggest_formulas_returns_ranked_matches_from_bulk_index() {
+        let mock_server = MockServer::start().await;
+        let bulk = r#"[
+            {"name":"python","aliases":["python@3.13"],"oldnames":["python3"]},
+            {"name":"pytest"},
+            {"name":"pypy"}
+        ]"#;
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(bulk))
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+        let suggestions = client.suggest_formulas("pythn", 3).await.unwrap();
+
+        assert_eq!(suggestions.first().map(String::as_str), Some("python"));
+    }
+
+    #[tokio::test]
+    async fn suggest_formulas_reuses_cached_candidates_across_calls() {
+        let mock_server = MockServer::start().await;
+        let bulk = r#"[
+            {"name":"python"},
+            {"name":"pytest"},
+            {"name":"pypy"}
+        ]"#;
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(bulk))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+
+        let first = client.suggest_formulas("pythn", 3).await.unwrap();
+        let second = client.suggest_formulas("pythn", 3).await.unwrap();
+
+        assert_eq!(first.first().map(String::as_str), Some("python"));
+        assert_eq!(second.first().map(String::as_str), Some("python"));
+    }
+
+    #[tokio::test]
+    async fn suggest_formulas_returns_empty_for_tap_references() {
+        let client = ApiClient::new();
+        let suggestions = client
+            .suggest_formulas("hashicorp/tap/terraform", 3)
+            .await
+            .unwrap();
+
+        assert!(suggestions.is_empty());
     }
 }
