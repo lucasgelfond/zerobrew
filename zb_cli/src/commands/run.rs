@@ -65,7 +65,7 @@ pub async fn execute(
     let bin_path = match prepare_execution(installer, &formula).await {
         Ok(path) => path,
         Err(e) => {
-            suggest_missing_formula_matches(installer, &e).await;
+            let _ = suggest_missing_formula_matches(installer, &e).await;
             return Err(e);
         }
     };

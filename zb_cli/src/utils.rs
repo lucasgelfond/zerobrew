@@ -49,6 +49,14 @@ pub fn format_formula_suggestions(requested: &str, suggestions: &[String]) -> Op
         rendered.push_str(&format!("      {}\n", style(suggestion).green()));
     }
 
+    if let Some(top_suggestion) = suggestions.first() {
+        rendered.push_str("\n      Try installing the closest match with zerobrew:\n");
+        rendered.push_str(&format!(
+            "      {}\n",
+            style(format!("zb install {top_suggestion}")).cyan()
+        ));
+    }
+
     Some(rendered)
 }
 
@@ -60,12 +68,18 @@ pub fn suggest_formula_matches(requested: &str, suggestions: &[String]) {
     }
 }
 
-pub async fn suggest_missing_formula_matches(installer: &Installer, error: &zb_core::Error) {
-    if let zb_core::Error::MissingFormula { name } = error
-        && let Ok(suggestions) = installer.suggest_formulas(name, 3).await
-    {
-        suggest_formula_matches(name, &suggestions);
+pub async fn suggest_missing_formula_matches(
+    installer: &Installer,
+    error: &zb_core::Error,
+) -> bool {
+    if let zb_core::Error::MissingFormula { name } = error {
+        if let Ok(suggestions) = installer.suggest_formulas(name, 3).await {
+            suggest_formula_matches(name, &suggestions);
+        }
+        return true;
     }
+
+    false
 }
 
 pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
@@ -183,6 +197,7 @@ mod tests {
         assert!(rendered.contains("Did you mean"));
         assert!(rendered.contains("python"));
         assert!(rendered.contains("pytest"));
+        assert!(rendered.contains("zb install python"));
     }
 
     #[test]
@@ -224,6 +239,28 @@ mod tests {
             name: "pythn".to_string(),
         };
 
-        suggest_missing_formula_matches(&installer, &error).await;
+        assert!(suggest_missing_formula_matches(&installer, &error).await);
+    }
+
+    #[tokio::test]
+    async fn suggest_missing_formula_matches_returns_false_for_non_missing_errors() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::new();
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix);
+
+        let error = zb_core::Error::InvalidArgument {
+            message: "bad formula".to_string(),
+        };
+
+        assert!(!suggest_missing_formula_matches(&installer, &error).await);
     }
 }

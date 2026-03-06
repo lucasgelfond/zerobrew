@@ -49,10 +49,12 @@ pub async fn execute(
         {
             Ok(p) => p,
             Err(e) => {
-                suggest_missing_formula_matches(installer, &e).await;
+                let handled_missing = suggest_missing_formula_matches(installer, &e).await;
 
-                for formula in &formulas {
-                    suggest_homebrew(formula, &e);
+                if !handled_missing {
+                    for formula in &formulas {
+                        suggest_homebrew(formula, &e);
+                    }
                 }
                 return Err(e);
             }
@@ -213,10 +215,12 @@ pub async fn execute(
                 return Err(e.clone());
             }
             Err(e) => {
-                suggest_missing_formula_matches(installer, &e).await;
+                let handled_missing = suggest_missing_formula_matches(installer, &e).await;
 
-                for formula in &formulas {
-                    suggest_homebrew(formula, &e);
+                if !handled_missing {
+                    for formula in &formulas {
+                        suggest_homebrew(formula, &e);
+                    }
                 }
                 return Err(e);
             }
