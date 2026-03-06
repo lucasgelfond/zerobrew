@@ -57,6 +57,16 @@ enum CachedGetResult {
     Fresh(reqwest::Response),
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct FormulaSuggestionEntry {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    oldnames: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct ApiClient {
     base_url: String,
@@ -393,7 +403,7 @@ impl ApiClient {
     fn extract_formula_candidates(raw: &str) -> Result<Vec<String>, Error> {
         use std::collections::HashSet;
 
-        let values: Vec<serde_json::Value> =
+        let entries: Vec<FormulaSuggestionEntry> =
             serde_json::from_str(raw).map_err(|e| Error::NetworkFailure {
                 message: format!("failed to parse bulk formula JSON: {e}"),
             })?;
@@ -401,15 +411,15 @@ impl ApiClient {
         let mut seen = HashSet::new();
         let mut candidates = Vec::new();
 
-        for value in values {
-            Self::push_candidate(&mut candidates, &mut seen, value.get("name"));
+        for entry in entries {
+            Self::push_candidate(&mut candidates, &mut seen, entry.name.as_deref());
 
-            for key in ["aliases", "oldnames"] {
-                if let Some(items) = value.get(key).and_then(serde_json::Value::as_array) {
-                    for item in items {
-                        Self::push_candidate(&mut candidates, &mut seen, Some(item));
-                    }
-                }
+            for alias in &entry.aliases {
+                Self::push_candidate(&mut candidates, &mut seen, Some(alias.as_str()));
+            }
+
+            for oldname in &entry.oldnames {
+                Self::push_candidate(&mut candidates, &mut seen, Some(oldname.as_str()));
             }
         }
 
@@ -419,9 +429,9 @@ impl ApiClient {
     fn push_candidate(
         candidates: &mut Vec<String>,
         seen: &mut std::collections::HashSet<String>,
-        value: Option<&serde_json::Value>,
+        value: Option<&str>,
     ) {
-        let Some(name) = value.and_then(serde_json::Value::as_str).map(str::trim) else {
+        let Some(name) = value.map(str::trim) else {
             return;
         };
 
@@ -1193,6 +1203,15 @@ end
         assert_eq!(formulas.len(), 1);
         assert_eq!(formulas[0].name, "foo");
         assert_eq!(formulas[0].versions.stable, "1.2.3");
+    }
+
+    #[test]
+    fn formula_suggestion_entry_defaults_optional_lists() {
+        let entry: FormulaSuggestionEntry = serde_json::from_str(r#"{"name":"python"}"#).unwrap();
+
+        assert_eq!(entry.name.as_deref(), Some("python"));
+        assert!(entry.aliases.is_empty());
+        assert!(entry.oldnames.is_empty());
     }
 
     #[test]
