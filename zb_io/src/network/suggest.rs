@@ -48,13 +48,7 @@ where
                 1.0 - (distance as f64 / max_len as f64)
             };
 
-            let prefix_bonus = if normalized.starts_with(&query) || query.starts_with(&normalized) {
-                0.15
-            } else {
-                0.0
-            };
-
-            let score = (similarity + prefix_bonus).min(1.0);
+            let score = similarity;
             if score < MIN_SIMILARITY_SCORE {
                 return None;
             }
@@ -158,5 +152,18 @@ mod tests {
         assert_eq!(max_len_delta(3), 3);
         assert_eq!(max_len_delta(5), 4);
         assert_eq!(max_len_delta(9), 7);
+    }
+
+    #[test]
+    fn does_not_keep_short_prefix_only_matches() {
+        let candidates = vec![
+            "git".to_string(),
+            "gnupg".to_string(),
+            "ripgrep".to_string(),
+        ];
+
+        let suggestions = rank_formula_suggestions("gitignore", &candidates, 3);
+
+        assert!(!suggestions.iter().any(|candidate| candidate == "git"));
     }
 }
