@@ -11,6 +11,18 @@ struct CandidateScore {
 }
 
 pub fn rank_formula_suggestions(query: &str, candidates: &[String], limit: usize) -> Vec<String> {
+    rank_formula_suggestions_with(query, candidates, limit, damerau_levenshtein)
+}
+
+fn rank_formula_suggestions_with<F>(
+    query: &str,
+    candidates: &[String],
+    limit: usize,
+    mut distance_fn: F,
+) -> Vec<String>
+where
+    F: FnMut(&str, &str) -> usize,
+{
     if limit == 0 {
         return Vec::new();
     }
@@ -24,11 +36,11 @@ pub fn rank_formula_suggestions(query: &str, candidates: &[String], limit: usize
         .iter()
         .filter_map(|candidate| {
             let normalized = candidate.trim().to_ascii_lowercase();
-            if normalized.is_empty() {
+            if normalized.is_empty() || !is_plausible_candidate(&query, &normalized) {
                 return None;
             }
 
-            let distance = damerau_levenshtein(&query, &normalized);
+            let distance = distance_fn(&query, &normalized);
             let max_len = query.len().max(normalized.len());
             let similarity = if max_len == 0 {
                 1.0
@@ -68,9 +80,21 @@ pub fn rank_formula_suggestions(query: &str, candidates: &[String], limit: usize
     scored.into_iter().take(limit).map(|s| s.name).collect()
 }
 
+fn is_plausible_candidate(query: &str, candidate: &str) -> bool {
+    query.len().abs_diff(candidate.len()) <= max_len_delta(query.len())
+}
+
+fn max_len_delta(query_len: usize) -> usize {
+    query_len.saturating_mul(2) / 3 + 1
+}
+
 #[cfg(test)]
 mod tests {
-    use super::rank_formula_suggestions;
+    use std::cell::Cell;
+
+    use strsim::damerau_levenshtein;
+
+    use super::{max_len_delta, rank_formula_suggestions, rank_formula_suggestions_with};
 
     #[test]
     fn ranks_common_typo_as_top_match() {
@@ -107,5 +131,32 @@ mod tests {
 
         let suggestions = rank_formula_suggestions("git", &candidates, 2);
         assert_eq!(suggestions.len(), 2);
+    }
+
+    #[test]
+    fn skips_edit_distance_for_implausible_length_deltas() {
+        let candidates = vec![
+            "git".to_string(),
+            "gitea".to_string(),
+            "super-long-package-name".to_string(),
+            "another-extremely-long-formula-name".to_string(),
+        ];
+        let distance_calls = Cell::new(0usize);
+
+        let suggestions =
+            rank_formula_suggestions_with("git", &candidates, 3, |query, candidate| {
+                distance_calls.set(distance_calls.get() + 1);
+                damerau_levenshtein(query, candidate)
+            });
+
+        assert_eq!(distance_calls.get(), 2);
+        assert_eq!(suggestions.first().map(String::as_str), Some("git"));
+    }
+
+    #[test]
+    fn max_len_delta_scales_with_query_length() {
+        assert_eq!(max_len_delta(3), 3);
+        assert_eq!(max_len_delta(5), 4);
+        assert_eq!(max_len_delta(9), 7);
     }
 }
