@@ -56,6 +56,9 @@ fn select_bottle_with_version(
     formula: &Formula,
     macos_version: Option<u32>,
 ) -> Result<SelectedBottle, Error> {
+    // Consumed only in #[cfg(target_os = "macos")] blocks; silence unused-variable on Linux.
+    let _ = &macos_version;
+
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         let codenames = compatible_codenames(macos_version);
