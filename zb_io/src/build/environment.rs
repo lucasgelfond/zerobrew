@@ -62,6 +62,16 @@ pub fn build_env(plan: &BuildPlan, prefix: &Path) -> HashMap<String, String> {
 
     env.insert("MAKEFLAGS".into(), format!("-j{}", num_cpus()));
 
+    #[cfg(target_os = "macos")]
+    if !env.contains_key("MACOSX_DEPLOYMENT_TARGET") {
+        let target = std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| {
+            zb_core::macos_major_version()
+                .map(|v| format!("{v}.0"))
+                .unwrap_or_else(|| "15.0".to_string())
+        });
+        env.insert("MACOSX_DEPLOYMENT_TARGET".into(), target);
+    }
+
     env
 }
 
@@ -69,4 +79,48 @@ fn num_cpus() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use zb_core::{BuildPlan, BuildSystem};
+
+    fn test_plan() -> BuildPlan {
+        BuildPlan {
+            formula_name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            source_url: "https://example.com/test.tar.gz".to_string(),
+            source_checksum: None,
+            ruby_source_path: None,
+            build_dependencies: Vec::new(),
+            runtime_dependencies: Vec::new(),
+            detected_system: BuildSystem::Autoconf,
+            prefix: PathBuf::from("/opt/zerobrew/prefix"),
+            cellar_path: PathBuf::from("/opt/zerobrew/cellar/test/1.0.0"),
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn build_env_includes_macosx_deployment_target() {
+        let plan = test_plan();
+        let env = build_env(&plan, &PathBuf::from("/opt/zerobrew/prefix"));
+        assert!(env.contains_key("MACOSX_DEPLOYMENT_TARGET"));
+        let target = &env["MACOSX_DEPLOYMENT_TARGET"];
+        assert!(
+            target.contains('.'),
+            "expected version format like '15.0', got '{target}'"
+        );
+    }
+
+    #[test]
+    fn build_env_includes_standard_vars() {
+        let plan = test_plan();
+        let env = build_env(&plan, &PathBuf::from("/opt/zerobrew/prefix"));
+        assert!(env.contains_key("ZEROBREW_PREFIX"));
+        assert!(env.contains_key("ZEROBREW_FORMULA_NAME"));
+        assert!(env.contains_key("MAKEFLAGS"));
+    }
 }
