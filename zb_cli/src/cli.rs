@@ -19,12 +19,7 @@ pub struct Cli {
     )]
     pub concurrency: usize,
 
-    #[arg(
-        long = "auto-init",
-        alias = "yes",
-        global = true,
-        env = "ZEROBREW_AUTO_INIT"
-    )]
+    #[arg(long = "auto-init", global = true, env = "ZEROBREW_AUTO_INIT")]
     pub auto_init: bool,
 
     #[arg(long, short = 'v', global = true, action = clap::ArgAction::Count)]
