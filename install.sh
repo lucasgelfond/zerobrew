@@ -77,6 +77,22 @@ fi
 export ZEROBREW_ROOT
 export ZEROBREW_PREFIX
 
+# Ensure system tools are used instead of zerobrew-installed ones.
+# A prior `zb init` adds $ZEROBREW_PREFIX/bin to PATH, which can cause
+# zerobrew's curl/git (linked against zerobrew's OpenSSL) to be used by
+# this script. On some macOS versions that leads to dyld symbol errors.
+# see https://github.com/lucasgelfond/zerobrew/issues/288
+sanitized_path=""
+IFS=':' read -ra _path_parts <<< "$PATH"
+for _p in "${_path_parts[@]}"; do
+    case "$_p" in
+        "$ZEROBREW_PREFIX"/bin|"$ZEROBREW_ROOT"/bin) ;;
+        *) sanitized_path="${sanitized_path:+$sanitized_path:}$_p" ;;
+    esac
+done
+export PATH="$sanitized_path"
+unset sanitized_path _path_parts _p
+
 # Prevent running with sudo - the script handles its own privilege escalation
 if [[ $EUID -eq 0 ]]; then
     error_exit "Do not run this script with sudo or as root. The installer will automatically request privileges when needed."
