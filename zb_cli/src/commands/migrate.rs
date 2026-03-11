@@ -89,33 +89,21 @@ pub async fn execute(
     ))
     .map_err(ui_error)?;
 
-    let mut success_count = 0;
-    let mut failed: Vec<String> = Vec::new();
+    let formula_names: Vec<String> = packages.formulas.iter().map(|f| f.name.clone()).collect();
 
-    for pkg in &packages.formulas {
-        ui.step_start(&pkg.name).map_err(ui_error)?;
+    crate::commands::install::execute(
+        installer,
+        formula_names.clone(),
+        false, // no_link
+        false, // build_from_source
+        ui,
+    )
+    .await
+    .ok();
 
-        match installer.plan(std::slice::from_ref(&pkg.name)).await {
-            Ok(plan) => match installer.execute(plan, true).await {
-                Ok(_) => {
-                    ui.step_ok().map_err(ui_error)?;
-                    success_count += 1;
-                }
-                Err(e) => {
-                    ui.step_fail().map_err(ui_error)?;
-                    ui.error(format!("Failed to install: {}", e))
-                        .map_err(ui_error)?;
-                    failed.push(pkg.name.clone());
-                }
-            },
-            Err(e) => {
-                ui.step_fail().map_err(ui_error)?;
-                ui.error(format!("Failed to plan: {}", e))
-                    .map_err(ui_error)?;
-                failed.push(pkg.name.clone());
-            }
-        }
-    }
+    let (successfully_installed, failed_installed) =
+        check_install_status(installer, &formula_names)?;
+    let success_count = successfully_installed.len();
 
     ui.blank_line().map_err(ui_error)?;
     ui.heading(format!(
@@ -125,10 +113,13 @@ pub async fn execute(
     ))
     .map_err(ui_error)?;
 
-    if !failed.is_empty() {
-        ui.note(format!("Failed to migrate {} formula(s):", failed.len()))
-            .map_err(ui_error)?;
-        for name in &failed {
+    if !failed_installed.is_empty() {
+        ui.note(format!(
+            "Failed to migrate {} formula(s):",
+            failed_installed.len()
+        ))
+        .map_err(ui_error)?;
+        for name in &failed_installed {
             ui.bullet(name).map_err(ui_error)?;
         }
         ui.blank_line().map_err(ui_error)?;
@@ -161,44 +152,52 @@ pub async fn execute(
     ui.heading("Uninstalling from Homebrew...")
         .map_err(ui_error)?;
 
-    let mut uninstalled = 0;
-    let mut uninstall_failed: Vec<String> = Vec::new();
-
-    for pkg in &packages.formulas {
-        if failed.contains(&pkg.name) {
-            continue;
-        }
-
-        ui.step_start(&pkg.name).map_err(ui_error)?;
-
-        let mut args = vec!["uninstall"];
-        if force {
-            args.push("--force");
-        }
-        args.push(&pkg.name);
-
-        let status = Command::new("brew")
-            .args(&args)
-            .status()
-            .map_err(|e| format!("Failed to run brew uninstall: {}", e));
-
-        match status {
-            Ok(s) if s.success() => {
-                ui.step_ok().map_err(ui_error)?;
-                uninstalled += 1;
-            }
-            Ok(_) => {
-                ui.step_fail().map_err(ui_error)?;
-                uninstall_failed.push(pkg.name.clone());
-            }
-            Err(e) => {
-                ui.step_fail().map_err(ui_error)?;
-                ui.error(e).map_err(ui_error)?;
-                uninstall_failed.push(pkg.name.clone());
-            }
-        }
+    if successfully_installed.is_empty() {
+        return Ok(());
     }
 
+    ui.step_start(format!(
+        "uninstalling {} formulas combined",
+        successfully_installed.len()
+    ))
+    .map_err(ui_error)?;
+
+    let mut args = vec!["uninstall"];
+    if force {
+        args.push("--force");
+    }
+    for target in &successfully_installed {
+        args.push(target);
+    }
+
+    let status = Command::new("brew")
+        .args(&args)
+        .status()
+        .map_err(|e| format!("Failed to run brew uninstall: {}", e));
+
+    let uninstall_failed = match status {
+        Ok(s) if s.success() => {
+            ui.step_ok().map_err(ui_error)?;
+            Vec::new()
+        }
+        res => {
+            ui.step_fail().map_err(ui_error)?;
+            if let Err(e) = res {
+                ui.error(e).map_err(ui_error)?;
+            }
+            let mut actually_failed = successfully_installed.clone();
+            if let Ok(output) = Command::new("brew").args(["list", "--formula"]).output()
+                && output.status.success()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let still_installed: std::collections::HashSet<&str> = stdout.lines().collect();
+                actually_failed.retain(|target| still_installed.contains(target.as_str()));
+            }
+            actually_failed
+        }
+    };
+
+    let uninstalled = successfully_installed.len() - uninstall_failed.len();
     ui.blank_line().map_err(ui_error)?;
     ui.heading(format!(
         "Uninstalled {} of {} formula(s) from Homebrew",
@@ -223,6 +222,34 @@ pub async fn execute(
     }
 
     Ok(())
+}
+
+// FIXME: Abstract this return type to a more structured type (e.g., a struct)
+fn check_install_status(
+    installer: &zb_io::Installer,
+    formula_names: &[String],
+) -> Result<(Vec<String>, Vec<String>), zb_core::Error> {
+    let mut successfully_installed = Vec::new();
+    let mut failed_installed = Vec::new();
+
+    let installed_kegs =
+        installer
+            .list_installed()
+            .map_err(|e| zb_core::Error::StoreCorruption {
+                message: format!("Failed to verify installation status: {}", e),
+            })?;
+
+    let installed_names: std::collections::HashSet<String> =
+        installed_kegs.into_iter().map(|k| k.name).collect();
+    for name in formula_names {
+        if !installed_names.contains(name) {
+            failed_installed.push(name.clone());
+        } else {
+            successfully_installed.push(name.clone());
+        }
+    }
+
+    Ok((successfully_installed, failed_installed))
 }
 
 fn ui_error(err: std::io::Error) -> zb_core::Error {
