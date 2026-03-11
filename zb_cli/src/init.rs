@@ -492,7 +492,13 @@ mod tests {
         )
     }
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn needs_init_when_directories_missing() {
@@ -572,6 +578,7 @@ mod tests {
 
     #[test]
     fn add_to_path_writes_core_env_vars_with_guarded_ca_setup() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -617,6 +624,7 @@ mod tests {
 
     #[test]
     fn add_to_path_includes_path_append_function() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -645,6 +653,7 @@ mod tests {
 
     #[test]
     fn add_to_path_adds_both_paths() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -672,6 +681,7 @@ mod tests {
 
     #[test]
     fn add_to_path_no_modify_shell_skips_write() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -698,6 +708,7 @@ mod tests {
 
     #[test]
     fn add_to_path_no_duplicate_config() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -738,6 +749,7 @@ mod tests {
 
     #[test]
     fn add_to_path_uses_zshrc_for_zsh() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -764,6 +776,7 @@ mod tests {
 
     #[test]
     fn add_to_path_prefers_zshenv_when_exists() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -800,6 +813,7 @@ mod tests {
 
     #[test]
     fn add_to_path_prefers_bash_profile_when_exists() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -832,6 +846,7 @@ mod tests {
 
     #[test]
     fn add_to_path_uses_profile_for_other_shells() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -859,6 +874,7 @@ mod tests {
 
     #[test]
     fn add_to_path_uses_zdotdir_when_set() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let zdotdir = tmp.path().join("zsh_config");
@@ -893,6 +909,7 @@ mod tests {
 
     #[test]
     fn add_to_path_uses_fish_conf_d_for_fish() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let prefix = tmp.path().join("prefix");
@@ -932,6 +949,7 @@ mod tests {
 
     #[test]
     fn add_to_path_falls_back_to_home_zshrc_when_zdotdir_files_missing() {
+        let _lock = env_lock();
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let zdotdir = tmp.path().join("zsh_config");

@@ -301,6 +301,7 @@ mod tests {
         ui.heading("hello").unwrap();
 
         let out = String::from_utf8(ui.out).unwrap();
-        assert!(out.contains("-> hello"));
+        let stripped = console::strip_ansi_codes(&out).into_owned();
+        assert!(stripped.contains("-> hello"));
     }
 }
