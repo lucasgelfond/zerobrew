@@ -233,7 +233,16 @@ mod tests {
         let cellar = Cellar::new(&root).unwrap();
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
-        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix);
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix,
+            root.join("locks"),
+        );
 
         let error = zb_core::Error::MissingFormula {
             name: "pythn".to_string(),
@@ -255,7 +264,16 @@ mod tests {
         let cellar = Cellar::new(&root).unwrap();
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
-        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix);
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix,
+            root.join("locks"),
+        );
 
         let error = zb_core::Error::InvalidArgument {
             message: "bad formula".to_string(),

@@ -244,6 +244,7 @@ mod tests {
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         assert!(!installer.is_installed("testrun"));
@@ -322,6 +323,7 @@ mod tests {
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         installer
@@ -375,6 +377,7 @@ mod tests {
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         let result = prepare_execution(&mut installer, "nonexistent").await;
