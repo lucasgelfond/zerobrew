@@ -62,18 +62,18 @@ pub fn parse_casks_from_plain_text(output: &str) -> Vec<HomebrewPackage> {
 /// - Formulas from homebrew/core (migratable)
 /// - Formulas from other taps (not migratable)
 /// - Cask packages (not migratable)
-pub fn categorize_packages(packages: &[HomebrewPackage]) -> HomebrewMigrationPackages {
+pub fn categorize_packages(packages: Vec<HomebrewPackage>) -> HomebrewMigrationPackages {
     let mut formulas = Vec::new();
     let mut non_core_formulas = Vec::new();
     let mut casks = Vec::new();
 
     for pkg in packages {
         if pkg.is_cask {
-            casks.push(pkg.clone());
+            casks.push(pkg);
         } else if pkg.tap == "homebrew/core" {
-            formulas.push(pkg.clone());
+            formulas.push(pkg);
         } else {
-            non_core_formulas.push(pkg.clone());
+            non_core_formulas.push(pkg);
         }
     }
 
@@ -131,7 +131,7 @@ pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, zb_core::Err
     let casks = parse_casks_from_plain_text(&String::from_utf8_lossy(&casks_output.stdout));
 
     let all_packages: Vec<HomebrewPackage> = formulas.into_iter().chain(casks).collect();
-    Ok(categorize_packages(&all_packages))
+    Ok(categorize_packages(all_packages))
 }
 #[cfg(test)]
 mod tests {
@@ -229,7 +229,7 @@ mod tests {
             },
         ];
 
-        let result = categorize_packages(&packages);
+        let result = categorize_packages(packages);
 
         assert_eq!(result.formulas.len(), 2);
         assert!(result.non_core_formulas.is_empty());
@@ -251,7 +251,7 @@ mod tests {
             },
         ];
 
-        let result = categorize_packages(&packages);
+        let result = categorize_packages(packages);
 
         assert!(result.formulas.is_empty());
         assert_eq!(result.non_core_formulas.len(), 2);
@@ -273,7 +273,7 @@ mod tests {
             },
         ];
 
-        let result = categorize_packages(&packages);
+        let result = categorize_packages(packages);
 
         assert!(result.formulas.is_empty());
         assert!(result.non_core_formulas.is_empty());
@@ -300,7 +300,7 @@ mod tests {
             },
         ];
 
-        let result = categorize_packages(&packages);
+        let result = categorize_packages(packages);
 
         assert_eq!(result.formulas.len(), 1);
         assert_eq!(result.formulas[0].name, "git");
