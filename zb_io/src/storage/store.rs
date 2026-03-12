@@ -69,7 +69,7 @@ impl Store {
 
         // Persist the temp dir by converting it into a permanent path.
         // into_path() prevents auto-cleanup so rename failure still needs manual handling.
-        let tmp_path = tmp_dir.into_path();
+        let tmp_path = tmp_dir.keep();
         if let Err(e) = fs::rename(&tmp_path, &entry_path) {
             let _ = fs::remove_dir_all(&tmp_path);
             return Err(Error::StoreCorruption {

@@ -88,41 +88,48 @@ pub fn categorize_packages(packages: &[HomebrewPackage]) -> HomebrewMigrationPac
 ///
 /// Only formulas from `homebrew/core` can be migrated to zerobrew.
 /// Formulas from other taps and all casks are collected separately.
-pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, String> {
-    // Get installed formulas
+pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, zb_core::Error> {
     let formulas_output = Command::new("brew")
         .args(["info", "--json=v1", "--installed"])
         .output()
-        .map_err(|e| format!("Failed to run 'brew info': {}", e))?;
+        .map_err(|e| zb_core::Error::ExecutionError {
+            message: format!("failed to run 'brew info': {e}"),
+        })?;
 
     if !formulas_output.status.success() {
-        return Err(format!(
-            "brew info failed: {}",
-            String::from_utf8_lossy(&formulas_output.stderr)
-        ));
+        return Err(zb_core::Error::ExecutionError {
+            message: format!(
+                "brew info failed: {}",
+                String::from_utf8_lossy(&formulas_output.stderr)
+            ),
+        });
     }
 
     let formulas_json: serde_json::Value = serde_json::from_slice(&formulas_output.stdout)
-        .map_err(|e| format!("Failed to parse brew info JSON: {}", e))?;
+        .map_err(|e| zb_core::Error::ExecutionError {
+            message: format!("failed to parse brew info JSON: {e}"),
+        })?;
 
     let formulas = parse_formulas_from_json(&formulas_json);
 
-    // Get installed casks (plain text output, no JSON support)
     let casks_output = Command::new("brew")
         .args(["list", "--cask"])
         .output()
-        .map_err(|e| format!("Failed to run 'brew list --cask': {}", e))?;
+        .map_err(|e| zb_core::Error::ExecutionError {
+            message: format!("failed to run 'brew list --cask': {e}"),
+        })?;
 
     if !casks_output.status.success() {
-        return Err(format!(
-            "brew list --cask failed: {}",
-            String::from_utf8_lossy(&casks_output.stderr)
-        ));
+        return Err(zb_core::Error::ExecutionError {
+            message: format!(
+                "brew list --cask failed: {}",
+                String::from_utf8_lossy(&casks_output.stderr)
+            ),
+        });
     }
 
     let casks = parse_casks_from_plain_text(&String::from_utf8_lossy(&casks_output.stdout));
 
-    // Combine and categorize all packages
     let all_packages: Vec<HomebrewPackage> = formulas.into_iter().chain(casks).collect();
     Ok(categorize_packages(&all_packages))
 }
