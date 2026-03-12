@@ -92,10 +92,10 @@ fn compute_closure(
 
         let formula = &formulas[idx_to_name[idx]];
         for dep in &formula.dependencies {
-            if let Some(&di) = name_to_idx.get(dep.as_str()) {
-                if !closure.contains(&di) {
-                    stack.push(di);
-                }
+            if let Some(&di) = name_to_idx.get(dep.as_str())
+                && !closure.contains(&di)
+            {
+                stack.push(di);
             }
         }
     }

@@ -11,14 +11,7 @@ pub async fn execute(
     ui.heading("Fetching installed Homebrew packages...")
         .map_err(ui_error)?;
 
-    let packages = match zb_io::get_homebrew_packages() {
-        Ok(pkgs) => pkgs,
-        Err(e) => {
-            return Err(zb_core::Error::StoreCorruption {
-                message: format!("Failed to get Homebrew packages: {}", e),
-            });
-        }
-    };
+    let packages = zb_io::get_homebrew_packages()?;
 
     if packages.formulas.is_empty()
         && packages.non_core_formulas.is_empty()
