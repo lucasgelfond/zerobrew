@@ -77,30 +77,23 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-impl Error {
-    pub fn store<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
-        move |err| Self::StoreCorruption {
-            message: format!("{ctx}: {err}"),
+macro_rules! error_helpers {
+    ($($fn_name:ident => $variant:ident),* $(,)?) => {
+        impl Error {
+            $(
+                pub fn $fn_name<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
+                    move |err| Self::$variant { message: format!("{ctx}: {err}") }
+                }
+            )*
         }
-    }
+    };
+}
 
-    pub fn network<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
-        move |err| Self::NetworkFailure {
-            message: format!("{ctx}: {err}"),
-        }
-    }
-
-    pub fn file<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
-        move |err| Self::FileError {
-            message: format!("{ctx}: {err}"),
-        }
-    }
-
-    pub fn exec<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
-        move |err| Self::ExecutionError {
-            message: format!("{ctx}: {err}"),
-        }
-    }
+error_helpers! {
+    store   => StoreCorruption,
+    network => NetworkFailure,
+    file    => FileError,
+    exec    => ExecutionError,
 }
 
 #[cfg(test)]

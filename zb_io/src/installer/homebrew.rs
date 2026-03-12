@@ -97,12 +97,9 @@ pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, Error> {
         .map_err(Error::exec("failed to run 'brew info'"))?;
 
     if !formulas_output.status.success() {
-        return Err(Error::ExecutionError {
-            message: format!(
-                "brew info failed: {}",
-                String::from_utf8_lossy(&formulas_output.stderr)
-            ),
-        });
+        return Err((Error::exec("brew info failed"))(String::from_utf8_lossy(
+            &formulas_output.stderr,
+        )));
     }
 
     let formulas_json: serde_json::Value = serde_json::from_slice(&formulas_output.stdout)
@@ -116,12 +113,9 @@ pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, Error> {
         .map_err(Error::exec("failed to run 'brew list --cask'"))?;
 
     if !casks_output.status.success() {
-        return Err(Error::ExecutionError {
-            message: format!(
-                "brew list --cask failed: {}",
-                String::from_utf8_lossy(&casks_output.stderr)
-            ),
-        });
+        return Err((Error::exec("brew list --cask failed"))(
+            String::from_utf8_lossy(&casks_output.stderr),
+        ));
     }
 
     let casks = parse_casks_from_plain_text(&String::from_utf8_lossy(&casks_output.stdout));
