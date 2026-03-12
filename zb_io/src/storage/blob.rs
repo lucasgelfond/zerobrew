@@ -67,7 +67,7 @@ impl BlobWriter {
         // On drop (e.g. if persist is never called), the temp file is auto-deleted.
         self.temp_file
             .persist(&self.final_path)
-            .map_err(|e| Error::NetworkFailure {
+            .map_err(|e| Error::StoreCorruption {
                 message: format!("failed to persist blob: {e}"),
             })?;
         Ok(self.final_path)
