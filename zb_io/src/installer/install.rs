@@ -458,162 +458,19 @@ impl Installer {
             while let Some(result) = rx.recv().await {
                 match result {
                     Ok(download) => {
-                        let idx = download.index;
-                        let item = &bottle_items[idx];
-                        let InstallMethod::Bottle(ref bottle) = item.method else {
-                            unreachable!()
-                        };
-                        let processed_name = item.install_name.clone();
-                        let materialized_name = item.formula.name.clone();
-                        let processed_version = item.formula.effective_version();
-                        let processed_store_key = bottle.sha256.clone();
-
-                        report(InstallProgress::UnpackStarted {
-                            name: materialized_name.clone(),
-                        });
-
-                        let store_entry = match self
-                            .extract_with_retry(
+                        match self
+                            .process_bottle_item(
+                                &bottle_items[download.index],
                                 &download,
-                                &item.formula,
-                                bottle,
-                                download_progress.clone(),
+                                &download_progress,
+                                link,
+                                &report,
                             )
                             .await
                         {
-                            Ok(entry) => entry,
-                            Err(e) => {
-                                error = Some(e);
-                                continue;
-                            }
-                        };
-
-                        let keg_path = match self.cellar.materialize(
-                            &materialized_name,
-                            &processed_version,
-                            &store_entry,
-                        ) {
-                            Ok(path) => path,
-                            Err(e) => {
-                                error = Some(e);
-                                continue;
-                            }
-                        };
-
-                        report(InstallProgress::UnpackCompleted {
-                            name: materialized_name.clone(),
-                        });
-
-                        let tx = match self.db.transaction() {
-                            Ok(tx) => tx,
-                            Err(e) => {
-                                Self::cleanup_materialized(
-                                    &self.cellar,
-                                    &materialized_name,
-                                    &processed_version,
-                                );
-                                error = Some(e);
-                                continue;
-                            }
-                        };
-
-                        if let Err(e) = tx.record_install(
-                            &processed_name,
-                            &processed_version,
-                            &processed_store_key,
-                        ) {
-                            drop(tx);
-                            Self::cleanup_materialized(
-                                &self.cellar,
-                                &materialized_name,
-                                &processed_version,
-                            );
-                            error = Some(e);
-                            continue;
+                            Ok(()) => installed += 1,
+                            Err(e) => error = Some(e),
                         }
-
-                        if let Err(e) = tx.commit() {
-                            Self::cleanup_materialized(
-                                &self.cellar,
-                                &materialized_name,
-                                &processed_version,
-                            );
-                            error = Some(e);
-                            continue;
-                        }
-
-                        if let Err(e) = self.linker.link_opt(&keg_path) {
-                            warn!(formula = %processed_name, error = %e, "failed to create opt link");
-                        }
-
-                        let should_link = link && !item.formula.is_keg_only();
-
-                        let linked_files = if should_link {
-                            report(InstallProgress::LinkStarted {
-                                name: materialized_name.clone(),
-                            });
-                            match self.linker.link_keg(&keg_path) {
-                                Ok(files) => {
-                                    report(InstallProgress::LinkCompleted {
-                                        name: materialized_name.clone(),
-                                    });
-                                    files
-                                }
-                                Err(e) => {
-                                    let _ = self.linker.unlink_keg(&keg_path);
-                                    error = Some(e);
-                                    installed += 1;
-                                    report(InstallProgress::InstallCompleted {
-                                        name: materialized_name.clone(),
-                                    });
-                                    continue;
-                                }
-                            }
-                        } else {
-                            if link && item.formula.is_keg_only() {
-                                let reason = match &item.formula.keg_only {
-                                    zb_core::KegOnly::Reason(s) => s.clone(),
-                                    _ if item.formula.name.contains('@') => {
-                                        "versioned formula".to_string()
-                                    }
-                                    _ => "keg-only formula".to_string(),
-                                };
-                                report(InstallProgress::LinkSkipped {
-                                    name: materialized_name.clone(),
-                                    reason,
-                                });
-                            }
-                            Vec::new()
-                        };
-
-                        if !linked_files.is_empty()
-                            && let Ok(tx) = self.db.transaction()
-                        {
-                            let mut ok = true;
-                            for linked in &linked_files {
-                                if tx
-                                    .record_linked_file(
-                                        &processed_name,
-                                        &processed_version,
-                                        &linked.link_path.to_string_lossy(),
-                                        &linked.target_path.to_string_lossy(),
-                                    )
-                                    .is_err()
-                                {
-                                    ok = false;
-                                    break;
-                                }
-                            }
-                            if ok {
-                                let _ = tx.commit();
-                            }
-                        }
-
-                        report(InstallProgress::InstallCompleted {
-                            name: materialized_name.clone(),
-                        });
-
-                        installed += 1;
                     }
                     Err(e) => {
                         error = Some(e);
@@ -648,6 +505,121 @@ impl Installer {
         }
 
         Ok(ExecuteResult { installed })
+    }
+
+    async fn process_bottle_item(
+        &mut self,
+        item: &PlannedInstall,
+        download: &DownloadResult,
+        download_progress: &Option<DownloadProgressCallback>,
+        link: bool,
+        report: &impl Fn(InstallProgress),
+    ) -> Result<(), Error> {
+        let InstallMethod::Bottle(ref bottle) = item.method else {
+            unreachable!()
+        };
+        let install_name = &item.install_name;
+        let formula_name = &item.formula.name;
+        let version = item.formula.effective_version();
+        let store_key = &bottle.sha256;
+
+        report(InstallProgress::UnpackStarted {
+            name: formula_name.clone(),
+        });
+
+        let store_entry = self
+            .extract_with_retry(download, &item.formula, bottle, download_progress.clone())
+            .await?;
+
+        let keg_path = self
+            .cellar
+            .materialize(formula_name, &version, &store_entry)?;
+
+        report(InstallProgress::UnpackCompleted {
+            name: formula_name.clone(),
+        });
+
+        let tx = self.db.transaction().inspect_err(|_| {
+            Self::cleanup_materialized(&self.cellar, formula_name, &version);
+        })?;
+
+        tx.record_install(install_name, &version, store_key)
+            .inspect_err(|_| {
+                Self::cleanup_materialized(&self.cellar, formula_name, &version);
+            })?;
+
+        tx.commit().inspect_err(|_| {
+            Self::cleanup_materialized(&self.cellar, formula_name, &version);
+        })?;
+
+        if let Err(e) = self.linker.link_opt(&keg_path) {
+            warn!(formula = %install_name, error = %e, "failed to create opt link");
+        }
+
+        if link && !item.formula.is_keg_only() {
+            report(InstallProgress::LinkStarted {
+                name: formula_name.clone(),
+            });
+            match self.linker.link_keg(&keg_path) {
+                Ok(linked_files) => {
+                    report(InstallProgress::LinkCompleted {
+                        name: formula_name.clone(),
+                    });
+                    self.record_linked_files(install_name, &version, &linked_files);
+                }
+                Err(e) => {
+                    let _ = self.linker.unlink_keg(&keg_path);
+                    report(InstallProgress::InstallCompleted {
+                        name: formula_name.clone(),
+                    });
+                    return Err(e);
+                }
+            }
+        } else if link && item.formula.is_keg_only() {
+            let reason = match &item.formula.keg_only {
+                zb_core::KegOnly::Reason(s) => s.clone(),
+                _ if formula_name.contains('@') => "versioned formula".to_string(),
+                _ => "keg-only formula".to_string(),
+            };
+            report(InstallProgress::LinkSkipped {
+                name: formula_name.clone(),
+                reason,
+            });
+        }
+
+        report(InstallProgress::InstallCompleted {
+            name: formula_name.clone(),
+        });
+
+        Ok(())
+    }
+
+    fn record_linked_files(
+        &mut self,
+        name: &str,
+        version: &str,
+        linked_files: &[crate::cellar::link::LinkedFile],
+    ) {
+        if let Ok(tx) = self.db.transaction() {
+            let mut ok = true;
+            for linked in linked_files {
+                if tx
+                    .record_linked_file(
+                        name,
+                        version,
+                        &linked.link_path.to_string_lossy(),
+                        &linked.target_path.to_string_lossy(),
+                    )
+                    .is_err()
+                {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                let _ = tx.commit();
+            }
+        }
     }
 
     fn cleanup_failed_install(
