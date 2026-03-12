@@ -1,112 +1,106 @@
 use crate::{Error, Formula};
-use std::collections::{BTreeMap, BTreeSet};
-
-type InDegreeMap = BTreeMap<String, usize>;
-type AdjacencyMap = BTreeMap<String, BTreeSet<String>>;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub fn resolve_closure(
     roots: &[String],
     formulas: &BTreeMap<String, Formula>,
 ) -> Result<Vec<String>, Error> {
-    let closure = compute_closure(roots, formulas)?;
-    let (mut indegree, adjacency) = build_graph(&closure, formulas)?;
+    let name_to_idx: HashMap<&str, usize> = formulas
+        .keys()
+        .enumerate()
+        .map(|(i, k)| (k.as_str(), i))
+        .collect();
+    let idx_to_name: Vec<&str> = formulas.keys().map(|k| k.as_str()).collect();
+    let n = idx_to_name.len();
 
-    let mut ready: BTreeSet<String> = indegree
+    let closure = compute_closure(roots, formulas, &name_to_idx)?;
+
+    let mut indegree = vec![0u32; n];
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+    for &idx in &closure {
+        let formula = &formulas[idx_to_name[idx]];
+        let mut dep_indices: Vec<usize> = formula
+            .dependencies
+            .iter()
+            .filter_map(|dep| {
+                let &di = name_to_idx.get(dep.as_str())?;
+                closure.contains(&di).then_some(di)
+            })
+            .collect();
+        dep_indices.sort_unstable();
+        for di in dep_indices {
+            indegree[idx] += 1;
+            adjacency[di].push(idx);
+        }
+    }
+
+    let mut ready: BTreeSet<usize> = closure
         .iter()
-        .filter_map(|(name, count)| {
-            if *count == 0 {
-                Some(name.clone())
-            } else {
-                None
-            }
-        })
+        .copied()
+        .filter(|&i| indegree[i] == 0)
         .collect();
 
     let mut ordered = Vec::with_capacity(closure.len());
-    while let Some(name) = ready.iter().next().cloned() {
-        ready.take(&name);
-        ordered.push(name.clone());
-        if let Some(children) = adjacency.get(&name) {
-            for child in children {
-                if let Some(count) = indegree.get_mut(child) {
-                    *count -= 1;
-                    if *count == 0 {
-                        ready.insert(child.clone());
-                    }
-                }
+    while let Some(&idx) = ready.iter().next() {
+        ready.remove(&idx);
+        ordered.push(idx);
+        for &child in &adjacency[idx] {
+            indegree[child] -= 1;
+            if indegree[child] == 0 {
+                ready.insert(child);
             }
         }
     }
 
     if ordered.len() != closure.len() {
-        let cycle: Vec<String> = indegree
-            .into_iter()
-            .filter_map(|(name, count)| if count > 0 { Some(name) } else { None })
+        let cycle: Vec<String> = closure
+            .iter()
+            .filter(|&&i| indegree[i] > 0)
+            .map(|&i| idx_to_name[i].to_string())
             .collect();
         return Err(Error::DependencyCycle { cycle });
     }
 
-    Ok(ordered)
+    Ok(ordered
+        .into_iter()
+        .map(|i| idx_to_name[i].to_string())
+        .collect())
 }
 
 fn compute_closure(
     roots: &[String],
     formulas: &BTreeMap<String, Formula>,
-) -> Result<BTreeSet<String>, Error> {
+    name_to_idx: &HashMap<&str, usize>,
+) -> Result<BTreeSet<usize>, Error> {
     let mut closure = BTreeSet::new();
-    let mut stack = roots.to_vec();
+    let mut stack: Vec<usize> = Vec::with_capacity(roots.len());
 
-    while let Some(name) = stack.pop() {
-        if !closure.insert(name.clone()) {
+    for root in roots {
+        let &idx = name_to_idx
+            .get(root.as_str())
+            .ok_or_else(|| Error::MissingFormula { name: root.clone() })?;
+        stack.push(idx);
+    }
+
+    let idx_to_name: Vec<&str> = formulas.keys().map(|k| k.as_str()).collect();
+
+    while let Some(idx) = stack.pop() {
+        if !closure.insert(idx) {
             continue;
         }
 
-        let formula = formulas
-            .get(&name)
-            .ok_or_else(|| Error::MissingFormula { name: name.clone() })?;
-
-        let mut deps = formula.dependencies.clone();
-        deps.sort();
-        for dep in deps {
-            // Skip dependencies that aren't in the formulas map
-            // (they were filtered out due to missing bottles for this platform)
-            if !formulas.contains_key(&dep) {
-                continue;
-            }
-            if !closure.contains(&dep) {
-                stack.push(dep);
+        let formula = &formulas[idx_to_name[idx]];
+        for dep in &formula.dependencies {
+            if let Some(&di) = name_to_idx.get(dep.as_str()) {
+                if !closure.contains(&di) {
+                    stack.push(di);
+                }
             }
         }
     }
 
     Ok(closure)
-}
-
-fn build_graph(
-    closure: &BTreeSet<String>,
-    formulas: &BTreeMap<String, Formula>,
-) -> Result<(InDegreeMap, AdjacencyMap), Error> {
-    let mut indegree: InDegreeMap = closure.iter().map(|name| (name.clone(), 0)).collect();
-    let mut adjacency: AdjacencyMap = BTreeMap::new();
-
-    for name in closure {
-        let formula = formulas
-            .get(name)
-            .ok_or_else(|| Error::MissingFormula { name: name.clone() })?;
-        let mut deps = formula.dependencies.clone();
-        deps.sort();
-        for dep in deps {
-            if !closure.contains(&dep) {
-                continue;
-            }
-            if let Some(count) = indegree.get_mut(name) {
-                *count += 1;
-            }
-            adjacency.entry(dep).or_default().insert(name.clone());
-        }
-    }
-
-    Ok((indegree, adjacency))
 }
 
 #[cfg(test)]
