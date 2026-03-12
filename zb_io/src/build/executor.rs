@@ -42,15 +42,11 @@ impl BuildExecutor {
         let shim_path = work_dir.join("zerobrew_shim.rb");
         fs::write(&shim_path, SHIM_RUBY)
             .await
-            .map_err(|e| Error::FileError {
-                message: format!("failed to write ruby shim: {e}"),
-            })?;
+            .map_err(Error::file("failed to write ruby shim"))?;
 
         fs::create_dir_all(&plan.cellar_path)
             .await
-            .map_err(|e| Error::FileError {
-                message: format!("failed to create cellar directory: {e}"),
-            })?;
+            .map_err(Error::file("failed to create cellar directory"))?;
 
         let mut env = build_env(plan, &self.prefix);
         env.insert(
@@ -74,9 +70,7 @@ impl BuildExecutor {
         }
         fs::create_dir_all(work_dir)
             .await
-            .map_err(|e| Error::FileError {
-                message: format!("failed to create work directory: {e}"),
-            })
+            .map_err(Error::file("failed to create work directory"))
     }
 
     async fn cleanup_work_dir(&self, work_dir: &Path) {
@@ -118,9 +112,7 @@ async fn run_build(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed to execute ruby shim: {e}"),
-        })?;
+        .map_err(Error::exec("failed to execute ruby shim"))?;
 
     let stdout = child.stdout.take().ok_or_else(|| Error::ExecutionError {
         message: "failed to capture ruby shim stdout".to_string(),
@@ -132,26 +124,19 @@ async fn run_build(
     let stdout_task = tokio::spawn(stream_output_and_capture_tail(stdout, false));
     let stderr_task = tokio::spawn(stream_output_and_capture_tail(stderr, true));
 
-    let status = child.wait().await.map_err(|e| Error::ExecutionError {
-        message: format!("failed waiting for ruby shim: {e}"),
-    })?;
+    let status = child
+        .wait()
+        .await
+        .map_err(Error::exec("failed waiting for ruby shim"))?;
 
     let stdout_tail = stdout_task
         .await
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed to join stdout task: {e}"),
-        })?
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed reading stdout: {e}"),
-        })?;
+        .map_err(Error::exec("failed to join stdout task"))?
+        .map_err(Error::exec("failed reading stdout"))?;
     let stderr_tail = stderr_task
         .await
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed to join stderr task: {e}"),
-        })?
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed reading stderr: {e}"),
-        })?;
+        .map_err(Error::exec("failed to join stderr task"))?
+        .map_err(Error::exec("failed reading stderr"))?;
 
     if !status.success() {
         let mut msg = format!("source build failed (exit code: {:?})", status.code());

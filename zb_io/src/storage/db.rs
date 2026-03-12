@@ -18,9 +18,7 @@ pub struct InstalledKeg {
 
 impl Database {
     pub fn open(path: &Path) -> Result<Self, Error> {
-        let conn = Connection::open(path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to open database: {e}"),
-        })?;
+        let conn = Connection::open(path).map_err(Error::store("failed to open database"))?;
 
         Self::init_schema(&conn)?;
 
@@ -28,9 +26,8 @@ impl Database {
     }
 
     pub fn in_memory() -> Result<Self, Error> {
-        let conn = Connection::open_in_memory().map_err(|e| Error::StoreCorruption {
-            message: format!("failed to open in-memory database: {e}"),
-        })?;
+        let conn =
+            Connection::open_in_memory().map_err(Error::store("failed to open in-memory db"))?;
 
         Self::init_schema(&conn)?;
 
@@ -61,9 +58,7 @@ impl Database {
             );
             ",
         )
-        .map_err(|e| Error::StoreCorruption {
-            message: format!("failed to initialize schema: {e}"),
-        })?;
+        .map_err(Error::store("failed to initialize schema"))?;
 
         Ok(())
     }
@@ -72,9 +67,7 @@ impl Database {
         let tx = self
             .conn
             .transaction()
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to start transaction: {e}"),
-            })?;
+            .map_err(Error::store("failed to start transaction"))?;
 
         Ok(InstallTransaction { tx })
     }
@@ -102,9 +95,7 @@ impl Database {
             .prepare(
                 "SELECT name, version, store_key, installed_at FROM installed_kegs ORDER BY name",
             )
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to prepare statement: {e}"),
-            })?;
+            .map_err(Error::store("failed to prepare statement"))?;
 
         let kegs = stmt
             .query_map([], |row| {
@@ -115,13 +106,9 @@ impl Database {
                     installed_at: row.get(3)?,
                 })
             })
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to query installed kegs: {e}"),
-            })?
+            .map_err(Error::store("failed to query installed kegs"))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to collect results: {e}"),
-            })?;
+            .map_err(Error::store("failed to collect results"))?;
 
         Ok(kegs)
     }
@@ -140,19 +127,13 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare("SELECT store_key FROM store_refs WHERE refcount <= 0")
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to prepare statement: {e}"),
-            })?;
+            .map_err(Error::store("failed to prepare statement"))?;
 
         let keys = stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to query unreferenced keys: {e}"),
-            })?
+            .map_err(Error::store("failed to query unreferenced keys"))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to collect results: {e}"),
-            })?;
+            .map_err(Error::store("failed to collect results"))?;
 
         Ok(keys)
     }
@@ -163,9 +144,7 @@ impl Database {
                 "DELETE FROM store_refs WHERE store_key = ?1",
                 params![store_key],
             )
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to delete store ref: {e}"),
-            })?;
+            .map_err(Error::store("failed to delete store ref"))?;
         Ok(())
     }
 }
@@ -189,9 +168,7 @@ impl<'a> InstallTransaction<'a> {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to query previous store key: {e}"),
-            })?;
+            .map_err(Error::store("failed to query previous store key"))?;
 
         self.tx
             .execute(
@@ -203,9 +180,7 @@ impl<'a> InstallTransaction<'a> {
                      installed_at = excluded.installed_at",
                 params![name, version, store_key, now],
             )
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to record install: {e}"),
-            })?;
+            .map_err(Error::store("failed to record install"))?;
 
         match previous_store_key.as_deref() {
             Some(previous) if previous == store_key => {}
@@ -216,9 +191,7 @@ impl<'a> InstallTransaction<'a> {
                             "UPDATE store_refs SET refcount = refcount - 1 WHERE store_key = ?1",
                             params![previous],
                         )
-                        .map_err(|e| Error::StoreCorruption {
-                            message: format!("failed to decrement previous store ref: {e}"),
-                        })?;
+                        .map_err(Error::store("failed to decrement previous store ref"))?;
                 }
 
                 self.tx
@@ -227,9 +200,7 @@ impl<'a> InstallTransaction<'a> {
                          ON CONFLICT(store_key) DO UPDATE SET refcount = refcount + 1",
                         params![store_key],
                     )
-                    .map_err(|e| Error::StoreCorruption {
-                        message: format!("failed to increment store ref: {e}"),
-                    })?;
+                    .map_err(Error::store("failed to increment store ref"))?;
             }
         }
 
@@ -249,9 +220,7 @@ impl<'a> InstallTransaction<'a> {
                  VALUES (?1, ?2, ?3, ?4)",
                 params![name, version, linked_path, target_path],
             )
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to record linked file: {e}"),
-            })?;
+            .map_err(Error::store("failed to record linked file"))?;
 
         Ok(())
     }
@@ -270,16 +239,11 @@ impl<'a> InstallTransaction<'a> {
         // Remove installed keg record
         self.tx
             .execute("DELETE FROM installed_kegs WHERE name = ?1", params![name])
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to remove install record: {e}"),
-            })?;
+            .map_err(Error::store("failed to remove install record"))?;
 
-        // Remove linked files records
         self.tx
             .execute("DELETE FROM keg_files WHERE name = ?1", params![name])
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to remove keg files records: {e}"),
-            })?;
+            .map_err(Error::store("failed to remove keg files records"))?;
 
         // Decrement store ref if we had one
         if let Some(ref key) = store_key {
@@ -288,18 +252,16 @@ impl<'a> InstallTransaction<'a> {
                     "UPDATE store_refs SET refcount = refcount - 1 WHERE store_key = ?1",
                     params![key],
                 )
-                .map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to decrement store ref: {e}"),
-                })?;
+                .map_err(Error::store("failed to decrement store ref"))?;
         }
 
         Ok(store_key)
     }
 
     pub fn commit(self) -> Result<(), Error> {
-        self.tx.commit().map_err(|e| Error::StoreCorruption {
-            message: format!("failed to commit transaction: {e}"),
-        })
+        self.tx
+            .commit()
+            .map_err(Error::store("failed to commit transaction"))
     }
 
     // Transaction is rolled back automatically when dropped without commit

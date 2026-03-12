@@ -143,9 +143,9 @@ impl ApiClient {
     /// Clear all cached API responses. Returns the number removed.
     pub fn clear_cache(&self) -> Result<usize, Error> {
         match &self.cache {
-            Some(cache) => cache.clear().map_err(|e| Error::StoreCorruption {
-                message: format!("failed to clear API cache: {e}"),
-            }),
+            Some(cache) => cache
+                .clear()
+                .map_err(Error::store("failed to clear API cache")),
             None => Ok(0),
         }
     }
@@ -177,12 +177,10 @@ impl ApiClient {
                 .map_err(|e| Self::map_formula_rb_checksum_error(e, ruby_source_path, "cache"))?;
 
             let dest = cache_dir.join(ruby_source_path.replace('/', "_"));
-            std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
-                message: format!("failed to create rb cache dir: {e}"),
-            })?;
-            std::fs::write(&dest, entry.body.as_bytes()).map_err(|e| Error::FileError {
-                message: format!("failed to write cached rb file: {e}"),
-            })?;
+            std::fs::create_dir_all(cache_dir)
+                .map_err(Error::file("failed to create rb cache dir"))?;
+            std::fs::write(&dest, entry.body.as_bytes())
+                .map_err(Error::file("failed to write cached rb file"))?;
             return Ok(dest);
         }
 
@@ -191,9 +189,7 @@ impl ApiClient {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::NetworkFailure {
-                message: format!("failed to fetch formula rb: {e}"),
-            })?;
+            .map_err(Error::network("failed to fetch formula rb"))?;
 
         if !response.status().is_success() {
             return Err(Error::NetworkFailure {
@@ -201,9 +197,10 @@ impl ApiClient {
             });
         }
 
-        let body = response.text().await.map_err(|e| Error::NetworkFailure {
-            message: format!("failed to read formula rb response: {e}"),
-        })?;
+        let body = response
+            .text()
+            .await
+            .map_err(Error::network("failed to read formula rb response"))?;
 
         verify_sha256_bytes(body.as_bytes(), expected_sha256)
             .map_err(|e| Self::map_formula_rb_checksum_error(e, ruby_source_path, "network"))?;
@@ -218,12 +215,8 @@ impl ApiClient {
         }
 
         let dest = cache_dir.join(ruby_source_path.replace('/', "_"));
-        std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
-            message: format!("failed to create rb cache dir: {e}"),
-        })?;
-        std::fs::write(&dest, body.as_bytes()).map_err(|e| Error::FileError {
-            message: format!("failed to write rb file: {e}"),
-        })?;
+        std::fs::create_dir_all(cache_dir).map_err(Error::file("failed to create rb cache dir"))?;
+        std::fs::write(&dest, body.as_bytes()).map_err(Error::file("failed to write rb file"))?;
 
         Ok(dest)
     }
@@ -316,18 +309,17 @@ impl ApiClient {
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string());
 
-                let body = response.text().await.map_err(|e| Error::NetworkFailure {
-                    message: format!("failed to read response body: {e}"),
-                })?;
+                let body = response
+                    .text()
+                    .await
+                    .map_err(Error::network("failed to read response body"))?;
 
                 self.store_response_in_cache(&url, etag, last_modified, &body);
                 body
             }
         };
 
-        serde_json::from_str(&body).map_err(|e| Error::NetworkFailure {
-            message: format!("failed to parse formula JSON: {e}"),
-        })
+        serde_json::from_str(&body).map_err(Error::network("failed to parse formula JSON"))
     }
 
     pub async fn get_all_formulas_raw(&self) -> Result<String, Error> {
@@ -353,9 +345,10 @@ impl ApiClient {
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string());
 
-                let body = response.text().await.map_err(|e| Error::NetworkFailure {
-                    message: format!("failed to read bulk formula response body: {e}"),
-                })?;
+                let body = response
+                    .text()
+                    .await
+                    .map_err(Error::network("failed to read bulk formula response body"))?;
 
                 self.store_response_in_cache(&url, etag, last_modified, &body);
                 Ok(body)
@@ -403,10 +396,8 @@ impl ApiClient {
     fn extract_formula_candidates(raw: &str) -> Result<Vec<String>, Error> {
         use std::collections::HashSet;
 
-        let entries: Vec<FormulaSuggestionEntry> =
-            serde_json::from_str(raw).map_err(|e| Error::NetworkFailure {
-                message: format!("failed to parse bulk formula JSON: {e}"),
-            })?;
+        let entries: Vec<FormulaSuggestionEntry> = serde_json::from_str(raw)
+            .map_err(Error::network("failed to parse bulk formula JSON"))?;
 
         let mut seen = HashSet::new();
         let mut candidates = Vec::new();
@@ -470,9 +461,7 @@ impl ApiClient {
         response
             .json::<serde_json::Value>()
             .await
-            .map_err(|e| Error::NetworkFailure {
-                message: format!("failed to parse cask JSON: {e}"),
-            })
+            .map_err(Error::network("failed to parse cask JSON"))
     }
 
     async fn get_tap_formula(
@@ -523,10 +512,10 @@ impl ApiClient {
                         Ok(response) => {
                             let status = response.status();
                             if status.is_success() {
-                                let body =
-                                    response.text().await.map_err(|e| Error::NetworkFailure {
-                                        message: format!("failed to read tap formula body: {e}"),
-                                    })?;
+                                let body = response
+                                    .text()
+                                    .await
+                                    .map_err(Error::network("failed to read tap formula body"))?;
                                 let mut formula = parse_tap_formula_ruby(spec, &body)?;
                                 formula.ruby_source_path =
                                     Some(RubySourceLocator::encode_tap_url(&url));

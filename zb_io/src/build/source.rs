@@ -19,9 +19,7 @@ pub async fn download_and_extract_source(
     let src_dir = work_dir.join("src");
     fs::create_dir_all(&src_dir)
         .await
-        .map_err(|e| Error::FileError {
-            message: format!("failed to create source directory: {e}"),
-        })?;
+        .map_err(Error::file("failed to create source directory"))?;
 
     extract_tarball(&tarball_path, &src_dir)?;
 
@@ -32,17 +30,13 @@ async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
-        .map_err(|e| Error::NetworkFailure {
-            message: format!("failed to create HTTP client: {e}"),
-        })?;
+        .map_err(Error::network("failed to create HTTP client"))?;
 
     let response = client
         .get(url)
         .send()
         .await
-        .map_err(|e| Error::NetworkFailure {
-            message: format!("failed to download source: {e}"),
-        })?;
+        .map_err(Error::network("failed to download source"))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -51,19 +45,20 @@ async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {
         });
     }
 
-    let bytes = response.bytes().await.map_err(|e| Error::NetworkFailure {
-        message: format!("failed to read source response: {e}"),
-    })?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(Error::network("failed to read source response"))?;
 
-    fs::write(dest, &bytes).await.map_err(|e| Error::FileError {
-        message: format!("failed to write source tarball: {e}"),
-    })
+    fs::write(dest, &bytes)
+        .await
+        .map_err(Error::file("failed to write source tarball"))
 }
 
 async fn verify_checksum(path: &Path, expected: Option<&str>, url: &str) -> Result<(), Error> {
-    let bytes = fs::read(path).await.map_err(|e| Error::FileError {
-        message: format!("failed to read tarball for checksum: {e}"),
-    })?;
+    let bytes = fs::read(path)
+        .await
+        .map_err(Error::file("failed to read tarball for checksum"))?;
 
     verify_sha256_bytes(&bytes, expected).map_err(|e| match e {
         Error::ChecksumMismatch { .. } => e,
@@ -75,19 +70,22 @@ async fn verify_checksum(path: &Path, expected: Option<&str>, url: &str) -> Resu
 }
 
 async fn find_source_root(src_dir: &Path) -> Result<PathBuf, Error> {
-    let mut entries = fs::read_dir(src_dir).await.map_err(|e| Error::FileError {
-        message: format!("failed to read source directory: {e}"),
-    })?;
+    let mut entries = fs::read_dir(src_dir)
+        .await
+        .map_err(Error::file("failed to read source directory"))?;
 
     let mut subdirs = Vec::new();
     let mut has_files = false;
 
-    while let Some(entry) = entries.next_entry().await.map_err(|e| Error::FileError {
-        message: format!("failed to read directory entry: {e}"),
-    })? {
-        let ft = entry.file_type().await.map_err(|e| Error::FileError {
-            message: format!("failed to get file type: {e}"),
-        })?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(Error::file("failed to read directory entry"))?
+    {
+        let ft = entry
+            .file_type()
+            .await
+            .map_err(Error::file("failed to get file type"))?;
         if ft.is_dir() {
             subdirs.push(entry.path());
         } else {

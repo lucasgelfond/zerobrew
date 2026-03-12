@@ -77,6 +77,32 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+impl Error {
+    pub fn store<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
+        move |err| Self::StoreCorruption {
+            message: format!("{ctx}: {err}"),
+        }
+    }
+
+    pub fn network<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
+        move |err| Self::NetworkFailure {
+            message: format!("{ctx}: {err}"),
+        }
+    }
+
+    pub fn file<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
+        move |err| Self::FileError {
+            message: format!("{ctx}: {err}"),
+        }
+    }
+
+    pub fn exec<E: fmt::Display>(ctx: &str) -> impl FnOnce(E) -> Self + '_ {
+        move |err| Self::ExecutionError {
+            message: format!("{ctx}: {err}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

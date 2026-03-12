@@ -206,17 +206,11 @@ impl Linker {
     fn link_recursive(src: &Path, dst: &Path) -> Result<Vec<LinkedFile>, Error> {
         let mut linked = Vec::new();
         if !dst.exists() {
-            fs::create_dir_all(dst).map_err(|e| Error::StoreCorruption {
-                message: e.to_string(),
-            })?;
+            fs::create_dir_all(dst).map_err(Error::store("failed to create directory"))?;
         }
 
-        for entry in fs::read_dir(src).map_err(|e| Error::StoreCorruption {
-            message: e.to_string(),
-        })? {
-            let entry = entry.map_err(|e| Error::StoreCorruption {
-                message: e.to_string(),
-            })?;
+        for entry in fs::read_dir(src).map_err(Error::store("failed to read directory"))? {
+            let entry = entry.map_err(Error::store("failed to read directory entry"))?;
             let file_name = entry.file_name();
             if should_skip_link_entry(src, &file_name) {
                 continue;
@@ -230,10 +224,8 @@ impl Linker {
             // into individual file symlinks instead of conflicting.
             if src_path.is_dir() {
                 if dst_path.symlink_metadata().is_ok() && dst_path.is_symlink() {
-                    let old_target =
-                        fs::read_link(&dst_path).map_err(|e| Error::StoreCorruption {
-                            message: e.to_string(),
-                        })?;
+                    let old_target = fs::read_link(&dst_path)
+                        .map_err(Error::store("failed to read symlink target"))?;
                     let _ = fs::remove_file(&dst_path);
                     Self::link_recursive(&old_target, &dst_path)?;
                 }
@@ -284,11 +276,8 @@ impl Linker {
             }
 
             #[cfg(unix)]
-            std::os::unix::fs::symlink(&src_path, &dst_path).map_err(|e| {
-                Error::StoreCorruption {
-                    message: e.to_string(),
-                }
-            })?;
+            std::os::unix::fs::symlink(&src_path, &dst_path)
+                .map_err(Error::store("failed to create symlink"))?;
             linked.push(LinkedFile {
                 link_path: dst_path,
                 target_path: src_path,
@@ -315,12 +304,8 @@ impl Linker {
         if !src.exists() || !dst.exists() {
             return Ok(unlinked);
         }
-        for entry in fs::read_dir(src).map_err(|e| Error::StoreCorruption {
-            message: e.to_string(),
-        })? {
-            let entry = entry.map_err(|e| Error::StoreCorruption {
-                message: e.to_string(),
-            })?;
+        for entry in fs::read_dir(src).map_err(Error::store("failed to read directory"))? {
+            let entry = entry.map_err(Error::store("failed to read directory entry"))?;
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
 
@@ -393,9 +378,8 @@ impl Linker {
             let _ = fs::remove_file(&opt_link);
         }
         #[cfg(unix)]
-        std::os::unix::fs::symlink(keg_path, &opt_link).map_err(|e| Error::StoreCorruption {
-            message: e.to_string(),
-        })?;
+        std::os::unix::fs::symlink(keg_path, &opt_link)
+            .map_err(Error::store("failed to create opt symlink"))?;
         Ok(())
     }
 

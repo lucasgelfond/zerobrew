@@ -52,9 +52,8 @@ impl Cellar {
 
         // Create parent directory for the keg
         if let Some(parent) = keg_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to create keg parent directory: {e}"),
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(Error::store("failed to create keg parent directory"))?;
         }
 
         // Homebrew bottles have structure {name}/{version}/ inside
@@ -98,9 +97,7 @@ impl Cellar {
             return Ok(());
         }
 
-        fs::remove_dir_all(&keg_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to remove keg: {e}"),
-        })?;
+        fs::remove_dir_all(&keg_path).map_err(Error::store("failed to remove keg"))?;
 
         // Also try to remove the parent (name) directory if it's now empty
         if let Some(parent) = keg_path.parent() {
@@ -181,39 +178,32 @@ fn try_clonefile_dir(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path, try_hardlink: bool) -> Result<(), Error> {
-    fs::create_dir_all(dst).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create directory {}: {e}", dst.display()),
-    })?;
+    let create_ctx = format!("failed to create directory {}", dst.display());
+    fs::create_dir_all(dst).map_err(Error::store(create_ctx.as_str()))?;
 
-    for entry in fs::read_dir(src).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read directory {}: {e}", src.display()),
-    })? {
-        let entry = entry.map_err(|e| Error::StoreCorruption {
-            message: format!("failed to read directory entry: {e}"),
-        })?;
+    let read_ctx = format!("failed to read directory {}", src.display());
+    for entry in fs::read_dir(src).map_err(Error::store(read_ctx.as_str()))? {
+        let entry = entry.map_err(Error::store("failed to read directory entry"))?;
 
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|e| Error::StoreCorruption {
-            message: format!("failed to get file type: {e}"),
-        })?;
+        let file_type = entry
+            .file_type()
+            .map_err(Error::store("failed to get file type"))?;
 
         if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dst_path, try_hardlink)?;
         } else if file_type.is_symlink() {
-            let target = fs::read_link(&src_path).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to read symlink: {e}"),
-            })?;
+            let target =
+                fs::read_link(&src_path).map_err(Error::store("failed to read symlink"))?;
 
             #[cfg(unix)]
-            std::os::unix::fs::symlink(&target, &dst_path).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to create symlink: {e}"),
-            })?;
+            std::os::unix::fs::symlink(&target, &dst_path)
+                .map_err(Error::store("failed to create symlink"))?;
 
             #[cfg(not(unix))]
-            fs::copy(&src_path, &dst_path).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to copy symlink as file: {e}"),
-            })?;
+            fs::copy(&src_path, &dst_path)
+                .map_err(Error::store("failed to copy symlink as file"))?;
         } else {
             // Try hardlink first, then copy
             if try_hardlink && fs::hard_link(&src_path, &dst_path).is_ok() {
@@ -221,21 +211,15 @@ fn copy_dir_recursive(src: &Path, dst: &Path, try_hardlink: bool) -> Result<(), 
             }
 
             // Fall back to copy
-            fs::copy(&src_path, &dst_path).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to copy file: {e}"),
-            })?;
+            fs::copy(&src_path, &dst_path).map_err(Error::store("failed to copy file"))?;
 
             // Preserve permissions
             #[cfg(unix)]
             {
-                let metadata = fs::metadata(&src_path).map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to read metadata: {e}"),
-                })?;
-                fs::set_permissions(&dst_path, metadata.permissions()).map_err(|e| {
-                    Error::StoreCorruption {
-                        message: format!("failed to set permissions: {e}"),
-                    }
-                })?;
+                let metadata =
+                    fs::metadata(&src_path).map_err(Error::store("failed to read metadata"))?;
+                fs::set_permissions(&dst_path, metadata.permissions())
+                    .map_err(Error::store("failed to set permissions"))?;
             }
         }
     }

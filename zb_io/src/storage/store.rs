@@ -44,26 +44,20 @@ impl Store {
 
         // Acquire exclusive lock for this store_key
         let lock_path = self.locks_dir.join(format!("{store_key}.lock"));
-        let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create lock file: {e}"),
-        })?;
+        let lock_file =
+            File::create(&lock_path).map_err(Error::store("failed to create lock file"))?;
 
         lock_file
             .lock_exclusive()
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to acquire lock: {e}"),
-            })?;
+            .map_err(Error::store("failed to acquire lock"))?;
 
         // Double-check after acquiring lock (another process may have created it)
         if entry_path.exists() {
-            // Lock will be released when lock_file is dropped
             return Ok(entry_path);
         }
 
-        let tmp_dir =
-            tempfile::tempdir_in(&self.store_dir).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to create temp directory: {e}"),
-            })?;
+        let tmp_dir = tempfile::tempdir_in(&self.store_dir)
+            .map_err(Error::store("failed to create temp directory"))?;
 
         extract_archive(blob_path, tmp_dir.path())?;
 
@@ -91,21 +85,16 @@ impl Store {
 
         // Acquire exclusive lock for this store_key
         let lock_path = self.locks_dir.join(format!("{store_key}.lock"));
-        let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create lock file: {e}"),
-        })?;
+        let lock_file =
+            File::create(&lock_path).map_err(Error::store("failed to create lock file"))?;
 
         lock_file
             .lock_exclusive()
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to acquire lock: {e}"),
-            })?;
+            .map_err(Error::store("failed to acquire lock"))?;
 
-        // Remove the directory
         if entry_path.exists() {
-            fs::remove_dir_all(&entry_path).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to remove store entry: {e}"),
-            })?;
+            fs::remove_dir_all(&entry_path)
+                .map_err(Error::store("failed to remove store entry"))?;
         }
 
         // Clean up the lock file

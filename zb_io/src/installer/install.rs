@@ -145,10 +145,8 @@ impl Installer {
             installed.iter().map(|k| k.name.as_str()).collect();
 
         let bulk_raw = self.api_client.get_all_formulas_raw().await?;
-        let bulk_values: Vec<serde_json::Value> =
-            serde_json::from_str(&bulk_raw).map_err(|e| Error::NetworkFailure {
-                message: format!("failed to parse bulk formula JSON: {e}"),
-            })?;
+        let bulk_values: Vec<serde_json::Value> = serde_json::from_str(&bulk_raw)
+            .map_err(Error::network("failed to parse bulk formula JSON"))?;
 
         let mut bulk_map: HashMap<String, Formula> = HashMap::new();
         for val in bulk_values {
@@ -1139,9 +1137,7 @@ fn stage_cask_binaries(
     cask: &crate::installer::cask::ResolvedCask,
 ) -> Result<(), Error> {
     let bin_dir = keg_path.join("bin");
-    fs::create_dir_all(&bin_dir).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create cask bin dir: {e}"),
-    })?;
+    fs::create_dir_all(&bin_dir).map_err(Error::store("failed to create cask bin dir"))?;
 
     for binary in &cask.binaries {
         let source = resolve_cask_source_path(extracted_root, cask, &binary.source)?;
@@ -1156,9 +1152,8 @@ fn stage_cask_binaries(
 
         let target = bin_dir.join(&binary.target);
         if target.exists() {
-            fs::remove_file(&target).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to replace existing cask binary: {e}"),
-            })?;
+            fs::remove_file(&target)
+                .map_err(Error::store("failed to replace existing cask binary"))?;
         }
 
         fs::copy(&source, &target).map_err(|e| Error::StoreCorruption {
@@ -1169,15 +1164,12 @@ fn stage_cask_binaries(
         {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&target)
-                .map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to read staged cask binary metadata: {e}"),
-                })?
+                .map_err(Error::store("failed to read staged cask binary metadata"))?
                 .permissions();
             if perms.mode() & 0o111 == 0 {
                 perms.set_mode(0o755);
-                fs::set_permissions(&target, perms).map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to make staged cask binary executable: {e}"),
-                })?;
+                fs::set_permissions(&target, perms)
+                    .map_err(Error::store("failed to make staged cask binary executable"))?;
             }
         }
     }
@@ -1202,15 +1194,11 @@ fn stage_raw_cask_binary(
 
     let binary = &cask.binaries[0];
     let bin_dir = keg_path.join("bin");
-    fs::create_dir_all(&bin_dir).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create cask bin dir: {e}"),
-    })?;
+    fs::create_dir_all(&bin_dir).map_err(Error::store("failed to create cask bin dir"))?;
 
     let target = bin_dir.join(&binary.target);
     if target.exists() {
-        fs::remove_file(&target).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to replace existing cask binary: {e}"),
-        })?;
+        fs::remove_file(&target).map_err(Error::store("failed to replace existing cask binary"))?;
     }
 
     fs::copy(blob_path, &target).map_err(|e| Error::StoreCorruption {
@@ -1220,11 +1208,8 @@ fn stage_raw_cask_binary(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).map_err(|e| {
-            Error::StoreCorruption {
-                message: format!("failed to make staged cask binary executable: {e}"),
-            }
-        })?;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
+            .map_err(Error::store("failed to make staged cask binary executable"))?;
     }
 
     Ok(())
@@ -1304,18 +1289,14 @@ pub fn create_installer(
     }
 
     // Ensure all subdirectories exist
-    fs::create_dir_all(root.join("db")).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create db directory: {e}"),
-    })?;
+    fs::create_dir_all(root.join("db")).map_err(Error::store("failed to create db directory"))?;
 
-    fs::create_dir_all(root.join("cache")).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create cache directory: {e}"),
-    })?;
+    fs::create_dir_all(root.join("cache"))
+        .map_err(Error::store("failed to create cache directory"))?;
 
     let api_cache_path = root.join("cache/api-cache.sqlite");
-    let api_cache = ApiCache::open(&api_cache_path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to open API cache: {e}"),
-    })?;
+    let api_cache =
+        ApiCache::open(&api_cache_path).map_err(Error::store("failed to open API cache"))?;
 
     let api_client = match std::env::var("ZEROBREW_API_URL") {
         Ok(url) => ApiClient::with_base_url(url)?,
@@ -1323,19 +1304,13 @@ pub fn create_installer(
     }
     .with_cache(api_cache);
 
-    let blob_cache = BlobCache::new(&root.join("cache")).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create blob cache: {e}"),
-    })?;
-    let store = Store::new(root).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create store: {e}"),
-    })?;
+    let blob_cache =
+        BlobCache::new(&root.join("cache")).map_err(Error::store("failed to create blob cache"))?;
+    let store = Store::new(root).map_err(Error::store("failed to create store"))?;
     // Use prefix/Cellar so bottles' hardcoded rpaths work
-    let cellar = Cellar::new_at(prefix.join("Cellar")).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create cellar: {e}"),
-    })?;
-    let linker = Linker::new(prefix).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create linker: {e}"),
-    })?;
+    let cellar =
+        Cellar::new_at(prefix.join("Cellar")).map_err(Error::store("failed to create cellar"))?;
+    let linker = Linker::new(prefix).map_err(Error::store("failed to create linker"))?;
     let db = Database::open(&root.join("db/zb.sqlite3"))?;
 
     use crate::network::download::ParallelDownloader;

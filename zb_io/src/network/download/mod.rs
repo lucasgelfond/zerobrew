@@ -486,11 +486,7 @@ impl Downloader {
                     return Ok(path);
                 }
                 Ok(Err(e)) => last_error = Some(e),
-                Err(e) => {
-                    last_error = Some(Error::NetworkFailure {
-                        message: format!("task join error: {e}"),
-                    })
-                }
+                Err(e) => last_error = Some(Error::network("task join error")(e)),
             }
         }
 
@@ -664,18 +660,14 @@ async fn fetch_bearer_token_internal(
 
     let token_url =
         reqwest::Url::parse_with_params(&realm, &[("service", &service), ("scope", &scope)])
-            .map_err(|e| Error::NetworkFailure {
-                message: format!("failed to construct token URL: {e}"),
-            })?;
+            .map_err(Error::network("failed to construct token URL"))?;
 
     // Anonymous token request (homebrew bottles are public)
     let response = client
         .get(token_url)
         .send()
         .await
-        .map_err(|e| Error::NetworkFailure {
-            message: format!("token request failed: {e}"),
-        })?;
+        .map_err(Error::network("token request failed"))?;
 
     if !response.status().is_success() {
         return Err(Error::NetworkFailure {
@@ -683,10 +675,10 @@ async fn fetch_bearer_token_internal(
         });
     }
 
-    let token_response: TokenResponse =
-        response.json().await.map_err(|e| Error::NetworkFailure {
-            message: format!("failed to parse token response: {e}"),
-        })?;
+    let token_response: TokenResponse = response
+        .json()
+        .await
+        .map_err(Error::network("failed to parse token response"))?;
 
     // Cache the token
     {
@@ -781,9 +773,7 @@ async fn download_chunk(
                             continue;
                         }
                         Err(e) => {
-                            return Err(Error::NetworkFailure {
-                                message: format!("failed to refresh token: {e}"),
-                            });
+                            return Err(Error::network("failed to refresh token")(e));
                         }
                     }
                 }
@@ -823,9 +813,7 @@ async fn download_chunk(
                 let mut stream = response.bytes_stream();
 
                 while let Some(item) = stream.next().await {
-                    let bytes = item.map_err(|e| Error::NetworkFailure {
-                        message: format!("failed to read chunk bytes: {e}"),
-                    })?;
+                    let bytes = item.map_err(Error::network("failed to read chunk bytes"))?;
 
                     chunk_data.extend_from_slice(&bytes);
 
@@ -854,9 +842,7 @@ async fn download_chunk(
                 return Ok(chunk_data);
             }
             Err(e) => {
-                last_error = Some(Error::NetworkFailure {
-                    message: format!("chunk download failed: {e}"),
-                });
+                last_error = Some(Error::network("chunk download failed")(e));
 
                 // Retry on network errors
                 if attempt < MAX_CHUNK_RETRIES {
@@ -900,9 +886,7 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
     let writer = ctx
         .blob_cache
         .start_write(ctx.expected_sha256)
-        .map_err(|e| Error::NetworkFailure {
-            message: format!("failed to create blob writer: {e}"),
-        })?;
+        .map_err(Error::network("failed to create blob writer"))?;
 
     // Track expected chunk sizes for validation
     let expected_chunks: BTreeMap<u64, u64> = chunks.iter().map(|c| (c.offset, c.size)).collect();
@@ -933,9 +917,7 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
             let _permit = global_semaphore
                 .acquire()
                 .await
-                .map_err(|e| Error::NetworkFailure {
-                    message: format!("global semaphore error: {e}"),
-                })?;
+                .map_err(Error::network("global semaphore error"))?;
 
             let chunk_ctx = ChunkDownloadContext {
                 client: &client,
@@ -965,9 +947,7 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
 
             chunk_tx
                 .send((chunk_data, chunk.offset))
-                .map_err(|e| Error::NetworkFailure {
-                    message: format!("failed to send chunk metadata: {e}"),
-                })?;
+                .map_err(Error::network("failed to send chunk metadata"))?;
 
             Ok::<(), Error>(())
         });
@@ -1006,9 +986,9 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
 
     // Wait for all download tasks to complete and check for errors
     for handle in handles {
-        handle.await.map_err(|e| Error::NetworkFailure {
-            message: format!("chunk download task failed: {e}"),
-        })??;
+        handle
+            .await
+            .map_err(Error::network("chunk download task failed"))??;
     }
 
     if chunks_written as usize != total_chunks {
@@ -1060,9 +1040,9 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext<'_>) -> Result<PathBu
         })?
         .into_inner();
 
-    writer.flush().map_err(|e| Error::NetworkFailure {
-        message: format!("failed to flush download: {e}"),
-    })?;
+    writer
+        .flush()
+        .map_err(Error::network("failed to flush download"))?;
 
     if let (Some(cb), Some(n)) = (&ctx.progress, &ctx.name) {
         cb(InstallProgress::DownloadCompleted {
@@ -1111,29 +1091,22 @@ async fn download_response_internal(
         });
     }
 
-    let mut writer =
-        blob_cache
-            .start_write(expected_sha256)
-            .map_err(|e| Error::NetworkFailure {
-                message: format!("failed to create blob writer: {e}"),
-            })?;
+    let mut writer = blob_cache
+        .start_write(expected_sha256)
+        .map_err(Error::network("failed to create blob writer"))?;
 
     let mut hasher = Sha256::new();
     let mut stream = response.bytes_stream();
     let mut downloaded: u64 = 0;
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| Error::NetworkFailure {
-            message: format!("failed to read chunk: {e}"),
-        })?;
+        let chunk = chunk.map_err(Error::network("failed to read chunk"))?;
 
         downloaded += chunk.len() as u64;
         hasher.update(&chunk);
         writer
             .write_all(&chunk)
-            .map_err(|e| Error::NetworkFailure {
-                message: format!("failed to write chunk: {e}"),
-            })?;
+            .map_err(Error::network("failed to write chunk"))?;
 
         if let (Some(cb), Some(n)) = (&progress, &name) {
             cb(InstallProgress::DownloadProgress {
@@ -1154,9 +1127,9 @@ async fn download_response_internal(
     }
 
     // Flush and sync the file to ensure all data is written
-    writer.flush().map_err(|e| Error::NetworkFailure {
-        message: format!("failed to flush download: {e}"),
-    })?;
+    writer
+        .flush()
+        .map_err(Error::network("failed to flush download"))?;
 
     if let (Some(cb), Some(n)) = (&progress, &name) {
         cb(InstallProgress::DownloadCompleted {
@@ -1312,9 +1285,7 @@ impl ParallelDownloader {
 
         let mut results = Vec::with_capacity(handles.len());
         for handle in handles {
-            let result = handle.await.map_err(|e| Error::NetworkFailure {
-                message: format!("task join error: {e}"),
-            })??;
+            let result = handle.await.map_err(Error::network("task join error"))??;
             results.push(result);
         }
 
@@ -1381,9 +1352,10 @@ impl ParallelDownloader {
 
         if let Some(ref mut rx) = receiver {
             // Wait for the inflight request to complete
-            let result = rx.recv().await.map_err(|e| Error::NetworkFailure {
-                message: format!("broadcast recv error: {e}"),
-            })?;
+            let result = rx
+                .recv()
+                .await
+                .map_err(Error::network("broadcast recv error"))?;
 
             return result.map_err(|msg| Error::NetworkFailure { message: msg });
         }
@@ -1392,9 +1364,7 @@ impl ParallelDownloader {
         let _permit = semaphore
             .acquire()
             .await
-            .map_err(|e| Error::NetworkFailure {
-                message: format!("semaphore error: {e}"),
-            })?;
+            .map_err(Error::network("semaphore error"))?;
 
         let result = downloader
             .download_with_progress(&req.url, &req.sha256, Some(req.name), progress)

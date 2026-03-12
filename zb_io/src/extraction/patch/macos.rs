@@ -72,30 +72,22 @@ fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> R
         return Ok(());
     }
 
-    let metadata = fs::metadata(path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read metadata: {e}"),
-    })?;
+    let metadata = fs::metadata(path).map_err(Error::store("failed to read metadata"))?;
     let original_mode = metadata.permissions().mode();
     let is_readonly = original_mode & 0o200 == 0;
 
     if is_readonly {
         let mut perms = metadata.permissions();
         perms.set_mode(original_mode | 0o200);
-        fs::set_permissions(path, perms).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to make writable: {e}"),
-        })?;
+        fs::set_permissions(path, perms).map_err(Error::store("failed to make writable"))?;
     }
 
-    fs::write(path, new_content).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to write file: {e}"),
-    })?;
+    fs::write(path, new_content).map_err(Error::store("failed to write file"))?;
 
     if is_readonly {
         let mut perms = metadata.permissions();
         perms.set_mode(original_mode);
-        fs::set_permissions(path, perms).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to restore permissions: {e}"),
-        })?;
+        fs::set_permissions(path, perms).map_err(Error::store("failed to restore permissions"))?;
     }
 
     Ok(())
@@ -107,28 +99,20 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
     use std::io::{Read as _, Write as _};
     use std::os::unix::fs::PermissionsExt;
 
-    let metadata = fs::metadata(path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read metadata: {e}"),
-    })?;
+    let metadata = fs::metadata(path).map_err(Error::store("failed to read metadata"))?;
     let original_mode = metadata.permissions().mode();
     let is_readonly = original_mode & 0o200 == 0;
 
     if is_readonly {
         let mut perms = metadata.permissions();
         perms.set_mode(original_mode | 0o200);
-        fs::set_permissions(path, perms).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to make writable: {e}"),
-        })?;
+        fs::set_permissions(path, perms).map_err(Error::store("failed to make writable"))?;
     }
 
-    let mut file = fs::File::open(path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to open file: {e}"),
-    })?;
+    let mut file = fs::File::open(path).map_err(Error::store("failed to open file"))?;
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)
-        .map_err(|e| Error::StoreCorruption {
-            message: format!("failed to read file: {e}"),
-        })?;
+        .map_err(Error::store("failed to read file"))?;
     drop(file);
 
     let original_contents = contents.clone();
@@ -186,25 +170,19 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
 
     if patched && contents != original_contents {
         let temp_path = path.with_extension("tmp_patch");
-        let mut temp_file = fs::File::create(&temp_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create temp file: {e}"),
-        })?;
+        let mut temp_file =
+            fs::File::create(&temp_path).map_err(Error::store("failed to create temp file"))?;
         temp_file
             .write_all(&contents)
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to write temp file: {e}"),
-            })?;
+            .map_err(Error::store("failed to write temp file"))?;
         drop(temp_file);
 
-        fs::rename(&temp_path, path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to rename temp file: {e}"),
-        })?;
+        fs::rename(&temp_path, path).map_err(Error::store("failed to rename temp file"))?;
 
         // Restore original permissions — fs::File::create uses 0644 by default,
         // which drops the execute bit from patched binaries.
-        fs::set_permissions(path, metadata.permissions()).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to restore permissions after patching: {e}"),
-        })?;
+        fs::set_permissions(path, metadata.permissions())
+            .map_err(Error::store("failed to restore permissions after patching"))?;
 
         match std::process::Command::new("codesign")
             .args(["--force", "--sign", "-", &path.to_string_lossy()])
