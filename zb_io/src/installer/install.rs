@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::warn;
+
+use fs4::fs_std::FileExt;
 
 use crate::cellar::link::Linker;
 use crate::cellar::materialize::Cellar;
@@ -33,6 +35,7 @@ pub struct Installer {
     linker: Linker,
     db: Database,
     prefix: std::path::PathBuf,
+    locks_dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -67,6 +70,11 @@ pub struct OutdatedPackage {
 }
 
 impl Installer {
+    // FIXME: Create a config struct for this
+    // Then we can have `Installer::new(config: InstallerConfig, api_client: ApiClient, ...)`
+    // and derive `root.join("locks")` from config.root
+    // This will eventually remove locks_dir and keep root/prefix in one place
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         api_client: ApiClient,
         blob_cache: BlobCache,
@@ -75,6 +83,7 @@ impl Installer {
         linker: Linker,
         db: Database,
         prefix: std::path::PathBuf,
+        locks_dir: PathBuf,
     ) -> Self {
         Self {
             api_client,
@@ -84,6 +93,7 @@ impl Installer {
             linker,
             db,
             prefix,
+            locks_dir,
         }
     }
 
@@ -412,6 +422,14 @@ impl Installer {
         link: bool,
         progress: Option<Arc<ProgressCallback>>,
     ) -> Result<ExecuteResult, Error> {
+        let lock_path = self.locks_dir.join("install.lock");
+        let lock_file =
+            File::create(&lock_path).map_err(Error::store("failed to create install lock"))?;
+        lock_file
+            .lock_exclusive()
+            .map_err(Error::store("failed to acquire install lock"))?;
+        let _lock = lock_file;
+
         let report = |event: InstallProgress| {
             if let Some(ref cb) = progress {
                 cb(event);
@@ -1285,6 +1303,9 @@ pub fn create_installer(
     let linker = Linker::new(prefix).map_err(Error::store("failed to create linker"))?;
     let db = Database::open(&root.join("db/zb.sqlite3"))?;
 
+    let locks_dir = root.join("locks");
+    fs::create_dir_all(&locks_dir).map_err(Error::store("failed to create locks directory"))?;
+
     use crate::network::download::ParallelDownloader;
     let parallel_downloader = ParallelDownloader::with_concurrency(blob_cache, concurrency);
 
@@ -1296,6 +1317,7 @@ pub fn create_installer(
         linker,
         db,
         prefix: prefix.to_path_buf(),
+        locks_dir,
     })
 }
 
@@ -1450,7 +1472,16 @@ mod tests {
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix);
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix,
+            root.join("locks"),
+        );
 
         let suggestions = installer.suggest_formulas("pythn", 3).await.unwrap();
         assert_eq!(suggestions.first().map(String::as_str), Some("python"));
@@ -1527,6 +1558,7 @@ mod tests {
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Install
@@ -1617,6 +1649,7 @@ mod tests {
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Install
@@ -1706,6 +1739,7 @@ mod tests {
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Install and uninstall
@@ -1805,6 +1839,7 @@ mod tests {
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Install but don't uninstall
@@ -1931,6 +1966,7 @@ mod tests {
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Install main package (should also install dependency)
@@ -2022,6 +2058,7 @@ end
             linker,
             db,
             prefix.to_path_buf(),
+            root.join("locks"),
         );
         let plan = installer
             .plan(&["hashicorp/tap/terraform".to_string()])
@@ -2096,6 +2133,7 @@ end
             linker,
             db,
             prefix.to_path_buf(),
+            root.join("locks"),
         );
 
         installer
@@ -2176,6 +2214,7 @@ end
             linker,
             db,
             prefix.to_path_buf(),
+            root.join("locks"),
         );
         installer
             .install(&["terraform".to_string()], true)
@@ -2294,6 +2333,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         let result = installer
@@ -2373,6 +2413,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Force metadata persistence to fail after filesystem work is done.
@@ -2448,6 +2489,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Force metadata persistence to fail after filesystem work is done.
@@ -2568,6 +2610,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Install root (should install all 5 packages)
@@ -2667,6 +2710,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Install slow package (which depends on fast)
@@ -2783,6 +2827,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         // Install - should succeed (first download is valid in this test)
@@ -2860,6 +2905,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         let plan = installer.plan(&["nobottle".to_string()]).await.unwrap();
@@ -2936,6 +2982,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         let plan = installer.plan(&["hasboth".to_string()]).await.unwrap();
@@ -2985,6 +3032,7 @@ end
             linker,
             db,
             prefix.clone(),
+            root.join("locks"),
         );
 
         let result = installer.plan(&["nothing".to_string()]).await;
@@ -3012,7 +3060,16 @@ end
         let linker = Linker::new(&prefix).unwrap();
         let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
 
-        let installer = Installer::new(api_client, blob_cache, store, cellar, linker, db, prefix);
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix,
+            root.join("locks"),
+        );
         (installer, mock_server, tmp)
     }
 
