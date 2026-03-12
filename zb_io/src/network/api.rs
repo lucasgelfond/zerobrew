@@ -74,7 +74,7 @@ pub struct ApiClient {
     tap_raw_base_url: String,
     client: reqwest::Client,
     cache: Option<ApiCache>,
-    formula_candidates: Arc<RwLock<Option<Vec<String>>>>,
+    formula_candidates: RwLock<Option<Arc<[String]>>>,
 }
 
 impl ApiClient {
@@ -119,7 +119,7 @@ impl ApiClient {
             tap_raw_base_url: "https://raw.githubusercontent.com".to_string(),
             client,
             cache: None,
-            formula_candidates: Arc::new(RwLock::new(None)),
+            formula_candidates: RwLock::new(None),
         }
     }
 
@@ -369,28 +369,17 @@ impl ApiClient {
         Ok(rank_formula_suggestions(query, &candidates, limit))
     }
 
-    async fn formula_candidates(&self) -> Result<Vec<String>, Error> {
-        if let Some(candidates) = self.cached_formula_candidates() {
+    async fn formula_candidates(&self) -> Result<Arc<[String]>, Error> {
+        if let Some(candidates) = self.formula_candidates.read().ok().and_then(|c| c.clone()) {
             return Ok(candidates);
         }
 
         let raw = self.get_all_formulas_raw().await?;
-        let candidates = Self::extract_formula_candidates(&raw)?;
-        self.store_formula_candidates(candidates.clone());
-        Ok(candidates)
-    }
-
-    fn cached_formula_candidates(&self) -> Option<Vec<String>> {
-        self.formula_candidates
-            .read()
-            .ok()
-            .and_then(|candidates| candidates.clone())
-    }
-
-    fn store_formula_candidates(&self, candidates: Vec<String>) {
+        let candidates: Arc<[String]> = Self::extract_formula_candidates(&raw)?.into();
         if let Ok(mut cached) = self.formula_candidates.write() {
-            *cached = Some(candidates);
+            *cached = Some(Arc::clone(&candidates));
         }
+        Ok(candidates)
     }
 
     fn extract_formula_candidates(raw: &str) -> Result<Vec<String>, Error> {
