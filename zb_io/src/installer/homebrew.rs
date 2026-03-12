@@ -1,5 +1,7 @@
 use std::process::Command;
 
+use zb_core::Error;
+
 /// Represents a Homebrew package that can be migrated
 #[derive(Debug, Clone)]
 pub struct HomebrewPackage {
@@ -88,16 +90,14 @@ pub fn categorize_packages(packages: Vec<HomebrewPackage>) -> HomebrewMigrationP
 ///
 /// Only formulas from `homebrew/core` can be migrated to zerobrew.
 /// Formulas from other taps and all casks are collected separately.
-pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, zb_core::Error> {
+pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, Error> {
     let formulas_output = Command::new("brew")
         .args(["info", "--json=v1", "--installed"])
         .output()
-        .map_err(|e| zb_core::Error::ExecutionError {
-            message: format!("failed to run 'brew info': {e}"),
-        })?;
+        .map_err(Error::exec("failed to run 'brew info'"))?;
 
     if !formulas_output.status.success() {
-        return Err(zb_core::Error::ExecutionError {
+        return Err(Error::ExecutionError {
             message: format!(
                 "brew info failed: {}",
                 String::from_utf8_lossy(&formulas_output.stderr)
@@ -106,21 +106,17 @@ pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, zb_core::Err
     }
 
     let formulas_json: serde_json::Value = serde_json::from_slice(&formulas_output.stdout)
-        .map_err(|e| zb_core::Error::ExecutionError {
-            message: format!("failed to parse brew info JSON: {e}"),
-        })?;
+        .map_err(Error::exec("failed to parse brew info JSON"))?;
 
     let formulas = parse_formulas_from_json(&formulas_json);
 
     let casks_output = Command::new("brew")
         .args(["list", "--cask"])
         .output()
-        .map_err(|e| zb_core::Error::ExecutionError {
-            message: format!("failed to run 'brew list --cask': {e}"),
-        })?;
+        .map_err(Error::exec("failed to run 'brew list --cask'"))?;
 
     if !casks_output.status.success() {
-        return Err(zb_core::Error::ExecutionError {
+        return Err(Error::ExecutionError {
             message: format!(
                 "brew list --cask failed: {}",
                 String::from_utf8_lossy(&casks_output.stderr)
