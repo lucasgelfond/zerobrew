@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use tempfile::NamedTempFile;
 use zb_core::Error;
 
 #[derive(Clone)]
@@ -42,84 +43,44 @@ impl BlobCache {
 
     pub fn start_write(&self, sha256: &str) -> io::Result<BlobWriter> {
         let final_path = self.blob_path(sha256);
-        // Use unique temp filename to avoid corruption from concurrent racing downloads
-        let unique_id = std::process::id();
-        let thread_id = std::thread::current().id();
-        let tmp_path = self
-            .tmp_dir
-            .join(format!("{sha256}.{unique_id}.{thread_id:?}.tar.gz.part"));
-
-        let file = fs::File::create(&tmp_path)?;
-
+        let temp_file = NamedTempFile::new_in(&self.tmp_dir)?;
         Ok(BlobWriter {
-            file,
-            tmp_path,
+            temp_file,
             final_path,
-            committed: false,
         })
     }
 }
 
 pub struct BlobWriter {
-    file: fs::File,
-    tmp_path: PathBuf,
+    temp_file: NamedTempFile,
     final_path: PathBuf,
-    committed: bool,
 }
 
 impl BlobWriter {
     pub fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.file.seek(pos)
+        self.temp_file.seek(pos)
     }
 
-    pub fn commit(mut self) -> Result<PathBuf, Error> {
-        self.file.flush().map_err(|e| Error::NetworkFailure {
-            message: format!("failed to flush blob: {e}"),
-        })?;
-
-        // Another racing download may have already created the final blob.
-        // In that case, just clean up our temp file and return success.
-        if self.final_path.exists() {
-            let _ = fs::remove_file(&self.tmp_path);
-            self.committed = true;
-            return Ok(self.final_path.clone());
-        }
-
-        // Try to atomically rename. If it fails because the file already exists
-        // (race with another download), that's fine - clean up and return success.
-        match fs::rename(&self.tmp_path, &self.final_path) {
-            Ok(()) => {}
-            Err(_) if self.final_path.exists() => {
-                // Another download won the race, clean up our temp file
-                let _ = fs::remove_file(&self.tmp_path);
-            }
-            Err(e) => {
-                return Err(Error::NetworkFailure {
-                    message: format!("failed to rename blob: {e}"),
-                });
-            }
-        }
-
-        self.committed = true;
-        Ok(self.final_path.clone())
+    pub fn commit(self) -> Result<PathBuf, Error> {
+        // Content-addressed: same sha256 = identical content, so overwrite is safe.
+        // NamedTempFile::persist does an atomic rename(2) on Unix.
+        // On drop (e.g. if persist is never called), the temp file is auto-deleted.
+        self.temp_file
+            .persist(&self.final_path)
+            .map_err(|e| Error::NetworkFailure {
+                message: format!("failed to persist blob: {e}"),
+            })?;
+        Ok(self.final_path)
     }
 }
 
 impl Write for BlobWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.file.write(buf)
+        self.temp_file.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()
-    }
-}
-
-impl Drop for BlobWriter {
-    fn drop(&mut self) {
-        if !self.committed && self.tmp_path.exists() {
-            let _ = fs::remove_file(&self.tmp_path);
-        }
+        self.temp_file.flush()
     }
 }
 

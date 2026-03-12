@@ -60,32 +60,18 @@ impl Store {
             return Ok(entry_path);
         }
 
-        // Unpack to a temp directory first
-        let tmp_dir = self
-            .store_dir
-            .join(format!(".{store_key}.tmp.{}", std::process::id()));
+        let tmp_dir =
+            tempfile::tempdir_in(&self.store_dir).map_err(|e| Error::StoreCorruption {
+                message: format!("failed to create temp directory: {e}"),
+            })?;
 
-        // Clean up any leftover temp directory from a previous interrupted extraction
-        // (can happen if the process crashed or was killed during extraction)
-        if tmp_dir.exists() {
-            let _ = fs::remove_dir_all(&tmp_dir);
-        }
+        extract_archive(blob_path, tmp_dir.path())?;
 
-        fs::create_dir_all(&tmp_dir).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create temp directory: {e}"),
-        })?;
-
-        // Extract the archive
-        if let Err(e) = extract_archive(blob_path, &tmp_dir) {
-            // Clean up temp directory on failure
-            let _ = fs::remove_dir_all(&tmp_dir);
-            return Err(e);
-        }
-
-        // Atomically rename temp dir to final path
-        if let Err(e) = fs::rename(&tmp_dir, &entry_path) {
-            // Clean up temp directory on failure
-            let _ = fs::remove_dir_all(&tmp_dir);
+        // Persist the temp dir by converting it into a permanent path.
+        // into_path() prevents auto-cleanup so rename failure still needs manual handling.
+        let tmp_path = tmp_dir.into_path();
+        if let Err(e) = fs::rename(&tmp_path, &entry_path) {
+            let _ = fs::remove_dir_all(&tmp_path);
             return Err(Error::StoreCorruption {
                 message: format!("failed to rename store entry: {e}"),
             });
