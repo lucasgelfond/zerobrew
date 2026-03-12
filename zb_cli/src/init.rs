@@ -10,6 +10,20 @@ pub enum InitError {
     Message(String),
 }
 
+impl std::fmt::Display for InitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InitError::Message(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl From<std::io::Error> for InitError {
+    fn from(err: std::io::Error) -> Self {
+        InitError::Message(format!("I/O error: {err}"))
+    }
+}
+
 pub fn needs_init(root: &Path, prefix: &Path) -> bool {
     let root_ok = root.exists() && is_writable(root);
     let prefix_ok = prefix.exists() && is_writable(prefix);
@@ -50,21 +64,17 @@ pub fn run_init(
                 prefix_str,
                 prefix_str.len(),
                 MAX_PREFIX_LEN_MACOS,
-            ))
-            .map_err(io_to_init_error)?;
-            ui.info("Path-sensitive packages (e.g. git, curl) will fail to install.")
-                .map_err(io_to_init_error)?;
+            ))?;
+            ui.info("Path-sensitive packages (e.g. git, curl) will fail to install.")?;
             ui.info(format!(
                 "Consider a shorter prefix, e.g.: {}",
                 style("zb init <root> /opt/zerobrew").cyan(),
-            ))
-            .map_err(io_to_init_error)?;
-            ui.blank_line().map_err(io_to_init_error)?;
+            ))?;
+            ui.blank_line()?;
         }
     }
 
-    ui.heading("Initializing zerobrew...")
-        .map_err(io_to_init_error)?;
+    ui.heading("Initializing zerobrew...")?;
 
     let zerobrew_dir = match std::env::var("ZEROBREW_DIR") {
         Ok(dir) => dir,
@@ -98,8 +108,7 @@ pub fn run_init(
     });
 
     if need_sudo {
-        ui.info("Creating directories (requires sudo)...")
-            .map_err(io_to_init_error)?;
+        ui.info("Creating directories (requires sudo)...")?;
 
         for dir in &dirs_to_create {
             let status = Command::new("sudo")
@@ -120,7 +129,12 @@ pub fn run_init(
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| std::env::var("USER").unwrap_or_else(|_| "root".to_string()));
+            .or_else(|| std::env::var("USER").ok())
+            .ok_or_else(|| {
+                InitError::Message(
+                    "Could not determine current user (whoami failed and $USER not set)".into(),
+                )
+            })?;
 
         let status = Command::new("sudo")
             .args(["chown", "-R", &user, &root.to_string_lossy()])
@@ -162,8 +176,7 @@ pub fn run_init(
         ui,
     )?;
 
-    ui.heading("Initialization complete!")
-        .map_err(io_to_init_error)?;
+    ui.heading("Initialization complete!")?;
 
     Ok(())
 }
@@ -381,30 +394,24 @@ end
             ui.note(format!(
                 "Could not write to {} due to error: {}",
                 config_file, e
-            ))
-            .map_err(io_to_init_error)?;
-            ui.info(format!("Please add the following to {}:", config_file))
-                .map_err(io_to_init_error)?;
-            ui.info(&managed_block).map_err(io_to_init_error)?;
+            ))?;
+            ui.info(format!("Please add the following to {}:", config_file))?;
+            ui.info(&managed_block)?;
         } else {
-            ui.info(format!("Updated zerobrew configuration in {}", config_file))
-                .map_err(io_to_init_error)?;
+            ui.info(format!("Updated zerobrew configuration in {}", config_file))?;
             ui.info(format!(
                 "Added {} and {} to PATH",
                 zerobrew_bin,
                 prefix_bin.display()
-            ))
-            .map_err(io_to_init_error)?;
+            ))?;
         }
     } else if no_modify_path {
-        ui.info("Skipped shell configuration (--no-modify-path)")
-            .map_err(io_to_init_error)?;
+        ui.info("Skipped shell configuration (--no-modify-path)")?;
         ui.info(format!(
             "To use zerobrew, add {} and {} to your PATH",
             zerobrew_bin,
             prefix_bin.display()
-        ))
-        .map_err(io_to_init_error)?;
+        ))?;
     }
 
     Ok(())
@@ -455,10 +462,6 @@ pub fn ensure_init(
     run_init(root, prefix, false, ui).map_err(|e| match e {
         InitError::Message(msg) => zb_core::Error::StoreCorruption { message: msg },
     })
-}
-
-fn io_to_init_error(err: std::io::Error) -> InitError {
-    InitError::Message(format!("Failed to write CLI output: {err}"))
 }
 
 fn io_to_core_error(err: std::io::Error) -> zb_core::Error {
