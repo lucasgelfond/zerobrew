@@ -40,6 +40,12 @@ const MAX_CONCURRENT_CHUNKS: usize = 6;
 /// Maximum retry attempts for failed chunk downloads
 const MAX_CHUNK_RETRIES: u32 = 3;
 
+fn bearer_header(token: &str) -> Result<HeaderValue, Error> {
+    HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| Error::NetworkFailure {
+        message: "auth token contains invalid header characters".into(),
+    })
+}
+
 fn calculate_chunk_size(file_size: u64) -> u64 {
     const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
     const MAX_CHUNK_SIZE: u64 = 20 * 1024 * 1024;
@@ -282,10 +288,7 @@ impl Downloader {
 
             let mut request = self.client.head(primary_url);
             if let Some(token) = &cached_token {
-                request = request.header(
-                    AUTHORIZATION,
-                    HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-                );
+                request = request.header(AUTHORIZATION, bearer_header(token)?);
             }
 
             match request.send().await {
@@ -508,10 +511,7 @@ async fn fetch_download_response_internal(
 
     let mut request = client.get(url);
     if let Some(token) = &cached_token {
-        request = request.header(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-        );
+        request = request.header(AUTHORIZATION, bearer_header(token)?);
     }
 
     let response = request.send().await.map_err(|e| Error::NetworkFailure {
@@ -546,10 +546,7 @@ async fn fetch_range_response_internal(
 
         let mut request = client.get(url).header("Range", range);
         if let Some(token) = &cached_token {
-            request = request.header(
-                AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-            );
+            request = request.header(AUTHORIZATION, bearer_header(token)?);
         }
 
         match request.send().await {
@@ -564,15 +561,16 @@ async fn fetch_range_response_internal(
                 };
 
                 if !response.status().is_success() {
-                    last_error = Some(Error::NetworkFailure {
+                    let err = Error::NetworkFailure {
                         message: format!("HTTP {}", response.status()),
-                    });
+                    };
 
                     if response.status().is_server_error() && attempt < MAX_CHUNK_RETRIES {
+                        last_error = Some(err);
                         tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
                         continue;
                     }
-                    return Err(last_error.unwrap());
+                    return Err(err);
                 }
 
                 return Ok(response);
@@ -591,7 +589,7 @@ async fn fetch_range_response_internal(
     }
 
     Err(last_error.unwrap_or_else(|| Error::NetworkFailure {
-        message: "range request failed after retries".to_string(),
+        message: "range request failed after retries".into(),
     }))
 }
 
@@ -631,10 +629,7 @@ async fn handle_auth_challenge_internal(
 
     let response = client
         .get(url)
-        .header(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-        )
+        .header(AUTHORIZATION, bearer_header(&token)?)
         .send()
         .await
         .map_err(|e| Error::NetworkFailure {
@@ -759,10 +754,7 @@ async fn download_chunk(
             .get(ctx.url)
             .header("Range", range_header.clone());
         if let Some(token) = &cached_token {
-            request = request.header(
-                AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-            );
+            request = request.header(AUTHORIZATION, bearer_header(token)?);
         }
 
         match request.send().await {
@@ -815,15 +807,16 @@ async fn download_chunk(
                 }
 
                 if !response.status().is_success() {
-                    last_error = Some(Error::NetworkFailure {
+                    let err = Error::NetworkFailure {
                         message: format!("chunk download returned HTTP {}", response.status()),
-                    });
+                    };
 
                     if response.status().is_server_error() && attempt < MAX_CHUNK_RETRIES {
+                        last_error = Some(err);
                         tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
                         continue;
                     }
-                    return Err(last_error.unwrap());
+                    return Err(err);
                 }
 
                 let mut chunk_data = Vec::with_capacity(chunk.size as usize);
