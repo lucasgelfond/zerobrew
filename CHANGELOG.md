@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Batch processing for `zb migrate` command ([#285](https://github.com/lucasgelfond/zerobrew/pull/285))
 - `zb outdated` command with `--quiet`/`--verbose`/`--json` output modes ([#266](https://github.com/lucasgelfond/zerobrew/pull/266))
 - `zb update` command ([#266](https://github.com/lucasgelfond/zerobrew/pull/266))
 - Tracing-based internal logging with `-v`/`--verbose` and `-q`/`--quiet` flags ([#275](https://github.com/lucasgelfond/zerobrew/pull/275))
@@ -17,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Build provenance attestation in release workflow ([#247](https://github.com/lucasgelfond/zerobrew/pull/247))
 
 ### Fixed
-- Strip zerobrew's bin paths from `PATH` during install to prevent dyld errors on re-install ([#288](https://github.com/lucasgelfond/zerobrew/issues/288))
+- Added SQLite schema versioning with sequential migrations and downgrade protection([#305](https://github.com/lucasgelfond/zerobrew/pull/305))
+- Global lock on installer to prevent concurrent install corruption ([#304](https://github.com/lucasgelfond/zerobrew/pull/304))
+- Strip zerobrew's bin paths from `PATH` during install to prevent dyld errors on re-install ([#289](https://github.com/lucasgelfond/zerobrew/pull/289))
 - Warn when Mach-O in-place patching is skipped due to prefix length mismatch (Intel Mac) ([#286](https://github.com/lucasgelfond/zerobrew/issues/286))
 - Prefer compatible macOS bottle tags over newer ones ([#283](https://github.com/lucasgelfond/zerobrew/pull/283))
 - Ruby syntax backwards compatibility for source builds ([#282](https://github.com/lucasgelfond/zerobrew/pull/282))
@@ -28,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preprocess resolver before parsing ([#244](https://github.com/lucasgelfond/zerobrew/pull/244))
 
 ### Changed
+- Eliminate unwraps, reduce allocations, decompose install path ([#292](https://github.com/lucasgelfond/zerobrew/pull/292))
 - Removed `--yes` alias from global `--auto-init` flag ([#287](https://github.com/lucasgelfond/zerobrew/pull/287))
 
 ## [0.1.2] - 2026-02-15
