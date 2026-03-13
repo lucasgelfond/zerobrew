@@ -17,24 +17,71 @@ pub struct InstalledKeg {
 }
 
 impl Database {
+    const SCHEMA_VERSION: u32 = 1;
+
     pub fn open(path: &Path) -> Result<Self, Error> {
         let conn = Connection::open(path).map_err(Error::store("failed to open database"))?;
-
-        Self::init_schema(&conn)?;
-
+        Self::migrate(&conn)?;
         Ok(Self { conn })
     }
 
     pub fn in_memory() -> Result<Self, Error> {
         let conn =
             Connection::open_in_memory().map_err(Error::store("failed to open in-memory db"))?;
-
-        Self::init_schema(&conn)?;
-
+        Self::migrate(&conn)?;
         Ok(Self { conn })
     }
 
-    fn init_schema(conn: &Connection) -> Result<(), Error> {
+    fn get_schema_version(conn: &Connection) -> Result<u32, Error> {
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(Error::store("failed to query schema version"))?;
+        Ok(version)
+    }
+
+    fn set_schema_version(conn: &Connection, version: u32) -> Result<(), Error> {
+        conn.execute(&format!("PRAGMA user_version = {}", version), [])
+            .map_err(Error::store("failed to set schema version"))?;
+        Ok(())
+    }
+
+    fn migrate(conn: &Connection) -> Result<(), Error> {
+        let current_version = Self::get_schema_version(conn)?;
+
+        if current_version > Self::SCHEMA_VERSION {
+            return Err(Error::StoreCorruption {
+                message: format!(
+                    "database schema version {} is newer than supported version {}. \
+                     Please upgrade zerobrew",
+                    current_version,
+                    Self::SCHEMA_VERSION
+                ),
+            });
+        }
+
+        if current_version == Self::SCHEMA_VERSION {
+            return Ok(());
+        }
+
+        for version in current_version..Self::SCHEMA_VERSION {
+            let next_version = version + 1;
+            Self::migrate_to_version(conn, next_version)?;
+            Self::set_schema_version(conn, next_version)?;
+        }
+
+        Ok(())
+    }
+
+    fn migrate_to_version(conn: &Connection, version: u32) -> Result<(), Error> {
+        match version {
+            1 => Self::migrate_to_v1(conn),
+            _ => Err(Error::StoreCorruption {
+                message: format!("unknown migration version {}", version),
+            }),
+        }
+    }
+
+    fn migrate_to_v1(conn: &Connection) -> Result<(), Error> {
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS installed_kegs (
@@ -58,7 +105,7 @@ impl Database {
             );
             ",
         )
-        .map_err(Error::store("failed to initialize schema"))?;
+        .map_err(Error::store("failed to create initial schema"))?;
 
         Ok(())
     }
@@ -470,5 +517,58 @@ mod tests {
             err.to_string()
                 .contains("failed to query previous store key")
         );
+    }
+
+    #[test]
+    fn new_database_starts_at_version_1() {
+        let db = Database::in_memory().expect("failed to create database");
+        let version = Database::get_schema_version(&db.conn).expect("failed to get version");
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let db = Database::in_memory().expect("failed to create database");
+        Database::migrate(&db.conn).expect("first migration failed");
+        Database::migrate(&db.conn).expect("second migration failed");
+        let version = Database::get_schema_version(&db.conn).expect("failed to get version");
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn rejects_future_schema_version() {
+        let conn = Connection::open_in_memory().expect("failed to open connection");
+        Database::set_schema_version(&conn, 999).expect("failed to set version");
+        let err = Database::migrate(&conn).unwrap_err();
+        assert!(matches!(err, Error::StoreCorruption { .. }));
+        assert!(err.to_string().contains("newer than supported version"));
+    }
+
+    #[test]
+    fn migration_preserves_existing_data() {
+        let conn = Connection::open_in_memory().expect("failed to open connection");
+
+        conn.execute_batch(
+            "CREATE TABLE installed_kegs (
+                name TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                store_key TEXT NOT NULL,
+                installed_at INTEGER NOT NULL
+            );
+            INSERT INTO installed_kegs VALUES ('test', '1.0.0', 'key123', 1234567890);",
+        )
+        .expect("failed to create old schema");
+
+        Database::migrate(&conn).expect("migration failed");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM installed_kegs", [], |row| row.get(0))
+            .expect("failed to count rows");
+        assert_eq!(count, 1);
+
+        let name: String = conn
+            .query_row("SELECT name FROM installed_kegs", [], |row| row.get(0))
+            .expect("failed to query data");
+        assert_eq!(name, "test");
     }
 }
