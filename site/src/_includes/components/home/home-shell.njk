@@ -1,0 +1,17 @@
+{% include "components/home/hero.njk" %}
+
+<section class="wave-fill" aria-label="Homepage highlights">
+  <div class="wave-fill-inner">
+    <section class="info-grid" aria-label="Install and benchmarks">
+      {% include "components/home/install-panel.njk" %}
+      {% include "components/home/benchmark-panel.njk" %}
+    </section>
+
+    <section class="copy-grid" aria-label="Homepage summary">
+      {% include "components/home/why-zerobrew.njk" %}
+      {% include "components/home/get-started.njk" %}
+    </section>
+  </div>
+</section>
+
+<script src="/assets/js/home.js" defer></script>

@@ -1,0 +1,12 @@
+{
+  "title": "zerobrew",
+  "description": "A drop-in, 5-20x faster, experimental Homebrew alternative.",
+  "nav": [
+    { "label": "Docs", "href": "/docs" },
+    { "label": "Github", "href": "/github" },
+    { "label": "Community", "href": "/discord" }
+  ],
+  "footer": {
+    "copyright": "© zerobrew"
+  }
+}

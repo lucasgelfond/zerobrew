@@ -1,0 +1,33 @@
+{
+  "groups": [
+    {
+      "title": "Total install time (10 packages)",
+      "items": [
+        {
+          "label": "ZB",
+          "tag": "warm",
+          "width": 4,
+          "speedup": "28.6x",
+          "time": "15s",
+          "color": "var(--color-warm)"
+        },
+        {
+          "label": "ZB",
+          "tag": "cold",
+          "width": 14,
+          "speedup": "7.0x",
+          "time": "62s",
+          "color": "var(--color-cold)"
+        },
+        {
+          "label": "HB",
+          "tag": "",
+          "width": 100,
+          "speedup": "",
+          "time": "432s",
+          "color": "var(--color-wave)"
+        }
+      ]
+    }
+  ]
+}
