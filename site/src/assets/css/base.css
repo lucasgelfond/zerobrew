@@ -18,18 +18,11 @@ body {
   font-family: var(--font-sans);
   background: var(--color-bg);
   color: var(--color-fg);
-  max-width: var(--container);
-  margin-inline: auto;
-  padding: var(--space-4);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
   line-height: 1.5;
-}
-
-body.is-home {
-  padding-bottom: 0;
 }
 
 img {
@@ -56,4 +49,33 @@ code {
 
 #main-content {
   flex: 1;
+}
+
+.site-shell {
+  width: min(calc(100% - (2 * var(--space-4))), var(--container-wide));
+  margin-inline: auto;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--space-4);
+  top: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-strong);
+  border-radius: var(--radius-2);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+  z-index: 20;
+}
+
+@media (max-width: 600px) {
+  .site-shell {
+    width: min(calc(100% - (2 * var(--space-3))), var(--container-wide));
+  }
 }
