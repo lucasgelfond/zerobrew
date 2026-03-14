@@ -1,0 +1,304 @@
+.install-panel,
+.bench-panel {
+  min-width: 0;
+  color: var(--color-fg);
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-copy {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  align-content: start;
+}
+
+.panel-description {
+  margin: 0;
+  color: hsl(50 48% 90% / 0.9);
+}
+
+.panel-description strong {
+  display: inline-block;
+  padding: 0.08rem 0.38rem;
+  color: var(--color-bg);
+  font-size: 0.92em;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.panel-eyebrow {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: hsl(50 48% 90% / 0.82);
+}
+
+.panel-eyebrow::before {
+  content: "";
+  width: 1.35rem;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.install-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: auto;
+  margin-bottom: var(--space-3);
+  position: relative;
+  z-index: 1;
+}
+
+.install-tab-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.install-tab,
+.install-copy {
+  border: var(--border-strong);
+  background: var(--color-surface);
+  color: inherit;
+  border-radius: var(--radius-2);
+  font: inherit;
+  font-weight: 600;
+}
+
+.install-tab {
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  opacity: 0.8;
+  transition:
+    transform 150ms ease,
+    opacity 150ms ease,
+    background-color 150ms ease;
+}
+
+.install-tab:hover {
+  transform: translateY(-2px);
+}
+
+.install-tab.is-active {
+  opacity: 1;
+}
+
+.install-copy {
+  width: var(--space-7);
+  height: var(--space-7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.install-copy.is-copied::after {
+  content: "Copied";
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-strong);
+  border-radius: var(--radius-2);
+  background: var(--color-surface);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.install-copy svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.install-copy rect {
+  fill: var(--color-surface);
+}
+
+.install-command {
+  border: var(--border-strong);
+  background: var(--color-surface);
+  border-radius: var(--radius-3);
+  min-height: var(--space-9);
+  padding: var(--space-2) var(--space-4);
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  margin-bottom: var(--space-3);
+}
+
+.install-command code {
+  display: block;
+  width: 100%;
+  line-height: 1.2;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.bench-card {
+  border: var(--border-strong);
+  background: var(--color-surface);
+  border-radius: var(--radius-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  flex: 1;
+}
+
+.bench-card .panel-eyebrow {
+  color: var(--color-warm);
+}
+
+.bench-header {
+  font-weight: 700;
+  margin: calc(var(--space-3) * -1) calc(var(--space-4) * -1) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border-strong);
+  background: var(--color-surface);
+  border-top-left-radius: var(--radius-3);
+  border-top-right-radius: var(--radius-3);
+}
+
+.bench-title {
+  margin: 0;
+  font: inherit;
+  line-height: 1.2;
+}
+
+.bench-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.bench-row {
+  display: grid;
+  grid-template-columns: var(--space-8) 1fr var(--space-8);
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.bench-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--bench-color, var(--color-fg));
+  text-align: center;
+  line-height: 1;
+}
+
+.bench-tag {
+  font-size: 0.7em;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.bench-bar {
+  height: var(--space-7);
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.bench-fill {
+  display: block;
+  height: 100%;
+  border: var(--border-strong);
+  border-radius: var(--radius-2);
+  box-shadow: var(--shadow-1);
+  background: var(--bench-color, var(--color-warm));
+}
+
+.bench-speedup-text {
+  font-size: 0.75em;
+  font-weight: 600;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.bench-time {
+  text-align: right;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .install-tab-group {
+    width: 100%;
+  }
+
+  .install-tab {
+    flex: 1 1 0;
+  }
+}
+
+@media (max-width: 540px) {
+  .install-tabs {
+    align-items: stretch;
+  }
+
+  .install-tab-group {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .install-copy {
+    width: 100%;
+    height: auto;
+    min-height: 2.9rem;
+  }
+
+  .install-copy.is-copied::after {
+    right: auto;
+    left: 50%;
+    top: auto;
+    bottom: calc(100% + var(--space-2));
+    transform: translateX(-50%);
+    margin-right: 0;
+  }
+
+  .install-command {
+    padding-inline: var(--space-3);
+  }
+
+  .install-command code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .bench-row {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  .bench-label {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  .bench-bar {
+    height: var(--space-6);
+  }
+
+  .bench-time {
+    text-align: left;
+  }
+}

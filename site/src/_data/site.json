@@ -5,8 +5,5 @@
     { "label": "Install", "href": "#install" },
     { "label": "GitHub", "href": "/github" },
     { "label": "Discord", "href": "/discord" }
-  ],
-  "footer": {
-    "copyright": "© zerobrew"
-  }
+  ]
 }

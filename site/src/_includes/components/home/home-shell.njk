@@ -2,13 +2,21 @@
   {% include "components/home/hero.njk" %}
 
   <section class="wave-fill" aria-label="Homepage highlights">
-    <div class="wave-fill-inner">
+    <div class="site-shell wave-fill-inner">
       <section class="info-grid" aria-label="Install and benchmarks">
         {% include "components/home/install-panel.njk" %}
         {% include "components/home/benchmark-panel.njk" %}
       </section>
 
-      {% include "components/home/summary-grid.njk" %}
+      <section class="summary-grid" aria-label="Homepage summary">
+        {% for card in home.sections.summaryCards %}
+          <article class="summary-card card-shadow">
+            <h2 class="summary-card-title">{{ card.title }}</h2>
+            <p class="summary-card-body">{{ card.body }}</p>
+            <a class="summary-card-link" href="{{ card.href }}">{{ card.ctaLabel }}</a>
+          </article>
+        {% endfor %}
+      </section>
     </div>
   </section>
 </div>
