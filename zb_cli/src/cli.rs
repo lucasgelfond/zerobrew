@@ -144,14 +144,6 @@ pub enum Commands {
     },
     Update,
     Outdated {
-        /// Show only package names
-        #[arg(short, long, conflicts_with_all = ["verbose", "json"])]
-        quiet: bool,
-
-        /// Show detailed version information
-        #[arg(short, long, conflicts_with_all = ["quiet", "json"])]
-        verbose: bool,
-
         /// Output as JSON
         #[arg(long, conflicts_with_all = ["quiet", "verbose"])]
         json: bool,

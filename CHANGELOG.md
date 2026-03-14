@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-03-14
+
+### Fixed
+- Fix `zb outdated` panic caused by clap type mismatch between global `verbose` (u8 count) and subcommand `verbose` (bool) flags ([#308](https://github.com/lucasgelfond/zerobrew/pull/308))
+
 ## [0.2.0] - 2026-03-12
 
 ### Added
@@ -71,7 +76,8 @@ To get an idea of the initial features zerobrew supports, take a look at the [RE
 
 See the [full commit history](https://github.com/lucasgelfond/zerobrew/commits/v0.1.1) for more details.
 
-[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lucasgelfond/zerobrew/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/lucasgelfond/zerobrew/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/lucasgelfond/zerobrew/releases/tag/v0.1.1
