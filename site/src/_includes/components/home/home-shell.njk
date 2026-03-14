@@ -1,0 +1,16 @@
+<div class="home-shell">
+  {% include "components/home/hero.njk" %}
+
+  <section class="wave-fill" aria-label="Homepage highlights">
+    <div class="wave-fill-inner">
+      <section class="info-grid" aria-label="Install and benchmarks">
+        {% include "components/home/install-panel.njk" %}
+        {% include "components/home/benchmark-panel.njk" %}
+      </section>
+
+      {% include "components/home/summary-grid.njk" %}
+    </div>
+  </section>
+</div>
+
+<script src="/assets/js/home.js" defer></script>
