@@ -1,0 +1,35 @@
+footer {
+  margin-top: 0;
+  padding: var(--space-5) 0 var(--space-6);
+  color: var(--color-fg-soft);
+  font-weight: 600;
+  display: flex;
+  justify-content: center;
+}
+
+footer p {
+  margin: 0;
+  text-align: center;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.is-home footer {
+  position: relative;
+  z-index: 0;
+  padding: var(--space-5) 0 var(--space-6);
+  color: var(--color-bg);
+  box-shadow: inset 0 2px 0 hsl(0 0% 10% / 0.1);
+}
+
+.is-home footer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  background: var(--color-wave);
+  z-index: -1;
+}
