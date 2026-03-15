@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::ui::{PromptDefault, StdUi};
+use zb_io::validate_privileged_path;
 
 #[derive(Debug)]
 pub enum InitError {
@@ -55,6 +56,11 @@ pub fn run_init(
     no_modify_path: bool,
     ui: &mut StdUi,
 ) -> Result<(), InitError> {
+    validate_privileged_path(root)
+        .map_err(|e| InitError::Message(format!("invalid root path: {e}")))?;
+    validate_privileged_path(prefix)
+        .map_err(|e| InitError::Message(format!("invalid prefix path: {e}")))?;
+
     // On macOS, warn early if the chosen prefix is too long for Mach-O patching.
     if cfg!(target_os = "macos") {
         let prefix_str = prefix.to_string_lossy();
