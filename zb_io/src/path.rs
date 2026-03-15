@@ -22,6 +22,12 @@ pub fn validate_privileged_path(path: &Path) -> Result<(), Error> {
         });
     }
 
+    if path_str.starts_with('-') {
+        return Err(Error::InvalidArgument {
+            message: format!("path starts with '-': {}", path.display()),
+        });
+    }
+
     for component in path.components() {
         if matches!(component, Component::ParentDir) {
             return Err(Error::InvalidArgument {
@@ -93,5 +99,17 @@ mod tests {
     fn rejects_trailing_dotdot() {
         let err = validate_privileged_path(Path::new("/opt/zerobrew/..")).unwrap_err();
         assert!(err.to_string().contains("'..'"));
+    }
+
+    #[test]
+    fn rejects_leading_dash() {
+        let err = validate_privileged_path(Path::new("-rf")).unwrap_err();
+        assert!(err.to_string().contains("starts with '-'"));
+    }
+
+    #[test]
+    fn rejects_leading_double_dash() {
+        let err = validate_privileged_path(Path::new("--help")).unwrap_err();
+        assert!(err.to_string().contains("starts with '-'"));
     }
 }
