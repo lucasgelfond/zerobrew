@@ -1,8 +1,10 @@
-use crate::ui::{PromptDefault, StdUi};
 use std::path::Path;
 use std::process::Command;
 
+use zb_io::validate_privileged_path;
+
 use crate::init::{InitError, run_init};
+use crate::ui::{PromptDefault, StdUi};
 
 pub fn execute(
     root: &Path,
@@ -10,6 +12,9 @@ pub fn execute(
     yes: bool,
     ui: &mut StdUi,
 ) -> Result<(), zb_core::Error> {
+    validate_privileged_path(root)?;
+    validate_privileged_path(prefix)?;
+
     if !root.exists() && !prefix.exists() {
         ui.info("Nothing to reset - directories do not exist.")
             .map_err(ui_error)?;
