@@ -16,6 +16,20 @@ pub struct InstalledKeg {
     pub installed_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreRef {
+    pub store_key: String,
+    pub refcount: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KegFileRecord {
+    pub name: String,
+    pub version: String,
+    pub linked_path: String,
+    pub target_path: String,
+}
+
 impl Database {
     const SCHEMA_VERSION: u32 = 1;
 
@@ -194,6 +208,109 @@ impl Database {
             .map_err(Error::store("failed to delete store ref"))?;
         Ok(())
     }
+
+    pub fn list_store_refs(&self) -> Result<Vec<StoreRef>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT store_key, refcount FROM store_refs ORDER BY store_key")
+            .map_err(Error::store("failed to prepare statement"))?;
+
+        let refs = stmt
+            .query_map([], |row| {
+                Ok(StoreRef {
+                    store_key: row.get(0)?,
+                    refcount: row.get(1)?,
+                })
+            })
+            .map_err(Error::store("failed to query store refs"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Error::store("failed to collect results"))?;
+
+        Ok(refs)
+    }
+
+    pub fn list_keg_files(&self) -> Result<Vec<KegFileRecord>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT name, version, linked_path, target_path
+                 FROM keg_files
+                 ORDER BY name, version, linked_path",
+            )
+            .map_err(Error::store("failed to prepare statement"))?;
+
+        let records = stmt
+            .query_map([], |row| {
+                Ok(KegFileRecord {
+                    name: row.get(0)?,
+                    version: row.get(1)?,
+                    linked_path: row.get(2)?,
+                    target_path: row.get(3)?,
+                })
+            })
+            .map_err(Error::store("failed to query keg files"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Error::store("failed to collect results"))?;
+
+        Ok(records)
+    }
+
+    pub fn replace_store_refs(&self, store_refs: &[StoreRef]) -> Result<(), Error> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(Error::store("failed to start transaction"))?;
+
+        tx.execute("DELETE FROM store_refs", [])
+            .map_err(Error::store("failed to clear store refs"))?;
+
+        {
+            let mut stmt = tx
+                .prepare("INSERT INTO store_refs (store_key, refcount) VALUES (?1, ?2)")
+                .map_err(Error::store("failed to prepare statement"))?;
+
+            for store_ref in store_refs {
+                stmt.execute(params![store_ref.store_key, store_ref.refcount])
+                    .map_err(Error::store("failed to insert store ref"))?;
+            }
+        }
+
+        tx.commit()
+            .map_err(Error::store("failed to commit transaction"))
+    }
+
+    pub fn count_stale_keg_file_records(&self) -> Result<usize, Error> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM keg_files
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM installed_kegs
+                     WHERE installed_kegs.name = keg_files.name
+                       AND installed_kegs.version = keg_files.version
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(Error::store("failed to count stale keg file records"))?;
+        Ok(count as usize)
+    }
+
+    pub fn prune_stale_keg_file_records(&self) -> Result<usize, Error> {
+        self.conn
+            .execute(
+                "DELETE FROM keg_files
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM installed_kegs
+                     WHERE installed_kegs.name = keg_files.name
+                       AND installed_kegs.version = keg_files.version
+                 )",
+                [],
+            )
+            .map_err(Error::store("failed to prune stale keg file records"))
+    }
 }
 
 pub struct InstallTransaction<'a> {
@@ -303,6 +420,22 @@ impl<'a> InstallTransaction<'a> {
         }
 
         Ok(store_key)
+    }
+
+    pub fn delete_installed_record(&self, name: &str) -> Result<(), Error> {
+        self.tx
+            .execute("DELETE FROM installed_kegs WHERE name = ?1", params![name])
+            .map_err(Error::store("failed to remove install record"))?;
+
+        self.clear_keg_file_records(name)
+    }
+
+    pub fn clear_keg_file_records(&self, name: &str) -> Result<(), Error> {
+        self.tx
+            .execute("DELETE FROM keg_files WHERE name = ?1", params![name])
+            .map_err(Error::store("failed to clear keg files records"))?;
+
+        Ok(())
     }
 
     pub fn commit(self) -> Result<(), Error> {

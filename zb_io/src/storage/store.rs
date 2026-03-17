@@ -34,6 +34,25 @@ impl Store {
         self.entry_path(store_key).exists()
     }
 
+    pub fn list_entries(&self) -> Result<Vec<String>, Error> {
+        let mut entries = Vec::new();
+        for entry in
+            fs::read_dir(&self.store_dir).map_err(Error::store("failed to read store directory"))?
+        {
+            let entry = entry.map_err(Error::store("failed to read store entry"))?;
+            let file_type = entry
+                .file_type()
+                .map_err(Error::store("failed to get store entry type"))?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            if let Ok(name) = entry.file_name().into_string() {
+                entries.push(name);
+            }
+        }
+        Ok(entries)
+    }
+
     pub fn ensure_entry(&self, store_key: &str, blob_path: &Path) -> Result<PathBuf, Error> {
         let entry_path = self.entry_path(store_key);
 

@@ -10,11 +10,11 @@ pub mod ssl;
 pub mod storage;
 
 pub use build::{BuildExecutor, DepInfo};
-pub use cellar::{Cellar, LinkedFile, Linker};
+pub use cellar::{Cellar, LinkedFile, Linker, MaterializedKeg};
 pub use extraction::extract_tarball;
 pub use installer::{
-    ExecuteResult, HomebrewMigrationPackages, HomebrewPackage, InstallPlan, Installer,
-    OutdatedPackage, create_installer, get_homebrew_packages,
+    DiagnosticReport, ExecuteResult, HomebrewMigrationPackages, HomebrewPackage, InstallPlan,
+    Installer, OutdatedPackage, RepairSummary, create_installer, get_homebrew_packages,
 };
 pub use network::{
     ApiCache, ApiClient, DownloadProgressCallback, DownloadRequest, Downloader, ParallelDownloader,
@@ -22,4 +22,4 @@ pub use network::{
 pub use path::validate_privileged_path;
 pub use progress::{InstallProgress, ProgressCallback};
 pub use ssl::{find_ca_bundle_from_prefix, find_ca_dir};
-pub use storage::{BlobCache, Database, InstalledKeg, Store};
+pub use storage::{BlobCache, Database, InstalledKeg, KegFileRecord, Store, StoreRef};

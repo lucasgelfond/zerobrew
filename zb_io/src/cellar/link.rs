@@ -299,6 +299,18 @@ impl Linker {
         Ok(unlinked)
     }
 
+    pub fn collect_linked_files(&self, keg_path: &Path) -> Result<Vec<LinkedFile>, Error> {
+        let mut linked = Vec::new();
+        for dir_name in LINK_DIRS {
+            let src_dir = keg_path.join(dir_name);
+            let dst_dir = self.prefix.join(dir_name);
+            if src_dir.exists() {
+                linked.extend(Self::collect_linked_recursive(&src_dir, &dst_dir)?);
+            }
+        }
+        Ok(linked)
+    }
+
     fn unlink_recursive(src: &Path, dst: &Path) -> Result<Vec<PathBuf>, Error> {
         let mut unlinked = Vec::new();
         if !src.exists() || !dst.exists() {
@@ -332,6 +344,38 @@ impl Linker {
             }
         }
         Ok(unlinked)
+    }
+
+    fn collect_linked_recursive(src: &Path, dst: &Path) -> Result<Vec<LinkedFile>, Error> {
+        let mut linked = Vec::new();
+        if !src.exists() || !dst.exists() {
+            return Ok(linked);
+        }
+        for entry in fs::read_dir(src).map_err(Error::store("failed to read directory"))? {
+            let entry = entry.map_err(Error::store("failed to read directory entry"))?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+
+            if src_path.is_dir() && dst_path.is_dir() && !dst_path.is_symlink() {
+                linked.extend(Self::collect_linked_recursive(&src_path, &dst_path)?);
+                continue;
+            }
+
+            if let Ok(target) = fs::read_link(&dst_path) {
+                let resolved = if target.is_relative() {
+                    dst_path.parent().unwrap_or(Path::new("")).join(&target)
+                } else {
+                    target
+                };
+                if fs::canonicalize(&resolved).ok() == fs::canonicalize(&src_path).ok() {
+                    linked.push(LinkedFile {
+                        link_path: dst_path,
+                        target_path: src_path,
+                    });
+                }
+            }
+        }
+        Ok(linked)
     }
 
     fn unlink_opt(&self, keg_path: &Path) -> Result<(), Error> {

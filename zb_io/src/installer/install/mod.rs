@@ -1,4 +1,5 @@
 mod bottle;
+pub mod doctor;
 mod outdated;
 mod plan;
 mod source;

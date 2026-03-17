@@ -20,6 +20,13 @@ pub struct Cellar {
     cellar_dir: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterializedKeg {
+    pub name: String,
+    pub version: String,
+    pub path: PathBuf,
+}
+
 impl Cellar {
     pub fn new(root: &Path) -> io::Result<Self> {
         Self::new_at(root.join("cellar"))
@@ -36,6 +43,51 @@ impl Cellar {
 
     pub fn has_keg(&self, name: &str, version: &str) -> bool {
         self.keg_path(name, version).exists()
+    }
+
+    pub fn list_kegs(&self) -> Result<Vec<MaterializedKeg>, Error> {
+        let mut kegs = Vec::new();
+
+        for name_entry in fs::read_dir(&self.cellar_dir)
+            .map_err(Error::store("failed to read cellar directory"))?
+        {
+            let name_entry = name_entry.map_err(Error::store("failed to read cellar entry"))?;
+            let file_type = name_entry
+                .file_type()
+                .map_err(Error::store("failed to get cellar entry type"))?;
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let Some(name) = name_entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+
+            for version_entry in fs::read_dir(name_entry.path())
+                .map_err(Error::store("failed to read keg directory"))?
+            {
+                let version_entry =
+                    version_entry.map_err(Error::store("failed to read keg entry"))?;
+                let file_type = version_entry
+                    .file_type()
+                    .map_err(Error::store("failed to get keg entry type"))?;
+                if !file_type.is_dir() {
+                    continue;
+                }
+
+                let Some(version) = version_entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+
+                kegs.push(MaterializedKeg {
+                    name: name.clone(),
+                    version,
+                    path: version_entry.path(),
+                });
+            }
+        }
+
+        Ok(kegs)
     }
 
     pub fn materialize(
