@@ -1,6 +1,10 @@
+use std::fs;
+use std::path::Path;
+
 use zb_core::{Error, formula_token};
 
 use super::Installer;
+use super::bottle::{remove_path_any, resolve_staged_cask_app_target};
 
 impl Installer {
     pub fn uninstall(&mut self, name: &str) -> Result<(), Error> {
@@ -11,6 +15,7 @@ impl Installer {
 
         let keg_path = self.cellar.keg_path(keg_name, &installed.version);
         self.linker.unlink_keg(&keg_path)?;
+        uninstall_cask_app_targets(&keg_path)?;
 
         {
             let tx = self.db.transaction()?;
@@ -37,13 +42,38 @@ impl Installer {
     }
 }
 
+fn uninstall_cask_app_targets(keg_path: &Path) -> Result<(), Error> {
+    let apps_dir = keg_path.join("Applications");
+    if !apps_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(&apps_dir).map_err(Error::store("failed to read cask app dir"))? {
+        let entry = entry.map_err(Error::store("failed to read cask app entry"))?;
+        let staged_path = entry.path();
+        if !staged_path.is_symlink() {
+            continue;
+        }
+
+        let resolved = resolve_staged_cask_app_target(&staged_path)?;
+
+        if resolved.symlink_metadata().is_ok() {
+            remove_path_any(&resolved).map_err(Error::store("failed to remove installed app"))?;
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Write;
 
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    use zip::write::SimpleFileOptions;
 
     use crate::cellar::Cellar;
     use crate::installer::install::test_support::*;
@@ -52,6 +82,18 @@ mod tests {
     use crate::storage::db::Database;
     use crate::storage::store::Store;
     use crate::{Installer, Linker};
+
+    fn create_cask_app_zip() -> Vec<u8> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default().unix_permissions(0o755);
+        zip.add_directory("Test.app/", options).unwrap();
+        zip.add_directory("Test.app/Contents/", options).unwrap();
+        zip.start_file("Test.app/Contents/Info.plist", options)
+            .unwrap();
+        zip.write_all(b"plist").unwrap();
+        zip.finish().unwrap().into_inner()
+    }
 
     #[tokio::test]
     async fn uninstall_cleans_everything() {
@@ -459,5 +501,78 @@ end
         let err = installer.uninstall("hashicorp/tap/terraform").unwrap_err();
         assert!(matches!(err, zb_core::Error::NotInstalled { .. }));
         assert!(installer.is_installed("terraform"));
+    }
+
+    #[tokio::test]
+    async fn uninstall_removes_installed_cask_app() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let app_zip = create_cask_app_zip();
+        let app_sha = sha256_hex(&app_zip);
+
+        let cask_json = format!(
+            r#"{{
+                "token": "test-app",
+                "version": "1.0.0",
+                "url": "{}/downloads/test-app.zip",
+                "sha256": "{}",
+                "artifacts": [
+                    {{ "app": ["Test.app"] }}
+                ]
+            }}"#,
+            mock_server.uri(),
+            app_sha
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/cask/test-app.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&cask_json))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/downloads/test-app.zip"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(app_zip))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        let app_dir = tmp.path().join("Applications");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri()))
+            .unwrap()
+            .with_cask_base_url(format!("{}/cask", mock_server.uri()));
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let mut installer = Installer::new_with_app_dir(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+            app_dir.clone(),
+            root.join("locks"),
+        );
+
+        installer
+            .install(&["cask:test-app".to_string()], true)
+            .await
+            .unwrap();
+
+        assert!(installer.is_installed("cask:test-app"));
+        assert!(app_dir.join("Test.app").exists());
+
+        installer.uninstall("cask:test-app").unwrap();
+
+        assert!(!installer.is_installed("cask:test-app"));
+        assert!(!app_dir.join("Test.app").exists());
     }
 }
