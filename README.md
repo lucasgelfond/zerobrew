@@ -39,6 +39,7 @@ After install, run the `export` command it prints (or restart your terminal).
 ```bash
 zb install jq                   # install one package
 zb install wget git             # install multiple
+zb install --cask docker        # install a cask
 zb bundle                       # install from Brewfile
 zb bundle install -f myfile     # install from custom file
 zb bundle dump                  # export installed packages to Brewfile

@@ -6,11 +6,12 @@ use std::time::Instant;
 use zb_io::{InstallProgress, ProgressCallback};
 
 use crate::ui::StdUi;
-use crate::utils::{normalize_formula_name, suggest_homebrew, suggest_missing_formula_matches};
+use crate::utils::{normalize_install_target, suggest_homebrew, suggest_missing_formula_matches};
 
 pub async fn execute(
     installer: &mut zb_io::Installer,
     formulas: Vec<String>,
+    cask: bool,
     no_link: bool,
     build_from_source: bool,
     ui: &mut StdUi,
@@ -25,7 +26,7 @@ pub async fn execute(
     let mut normalized_names = Vec::new();
     let mut cask_names = Vec::new();
     for formula in &formulas {
-        match normalize_formula_name(formula) {
+        match normalize_install_target(formula, cask) {
             Ok(name) => {
                 if name.starts_with("cask:") {
                     cask_names.push(name);
@@ -34,7 +35,7 @@ pub async fn execute(
                 }
             }
             Err(e) => {
-                suggest_homebrew(formula, &e);
+                suggest_homebrew(formula, cask, &e);
                 return Err(e);
             }
         }
@@ -53,7 +54,7 @@ pub async fn execute(
 
                 if !handled_missing {
                     for formula in &formulas {
-                        suggest_homebrew(formula, &e);
+                        suggest_homebrew(formula, cask, &e);
                     }
                 }
                 return Err(e);
@@ -219,7 +220,7 @@ pub async fn execute(
 
                 if !handled_missing {
                     for formula in &formulas {
-                        suggest_homebrew(formula, &e);
+                        suggest_homebrew(formula, cask, &e);
                     }
                 }
                 return Err(e);
