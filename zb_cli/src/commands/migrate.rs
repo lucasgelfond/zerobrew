@@ -87,6 +87,7 @@ pub async fn execute(
     crate::commands::install::execute(
         installer,
         formula_names.clone(),
+        false, // cask
         false, // no_link
         false, // build_from_source
         ui,
