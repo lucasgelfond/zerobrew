@@ -238,9 +238,7 @@ pub fn patch_homebrew_placeholders(
     let cellar_str = cellar_dir.to_string_lossy().to_string();
     let prefix_str = prefix.to_string_lossy().to_string();
 
-    // Regex to match version mismatches in paths like /Cellar/ffmpeg/8.0.1_1/
-    // We'll fix references to this package with wrong versions
-    let version_pattern = format!(r"(/{}/)([^/]+)(/)", regex::escape(pkg_name));
+    let version_pattern = format!(r"(/Cellar/{}/)([^/]+)(/)", regex::escape(pkg_name));
     let version_regex = Regex::new(&version_pattern).ok();
 
     // Collect all Mach-O files first (skip symlinks to avoid double-processing)
@@ -318,7 +316,7 @@ pub fn patch_homebrew_placeholders(
         if let Some(re) = &version_regex
             && re.is_match(&new_path)
         {
-            let replacement = format!("/{}/{}/", pkg_name, pkg_version);
+            let replacement = format!("/Cellar/{}/{}/", pkg_name, pkg_version);
             let fixed = re.replace(&new_path, |caps: &regex::Captures| {
                 let matched_version = &caps[2];
                 if matched_version != pkg_version {
@@ -628,6 +626,47 @@ mod tests {
             unchanged, original,
             "binary must be unchanged when prefix cannot be expanded in-place"
         );
+    }
+
+    #[test]
+    fn test_version_regex_only_matches_cellar_paths() {
+        use regex::Regex;
+
+        let pkg_name = "mpdecimal";
+        let pkg_version = "4.0.1";
+        let pattern = format!(r"(/Cellar/{}/)([^/]+)(/)", regex::escape(pkg_name));
+        let re = Regex::new(&pattern).expect("version regex should compile");
+
+        let cellar_path = "/opt/zerobrew/Cellar/mpdecimal/3.9.0/lib/libmpdec.4.dylib";
+        assert!(re.is_match(cellar_path));
+
+        let replacement = format!("/Cellar/{}/{}/", pkg_name, pkg_version);
+        let fixed = re.replace(cellar_path, |caps: &regex::Captures| {
+            let matched_version = &caps[2];
+            if matched_version != pkg_version {
+                replacement.clone()
+            } else {
+                caps[0].to_string()
+            }
+        });
+        assert_eq!(
+            fixed,
+            "/opt/zerobrew/Cellar/mpdecimal/4.0.1/lib/libmpdec.4.dylib"
+        );
+
+        let opt_path = "/opt/zerobrew/opt/mpdecimal/lib/libmpdec.4.dylib";
+        assert!(!re.is_match(opt_path));
+
+        let cellar_same_version = "/opt/zerobrew/Cellar/mpdecimal/4.0.1/lib/libmpdec.4.dylib";
+        let unchanged = re.replace(cellar_same_version, |caps: &regex::Captures| {
+            let matched_version = &caps[2];
+            if matched_version != pkg_version {
+                replacement.clone()
+            } else {
+                caps[0].to_string()
+            }
+        });
+        assert_eq!(unchanged, cellar_same_version);
     }
 
     #[test]
