@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- Chinese translation of the README ([#315](https://github.com/lucasgelfond/zerobrew/pull/316))
+- Regex matches on `/Cellar/<pkg>/)([^/]+)(/)`, so it only matches version segments within Cellar-style paths ([#317](https://github.com/lucasgelfond/zerobrew/pull/317))
 
 ### Added
 - `zb doctor` command with `--repair` flag for state diagnosis and recovery ([#314](https://github.com/lucasgelfond/zerobrew/pull/314))
