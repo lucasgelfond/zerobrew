@@ -54,10 +54,11 @@ out in the Discord to give us a heads up or open an issue first to discuss your 
 
 This project includes a `Justfile`, Install [just](https://github.com/casey/just) and use these commands instead of `cargo` (for ease of development):
 
-- `just build` Format, lint, then build the binary (Builds debug binary)
+- `just build` Check formatting, lint, then build the binary (Builds debug binary)
 - `just install` Build and install zb to $HOME/.local/bin (Customizable with `$ZEROBREW_BIN`)
 - `just uninstall` Remove all zerobrew installations and configurations
-- `just fmt` Check code formatting
+- `just fmt` Format code with rustfmt
+- `just fmt-check` Check code formatting
 - `just lint` Run clippy with strict warnings
 - `just test` Run all workspace tests (unit & integration)
 

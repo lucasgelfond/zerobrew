@@ -46,7 +46,7 @@ default:
 
 [doc('Build the zb binary')]
 [group('build')]
-build: fmt lint
+build: fmt-check lint
     cargo build --bin zb --bin zbx
 
 [doc('Install zb to $ZEROBREW_BIN')]
@@ -185,6 +185,17 @@ reset:
 [group('lint')]
 [script]
 fmt:
+    if command -v rustup &>/dev/null && rustup toolchain list | grep -q nightly; then
+        cargo +nightly fmt --all
+    else
+        echo -e '{{BOLD}}{{YELLOW}}Note:{{NORMAL}} Using stable rustfmt (nightly not available)'
+        cargo fmt --all
+    fi
+
+[doc('Check code formatting with rustfmt')]
+[group('lint')]
+[script]
+fmt-check:
     if command -v rustup &>/dev/null && rustup toolchain list | grep -q nightly; then
         cargo +nightly fmt --all -- --check
     else
