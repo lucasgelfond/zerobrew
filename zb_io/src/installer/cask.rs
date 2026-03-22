@@ -8,6 +8,12 @@ pub struct CaskBinary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaskApp {
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCask {
     pub install_name: String,
     pub token: String,
@@ -15,6 +21,7 @@ pub struct ResolvedCask {
     pub url: String,
     pub sha256: String,
     pub binaries: Vec<CaskBinary>,
+    pub apps: Vec<CaskApp>,
 }
 
 pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
@@ -38,12 +45,13 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
     }
 
     let binaries = parse_binary_artifacts(cask)?;
-    if binaries.is_empty() {
+    let apps = parse_app_artifacts(cask)?;
+    if binaries.is_empty() && apps.is_empty() {
         let found = artifact_types(cask);
         return Err(Error::InvalidArgument {
             message: format!(
-                "cask '{token}' has no binary artifacts (found: {found}); \
-                 only casks with 'binary' artifacts are currently supported"
+                "cask '{token}' has no supported artifacts (found: {found}); \
+                 only casks with 'binary' and 'app' artifacts are currently supported"
             ),
         });
     }
@@ -55,6 +63,7 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
         url,
         sha256,
         binaries,
+        apps,
     })
 }
 
@@ -148,6 +157,29 @@ fn parse_binary_artifacts(cask: &Value) -> Result<Vec<CaskBinary>, Error> {
     Ok(binaries)
 }
 
+fn parse_app_artifacts(cask: &Value) -> Result<Vec<CaskApp>, Error> {
+    let mut apps = Vec::new();
+    let artifacts = cask
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::InvalidArgument {
+            message: "failed to parse cask JSON: missing artifacts array".to_string(),
+        })?;
+
+    for artifact in artifacts {
+        let Some(entries) = artifact.get("app").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for entry in entries {
+            let (source, target) = parse_app_entry(entry)?;
+            apps.push(CaskApp { source, target });
+        }
+    }
+
+    Ok(apps)
+}
+
 fn parse_binary_entry(entry: &Value) -> Result<(String, String), Error> {
     if let Some(path) = entry.as_str() {
         return Ok((path.to_string(), basename(path)?));
@@ -171,13 +203,45 @@ fn parse_binary_entry(entry: &Value) -> Result<(String, String), Error> {
         .map(ToString::to_string)
         .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
 
-    if target.contains('/') || target.contains('$') || target.contains('~') {
-        return Err(Error::InvalidArgument {
-            message: format!("unsupported cask binary target path '{target}'"),
-        });
-    }
+    validate_relative_target(&target, "binary")?;
 
     Ok((source.to_string(), target))
+}
+
+fn parse_app_entry(entry: &Value) -> Result<(String, String), Error> {
+    if let Some(path) = entry.as_str() {
+        return Ok((path.to_string(), basename(path)?));
+    }
+
+    let array = entry.as_array().ok_or_else(|| Error::InvalidArgument {
+        message: "unsupported cask app artifact shape".to_string(),
+    })?;
+    let source = array
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::InvalidArgument {
+            message: "unsupported cask app source".to_string(),
+        })?;
+
+    let target = array
+        .get(1)
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("target"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
+
+    validate_relative_target(&target, "app")?;
+    Ok((source.to_string(), target))
+}
+
+fn validate_relative_target(target: &str, artifact_kind: &str) -> Result<(), Error> {
+    if target.contains('/') || target.contains('$') || target.contains('~') {
+        return Err(Error::InvalidArgument {
+            message: format!("unsupported cask {artifact_kind} target path '{target}'"),
+        });
+    }
+    Ok(())
 }
 
 fn basename(path: &str) -> Result<String, Error> {
@@ -240,6 +304,29 @@ mod tests {
         assert_eq!(resolved.binaries.len(), 2);
         assert_eq!(resolved.binaries[0].target, "tool");
         assert_eq!(resolved.binaries[1].target, "tool-two");
+        assert!(resolved.apps.is_empty());
+    }
+
+    #[test]
+    fn resolve_cask_parses_app_targets() {
+        let cask = serde_json::json!({
+            "token": "test",
+            "version": "1.0.0",
+            "url": "https://example.com/test.zip",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [{
+                "app": [
+                    ["Test.app"],
+                    ["Subdir/Other.app", {"target": "Renamed.app"}]
+                ]
+            }]
+        });
+
+        let resolved = resolve_cask("test", &cask).unwrap();
+        assert_eq!(resolved.apps.len(), 2);
+        assert_eq!(resolved.apps[0].target, "Test.app");
+        assert_eq!(resolved.apps[1].source, "Subdir/Other.app");
+        assert_eq!(resolved.apps[1].target, "Renamed.app");
     }
 
     #[test]
@@ -269,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_cask_no_binary_artifacts_lists_found_types() {
+    fn resolve_cask_accepts_app_only_casks() {
         let cask = serde_json::json!({
             "token": "ghostty",
             "version": "1.0.0",
@@ -281,10 +368,28 @@ mod tests {
             ]
         });
 
-        let err = resolve_cask("ghostty", &cask).unwrap_err();
+        let resolved = resolve_cask("ghostty", &cask).unwrap();
+        assert_eq!(resolved.apps.len(), 1);
+        assert!(resolved.binaries.is_empty());
+    }
+
+    #[test]
+    fn resolve_cask_no_supported_artifacts_lists_found_types() {
+        let cask = serde_json::json!({
+            "token": "pkg-only",
+            "version": "1.0.0",
+            "url": "https://example.com/pkg-only.pkg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [
+                { "pkg": ["Pkg.pkg"] },
+                { "zap": [{ "trash": ["~/Library/Application Support/Pkg"] }] }
+            ]
+        });
+
+        let err = resolve_cask("pkg-only", &cask).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("no binary artifacts"), "got: {msg}");
-        assert!(msg.contains("app"), "got: {msg}");
+        assert!(msg.contains("no supported artifacts"), "got: {msg}");
+        assert!(msg.contains("pkg"), "got: {msg}");
         assert!(msg.contains("zap"), "got: {msg}");
     }
 }

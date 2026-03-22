@@ -36,6 +36,7 @@ pub struct Installer {
     linker: Linker,
     pub(crate) db: Database,
     prefix: PathBuf,
+    app_dir: PathBuf,
     locks_dir: PathBuf,
 }
 
@@ -81,6 +82,24 @@ impl Installer {
         prefix: PathBuf,
         locks_dir: PathBuf,
     ) -> Self {
+        let app_dir = default_app_dir();
+        Self::new_with_app_dir(
+            api_client, blob_cache, store, cellar, linker, db, prefix, app_dir, locks_dir,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_app_dir(
+        api_client: ApiClient,
+        blob_cache: BlobCache,
+        store: Store,
+        cellar: Cellar,
+        linker: Linker,
+        db: Database,
+        prefix: PathBuf,
+        app_dir: PathBuf,
+        locks_dir: PathBuf,
+    ) -> Self {
         Self {
             api_client,
             downloader: ParallelDownloader::new(blob_cache),
@@ -89,8 +108,13 @@ impl Installer {
             linker,
             db,
             prefix,
+            app_dir,
             locks_dir,
         }
+    }
+
+    pub(crate) fn app_dir(&self) -> &Path {
+        &self.app_dir
     }
 
     pub fn clear_api_cache(&self) -> Result<usize, Error> {
@@ -274,6 +298,22 @@ impl Installer {
     }
 }
 
+fn default_app_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("ZEROBREW_APPDIR") {
+        return PathBuf::from(path);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("/Applications")
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        PathBuf::from("/Applications")
+    }
+}
+
 pub fn create_installer(
     root: &Path,
     prefix: &Path,
@@ -336,6 +376,7 @@ pub fn create_installer(
         linker,
         db,
         prefix: prefix.to_path_buf(),
+        app_dir: default_app_dir(),
         locks_dir,
     })
 }
