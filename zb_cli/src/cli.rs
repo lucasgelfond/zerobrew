@@ -91,18 +91,6 @@ mod tests {
         let result = Cli::try_parse_from(["zb", "outdated", "--verbose", "--json"]);
         assert!(result.is_err());
     }
-
-    #[test]
-    fn install_accepts_cask_flag() {
-        let cli = Cli::try_parse_from(["zb", "install", "--cask", "docker-desktop"]).unwrap();
-        match cli.command {
-            super::Commands::Install { cask, formulas, .. } => {
-                assert!(cask);
-                assert_eq!(formulas, vec!["docker-desktop"]);
-            }
-            _ => panic!("expected install command"),
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -110,8 +98,6 @@ pub enum Commands {
     Install {
         #[arg(required = true, num_args = 1..)]
         formulas: Vec<String>,
-        #[arg(long)]
-        cask: bool,
         #[arg(long)]
         no_link: bool,
         #[arg(long, short = 's')]

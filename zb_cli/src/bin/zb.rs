@@ -55,14 +55,12 @@ async fn run(cli: Cli) -> Result<(), zb_core::Error> {
         Commands::Completion { .. } => unreachable!(),
         Commands::Install {
             formulas,
-            cask,
             no_link,
             build_from_source,
         } => {
             commands::install::execute(
                 &mut installer,
                 formulas,
-                cask,
                 no_link,
                 build_from_source,
                 &mut ui,

@@ -34,14 +34,6 @@ pub fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
     Ok(trimmed.to_string())
 }
 
-pub fn normalize_install_target(name: &str, cask: bool) -> Result<String, zb_core::Error> {
-    let normalized = normalize_formula_name(name)?;
-    if cask && !normalized.starts_with("cask:") {
-        return Ok(format!("cask:{normalized}"));
-    }
-    Ok(normalized)
-}
-
 pub fn format_formula_suggestions(requested: &str, suggestions: &[String]) -> Option<String> {
     if suggestions.is_empty() {
         return None;
@@ -90,15 +82,7 @@ pub async fn suggest_missing_formula_matches(
     false
 }
 
-pub fn suggest_homebrew(formula: &str, cask: bool, error: &zb_core::Error) {
-    let brew_target =
-        normalize_install_target(formula, cask).unwrap_or_else(|_| formula.to_string());
-    let brew_command = if let Some(cask_name) = brew_target.strip_prefix("cask:") {
-        format!("brew install --cask {}", cask_name)
-    } else {
-        format!("brew install {}", formula)
-    };
-
+pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
     eprintln!();
     eprintln!(
         "{} This package can't be installed with zerobrew.",
@@ -126,7 +110,10 @@ pub fn suggest_homebrew(formula: &str, cask: bool, error: &zb_core::Error) {
         );
     } else {
         eprintln!("      Try installing with Homebrew instead:");
-        eprintln!("      {}", style(brew_command).cyan());
+        eprintln!(
+            "      {}",
+            style(format!("brew install {}", formula)).cyan()
+        );
     }
 
     eprintln!();
@@ -174,8 +161,7 @@ mod tests {
     use zb_io::{Installer, Linker};
 
     use super::{
-        format_formula_suggestions, normalize_formula_name, normalize_install_target,
-        suggest_missing_formula_matches,
+        format_formula_suggestions, normalize_formula_name, suggest_missing_formula_matches,
     };
 
     #[test]
@@ -198,22 +184,6 @@ mod tests {
     fn normalize_homebrew_cask_prefixes_token() {
         assert_eq!(
             normalize_formula_name("homebrew/cask/docker-desktop").unwrap(),
-            "cask:docker-desktop".to_string()
-        );
-    }
-
-    #[test]
-    fn normalize_install_target_prefixes_cask_flag() {
-        assert_eq!(
-            normalize_install_target("docker-desktop", true).unwrap(),
-            "cask:docker-desktop".to_string()
-        );
-    }
-
-    #[test]
-    fn normalize_install_target_keeps_existing_cask_token() {
-        assert_eq!(
-            normalize_install_target("cask:docker-desktop", true).unwrap(),
             "cask:docker-desktop".to_string()
         );
     }
