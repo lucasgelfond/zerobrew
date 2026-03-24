@@ -110,7 +110,7 @@ pub enum Commands {
     Install {
         #[arg(required = true, num_args = 1..)]
         formulas: Vec<String>,
-        #[arg(long)]
+        #[arg(long, help = "Treat all arguments as casks")]
         cask: bool,
         #[arg(long)]
         no_link: bool,
