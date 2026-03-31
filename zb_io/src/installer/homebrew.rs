@@ -45,6 +45,16 @@ pub fn parse_formulas_from_json(json: &serde_json::Value) -> Vec<HomebrewPackage
     packages
 }
 
+/// Parse Homebrew leaves from plain text output of `brew leaves`
+pub fn parse_leaves_from_plain_text(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
 /// Parse Homebrew casks from plain text output of `brew list --cask`
 pub fn parse_casks_from_plain_text(output: &str) -> Vec<HomebrewPackage> {
     output
@@ -90,22 +100,41 @@ pub fn categorize_packages(packages: Vec<HomebrewPackage>) -> HomebrewMigrationP
 ///
 /// Only formulas from `homebrew/core` can be migrated to zerobrew.
 /// Formulas from other taps and all casks are collected separately.
+/// Only leaves are migrated, as there's no use to reinstalling dependencies.
 pub fn get_homebrew_packages() -> Result<HomebrewMigrationPackages, Error> {
-    let formulas_output = Command::new("brew")
-        .args(["info", "--json=v1", "--installed"])
+    let leaves_output = Command::new("brew")
+        .args(["leaves"])
         .output()
-        .map_err(Error::exec("failed to run 'brew info'"))?;
+        .map_err(Error::exec("failed to run 'brew leaves'"))?;
 
-    if !formulas_output.status.success() {
-        return Err((Error::exec("brew info failed"))(String::from_utf8_lossy(
-            &formulas_output.stderr,
-        )));
+    if !leaves_output.status.success() {
+        return Err((Error::exec("brew leaves failed"))(
+            String::from_utf8_lossy(&leaves_output.stderr),
+        ));
     }
 
-    let formulas_json: serde_json::Value = serde_json::from_slice(&formulas_output.stdout)
-        .map_err(Error::exec("failed to parse brew info JSON"))?;
+    let leaves = parse_leaves_from_plain_text(&String::from_utf8_lossy(&leaves_output.stdout));
 
-    let formulas = parse_formulas_from_json(&formulas_json);
+    let formulas = if leaves.is_empty() {
+        Vec::new()
+    } else {
+        let formulas_output = Command::new("brew")
+            .args(["info", "--json=v1"])
+            .args(&leaves)
+            .output()
+            .map_err(Error::exec("failed to run 'brew info'"))?;
+
+        if !formulas_output.status.success() {
+            return Err((Error::exec("brew info failed"))(String::from_utf8_lossy(
+                &formulas_output.stderr,
+            )));
+        }
+
+        let formulas_json: serde_json::Value = serde_json::from_slice(&formulas_output.stdout)
+            .map_err(Error::exec("failed to parse brew info JSON"))?;
+
+        parse_formulas_from_json(&formulas_json)
+    };
 
     let casks_output = Command::new("brew")
         .args(["list", "--cask"])
@@ -180,6 +209,15 @@ mod tests {
         assert!(packages[0].is_cask);
         assert_eq!(packages[1].name, "firefox");
         assert!(packages[1].is_cask);
+    }
+
+    #[test]
+    fn test_parse_leaves_from_plain_text() {
+        let brew_output = "git\nneovim\nfirefox\n\n";
+
+        let leaves = parse_leaves_from_plain_text(brew_output);
+
+        assert_eq!(leaves, vec!["git", "neovim", "firefox"]);
     }
 
     #[test]
