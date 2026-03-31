@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::checksum::verify_sha256_bytes;
@@ -75,6 +76,7 @@ pub struct ApiClient {
     client: reqwest::Client,
     cache: Option<ApiCache>,
     formula_candidates: RwLock<Option<Arc<[String]>>>,
+    alias_map: RwLock<Option<Arc<HashMap<String, String>>>>,
 }
 
 impl ApiClient {
@@ -120,6 +122,7 @@ impl ApiClient {
             client,
             cache: None,
             formula_candidates: RwLock::new(None),
+            alias_map: RwLock::new(None),
         }
     }
 
@@ -282,10 +285,34 @@ impl ApiClient {
             return self.get_tap_formula(&spec).await;
         }
 
+        let parse_body = |body: String| {
+            serde_json::from_str(&body).map_err(Error::network("failed to parse formula JSON"))
+        };
+
+        match self.fetch_formula_json(name).await {
+            Ok(body) => parse_body(body),
+            Err(Error::MissingFormula { .. }) => {
+                if let Ok(alias_map) = self.get_alias_map().await
+                    && let Some(canonical) = alias_map.get(name)
+                {
+                    return self
+                        .fetch_formula_json(canonical)
+                        .await
+                        .and_then(parse_body);
+                }
+                Err(Error::MissingFormula {
+                    name: name.to_string(),
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn fetch_formula_json(&self, name: &str) -> Result<String, Error> {
         let url = format!("{}/{}.json", self.base_url, name);
 
-        let body = match self.cached_get(&url).await? {
-            CachedGetResult::Cached(body) => body,
+        match self.cached_get(&url).await? {
+            CachedGetResult::Cached(body) => Ok(body),
             CachedGetResult::Fresh(response) => {
                 if response.status() == reqwest::StatusCode::NOT_FOUND {
                     return Err(Error::MissingFormula {
@@ -315,11 +342,9 @@ impl ApiClient {
                     .map_err(Error::network("failed to read response body"))?;
 
                 self.store_response_in_cache(&url, etag, last_modified, &body);
-                body
+                Ok(body)
             }
-        };
-
-        serde_json::from_str(&body).map_err(Error::network("failed to parse formula JSON"))
+        }
     }
 
     pub async fn get_all_formulas_raw(&self) -> Result<String, Error> {
@@ -422,6 +447,39 @@ impl ApiClient {
         if seen.insert(name.to_string()) {
             candidates.push(name.to_string());
         }
+    }
+
+    async fn get_alias_map(&self) -> Result<Arc<HashMap<String, String>>, Error> {
+        if let Some(map) = self.alias_map.read().ok().and_then(|m| m.clone()) {
+            return Ok(map);
+        }
+
+        let raw = self.get_all_formulas_raw().await?;
+        let map: Arc<HashMap<String, String>> = Arc::new(Self::extract_alias_map(&raw)?);
+        if let Ok(mut cached) = self.alias_map.write() {
+            *cached = Some(Arc::clone(&map));
+        }
+        Ok(map)
+    }
+
+    fn extract_alias_map(raw: &str) -> Result<HashMap<String, String>, Error> {
+        let entries: Vec<FormulaSuggestionEntry> = serde_json::from_str(raw)
+            .map_err(Error::network("failed to parse bulk formula JSON"))?;
+
+        let mut map = HashMap::new();
+        for entry in &entries {
+            let Some(name) = entry.name.as_deref() else {
+                continue;
+            };
+            for alias in &entry.aliases {
+                map.entry(alias.clone()).or_insert_with(|| name.to_string());
+            }
+            for oldname in &entry.oldnames {
+                map.entry(oldname.clone())
+                    .or_insert_with(|| name.to_string());
+            }
+        }
+        Ok(map)
     }
 
     pub async fn get_cask(&self, token: &str) -> Result<serde_json::Value, Error> {
@@ -1262,5 +1320,77 @@ end
             .unwrap();
 
         assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn extract_alias_map_maps_aliases_and_oldnames_to_canonical() {
+        let bulk = r#"[
+            {"name":"pkgconf","aliases":["pkg-config","pkgconfig"],"oldnames":[]},
+            {"name":"python","aliases":[],"oldnames":["python3"]}
+        ]"#;
+
+        let map = ApiClient::extract_alias_map(bulk).unwrap();
+
+        assert_eq!(map.get("pkg-config").map(String::as_str), Some("pkgconf"));
+        assert_eq!(map.get("pkgconfig").map(String::as_str), Some("pkgconf"));
+        assert_eq!(map.get("python3").map(String::as_str), Some("python"));
+        assert!(!map.contains_key("pkgconf"));
+        assert!(!map.contains_key("python"));
+    }
+
+    #[tokio::test]
+    async fn get_formula_resolves_alias_to_canonical_on_404() {
+        let mock_server = MockServer::start().await;
+        let fixture = include_str!("../../../zb_core/fixtures/formula_foo.json");
+        let bulk = r#"[{"name":"foo","aliases":["foo-alias"],"oldnames":[]}]"#;
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(bulk))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/formula/foo-alias.json"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/formula/foo.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(fixture))
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+        let formula = client.get_formula("foo-alias").await.unwrap();
+
+        assert_eq!(formula.name, "foo");
+    }
+
+    #[tokio::test]
+    async fn get_formula_returns_missing_formula_when_alias_not_found() {
+        let mock_server = MockServer::start().await;
+        let bulk = r#"[{"name":"pkgconf","aliases":["pkg-config"],"oldnames":[]}]"#;
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(bulk))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/formula/nonexistent.json"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+        let err = client.get_formula("nonexistent").await.unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::MissingFormula { name } if name == "nonexistent"
+        ));
     }
 }
