@@ -26,13 +26,13 @@
 curl -fsSL https://zerobrew.rs/install | bash
 ```
 
+安装完成后，运行它打印的 `export` 命令（或重启终端）。
+
 或通过 Homebrew 安装：
 
 ```bash
-brew tap lucasgelfond/zerobrew && brew install zerobrew
+brew install lucasgelfond/zerobrew/zerobrew
 ```
-
-安装完成后，运行它打印的 `export` 命令（或重启终端）。
 
 ## 快速开始 (Quick start)
 
