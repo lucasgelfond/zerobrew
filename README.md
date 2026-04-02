@@ -26,13 +26,13 @@
 curl -fsSL https://zerobrew.rs/install | bash
 ```
 
+After install, run the `export` command it prints (or restart your terminal).
+
 Or via Homebrew:
 
 ```bash
-brew tap lucasgelfond/zerobrew && brew install zerobrew
+brew install lucasgelfond/zerobrew/zerobrew
 ```
-
-After install, run the `export` command it prints (or restart your terminal).
 
 ## Quick start
 
