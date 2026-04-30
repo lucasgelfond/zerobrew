@@ -128,27 +128,11 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
 
         if new_bytes.len() > old_bytes.len() {
             // Cannot expand shorter paths in-place in Mach-O binaries.
-            // Skip this prefix — the install_name_tool pass handles load
-            // command changes regardless of length, and many binaries
-            // legitimately reference shorter prefixes like /usr/local for
-            // system libraries (not Homebrew paths).
+            // Skip this old prefix — install_name_tool handles load command
+            // changes regardless of length, and text files are patched
+            // separately in the text-file pass.
             //
-            // See: https://github.com/lucasgelfond/zerobrew/issues/286
-            let has_old_paths = contents
-                .windows(old_bytes.len() + 1)
-                .any(|w| w[..old_bytes.len()] == *old_bytes && w[old_bytes.len()] == b'/');
-            if has_old_paths {
-                warn!(
-                    path = %path.display(),
-                    old_prefix = %old_prefix,
-                    new_prefix = %new_prefix,
-                    "binary contains hardcoded paths under {old_prefix} that \
-                    could not be rewritten to {new_prefix} (new path is longer). \
-                    this package may not work correctly
-                    tracking issue: https://github.com/lucasgelfond/zerobrew/issues/286
-                    ",
-                );
-            }
+            // See: https://github.com/lucasgelfond/zerobrew/issues/342
             continue;
         }
 
