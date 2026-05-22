@@ -44,12 +44,12 @@ jobs:
             zbx_artifact_name: zbx-darwin-x64
 
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
             artifact_name: zb-linux-x64
             zbx_artifact_name: zbx-linux-x64
 
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
+            os: ubuntu-22.04
             artifact_name: zb-linux-arm64
             zbx_artifact_name: zbx-linux-arm64
 
@@ -102,7 +102,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all artifacts
