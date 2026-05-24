@@ -59,6 +59,21 @@ jobs:
       - name: run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cache rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: build release
+        run: cargo build --release --workspace
+
   audit:
     name: audit
     runs-on: ubuntu-latest
