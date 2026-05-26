@@ -9,13 +9,54 @@ const LIBEXEC_SKIP_FILES: &[&str] = &[".gitignore", "pyvenv.cfg"];
 
 fn should_skip_link_entry(src_dir: &Path, entry_name: &std::ffi::OsStr) -> bool {
     // Homebrew-style Python virtualenv formulae commonly place metadata files at
-    // libexec/.gitignore and libexec/pyvenv.cfg. Linking these into a shared
-    // prefix/libexec causes cross-formula conflicts (e.g. ranger vs ansible-lint)
-    // even though they are not executable entrypoints users need on PATH.
-    src_dir.file_name().and_then(|n| n.to_str()) == Some("libexec")
+    // libexec/.gitignore, libexec/pyvenv.cfg, and private site-packages trees.
+    // Linking these into a shared prefix/libexec causes cross-formula conflicts
+    // even though they are private virtualenv contents, not user entrypoints.
+    (src_dir.file_name().and_then(|n| n.to_str()) == Some("libexec")
         && entry_name
             .to_str()
-            .is_some_and(|name| LIBEXEC_SKIP_FILES.contains(&name))
+            .is_some_and(|name| LIBEXEC_SKIP_FILES.contains(&name)))
+        || (entry_name.to_str() == Some("site-packages") && is_libexec_python_lib_dir(src_dir))
+}
+
+fn is_libexec_python_lib_dir(path: &Path) -> bool {
+    let mut in_libexec = false;
+    let mut previous_was_python_lib = false;
+
+    for component in path.components() {
+        let Component::Normal(name) = component else {
+            previous_was_python_lib = false;
+            continue;
+        };
+        let Some(name) = name.to_str() else {
+            previous_was_python_lib = false;
+            continue;
+        };
+
+        if name == "libexec" {
+            in_libexec = true;
+            previous_was_python_lib = false;
+            continue;
+        }
+
+        if !in_libexec {
+            continue;
+        }
+
+        if previous_was_python_lib && is_python_version_dir(name) {
+            return true;
+        }
+
+        previous_was_python_lib = matches!(name, "lib" | "lib64");
+    }
+
+    false
+}
+
+fn is_python_version_dir(name: &str) -> bool {
+    name.strip_prefix("python")
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|c| c.is_ascii_digit())
 }
 
 pub struct Linker {
@@ -165,9 +206,14 @@ impl Linker {
             Err(_) => return,
         };
         for entry in new_entries.flatten() {
+            let file_name = entry.file_name();
+            if should_skip_link_entry(src, &file_name) {
+                continue;
+            }
+
             let src_path = entry.path();
-            let matching_old = old_target.join(entry.file_name());
-            let dst_path = dst.join(entry.file_name());
+            let matching_old = old_target.join(&file_name);
+            let dst_path = dst.join(&file_name);
 
             if src_path.is_dir() {
                 if matching_old.exists() {
@@ -353,8 +399,13 @@ impl Linker {
         }
         for entry in fs::read_dir(src).map_err(Error::store("failed to read directory"))? {
             let entry = entry.map_err(Error::store("failed to read directory entry"))?;
+            let file_name = entry.file_name();
+            if should_skip_link_entry(src, &file_name) {
+                continue;
+            }
+
             let src_path = entry.path();
-            let dst_path = dst.join(entry.file_name());
+            let dst_path = dst.join(file_name);
 
             if src_path.is_dir() && dst_path.is_dir() && !dst_path.is_symlink() {
                 linked.extend(Self::collect_linked_recursive(&src_path, &dst_path)?);
@@ -552,6 +603,89 @@ mod tests {
         // Useful entrypoints still link correctly.
         assert!(prefix.join("bin/ranger").exists());
         assert!(prefix.join("bin/ansible-lint").exists());
+    }
+
+    #[test]
+    fn skips_libexec_python_site_packages_to_avoid_virtualenv_conflicts() {
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+
+        let keg1 = prefix.join("cellar/visidata/1.0.0");
+        fs::create_dir_all(keg1.join("bin")).unwrap();
+        fs::write(keg1.join("bin/visidata"), b"#!/bin/sh\necho visidata").unwrap();
+        fs::set_permissions(keg1.join("bin/visidata"), PermissionsExt::from_mode(0o755)).unwrap();
+
+        for lib_dir in ["lib", "lib64"] {
+            let site_packages = keg1
+                .join("libexec")
+                .join(lib_dir)
+                .join("python3.14/site-packages");
+            fs::create_dir_all(site_packages.join("six-1.17.0.dist-info/licenses")).unwrap();
+            fs::write(site_packages.join("six.py"), b"visidata six").unwrap();
+            fs::write(
+                site_packages.join("six-1.17.0.dist-info/licenses/LICENSE"),
+                b"license",
+            )
+            .unwrap();
+        }
+
+        let public_site_packages = keg1.join("lib/python3.14/site-packages");
+        fs::create_dir_all(&public_site_packages).unwrap();
+        fs::write(public_site_packages.join("public.py"), b"public").unwrap();
+
+        let keg2 = prefix.join("cellar/thefuck/1.0.0");
+        fs::create_dir_all(keg2.join("bin")).unwrap();
+        fs::write(keg2.join("bin/thefuck"), b"#!/bin/sh\necho thefuck").unwrap();
+        fs::set_permissions(keg2.join("bin/thefuck"), PermissionsExt::from_mode(0o755)).unwrap();
+
+        for lib_dir in ["lib", "lib64"] {
+            let site_packages = keg2
+                .join("libexec")
+                .join(lib_dir)
+                .join("python3.14/site-packages");
+            fs::create_dir_all(site_packages.join("six-1.17.0.dist-info/licenses")).unwrap();
+            fs::write(site_packages.join("six.py"), b"thefuck six").unwrap();
+            fs::write(
+                site_packages.join("six-1.17.0.dist-info/licenses/LICENSE"),
+                b"license",
+            )
+            .unwrap();
+        }
+
+        linker.link_keg(&keg1).unwrap();
+
+        assert!(prefix.join("bin/visidata").exists());
+        assert!(
+            prefix
+                .join("lib/python3.14/site-packages/public.py")
+                .exists()
+        );
+        assert!(
+            !prefix
+                .join("libexec/lib/python3.14/site-packages/six.py")
+                .exists()
+        );
+        assert!(
+            !prefix
+                .join("libexec/lib64/python3.14/site-packages/six.py")
+                .exists()
+        );
+
+        assert!(linker.check_conflicts(&keg2).is_ok());
+        linker.link_keg(&keg2).unwrap();
+
+        assert!(prefix.join("bin/thefuck").exists());
+        assert!(
+            !prefix
+                .join("libexec/lib/python3.14/site-packages/six.py")
+                .exists()
+        );
+        assert!(
+            !prefix
+                .join("libexec/lib64/python3.14/site-packages/six.py")
+                .exists()
+        );
     }
 
     #[test]
