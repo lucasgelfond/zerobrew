@@ -6,20 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Added
-- `zb upgrade` command to upgrade installed packages, with `--build-from-source` and `--no-link` flags; supports upgrading all outdated packages or specific ones by name
-- Chinese translation of the README ([#315](https://github.com/lucasgelfond/zerobrew/pull/316))
-- Regex matches on `/Cellar/<pkg>/)([^/]+)(/)`, so it only matches version segments within Cellar-style paths ([#317](https://github.com/lucasgelfond/zerobrew/pull/317))
+
+## [0.3.0] - 2026-05-29
 
 ### Added
-- `zb doctor` command with `--repair` flag for state diagnosis and recovery ([#314](https://github.com/lucasgelfond/zerobrew/pull/314))
+- Eleventy-based homepage with responsive styling, interactive panels, benchmark/install content, and site assets ([#309](https://github.com/lucasgelfond/zerobrew/pull/309))
+- `zb doctor` command with `--repair` flag for state diagnosis, recovery, orphaned store entries, and broken symlinks ([#314](https://github.com/lucasgelfond/zerobrew/pull/314))
+- Chinese translation of the README ([#316](https://github.com/lucasgelfond/zerobrew/pull/316))
+- `zb upgrade` command to upgrade installed packages, with `--build-from-source` and `--no-link` flags; supports upgrading all outdated packages or specific ones by name ([#369](https://github.com/lucasgelfond/zerobrew/pull/369))
 
 ### Fixed
 - Validate root/prefix paths before passing to sudo to prevent shell injection ([#311](https://github.com/lucasgelfond/zerobrew/pull/311))
+- Regex matches only version segments within Cellar-style paths when patching Mach-O binary strings ([#317](https://github.com/lucasgelfond/zerobrew/pull/317))
+- Update vulnerable `aws-lc-sys`, `aws-lc-rs`, and `rustls-webpki` dependencies ([#318](https://github.com/lucasgelfond/zerobrew/pull/318))
+- Make `just fmt` apply formatting and document the workflow ([#319](https://github.com/lucasgelfond/zerobrew/pull/319))
+- Resolve formula aliases and oldnames after API 404s ([#332](https://github.com/lucasgelfond/zerobrew/pull/332))
+- Skip linking `libexec` Python `site-packages` paths to avoid conflicts ([#368](https://github.com/lucasgelfond/zerobrew/pull/368))
+- Make `zb upgrade` clean old cellar metadata, stay idempotent after download failures, and exit non-zero for missing requested packages ([#369](https://github.com/lucasgelfond/zerobrew/pull/369))
+- Ignore stale macOS prefix environment defaults when initializing or resolving paths ([#372](https://github.com/lucasgelfond/zerobrew/pull/372))
+- Resolve Linux `uses_from_macos` dependencies, rewrite Linuxbrew bottle paths, and restrict Linux bottle fallback by architecture ([#373](https://github.com/lucasgelfond/zerobrew/pull/373))
 
 ### Changed
 - Split monolithic install module into focused submodules ([#312](https://github.com/lucasgelfond/zerobrew/pull/312))
 - Split monolithic download module into focused submodules ([#313](https://github.com/lucasgelfond/zerobrew/pull/313))
+- Document Homebrew tap installation as an alternative install method ([#325](https://github.com/lucasgelfond/zerobrew/pull/325))
+- Refresh dependency lockfile entries ([#330](https://github.com/lucasgelfond/zerobrew/pull/330))
+- Make migration install only leaf formulae from Homebrew ([#333](https://github.com/lucasgelfond/zerobrew/pull/333))
+- Prefer direct Homebrew install instructions in README files ([#337](https://github.com/lucasgelfond/zerobrew/pull/337))
+- Refresh `Cargo.lock` for audit findings ([#345](https://github.com/lucasgelfond/zerobrew/pull/345), [#363](https://github.com/lucasgelfond/zerobrew/pull/363))
+- Pin release workflow Ubuntu runners to 22.04 for stability ([#352](https://github.com/lucasgelfond/zerobrew/pull/352))
+- Add CLI help text for command arguments and flags ([#355](https://github.com/lucasgelfond/zerobrew/pull/355))
+- Add and then revert the security scanning workflow ([#354](https://github.com/lucasgelfond/zerobrew/pull/354), [#358](https://github.com/lucasgelfond/zerobrew/pull/358))
 
 
 ## [0.2.1] - 2026-03-14
@@ -91,7 +108,8 @@ To get an idea of the initial features zerobrew supports, take a look at the [RE
 
 See the [full commit history](https://github.com/lucasgelfond/zerobrew/commits/v0.1.1) for more details.
 
-[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lucasgelfond/zerobrew/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/lucasgelfond/zerobrew/compare/v0.1.1...v0.1.2
