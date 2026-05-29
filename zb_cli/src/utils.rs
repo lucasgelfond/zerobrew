@@ -1,5 +1,5 @@
 use console::style;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use zb_io::Installer;
 
 pub fn normalize_formula_name(name: &str) -> Result<String, zb_core::Error> {
@@ -148,9 +148,41 @@ pub fn get_root_path(cli_root: Option<PathBuf>) -> PathBuf {
     }
 }
 
+pub fn get_prefix_path(cli_prefix: Option<PathBuf>, root: &Path) -> PathBuf {
+    if let Some(prefix) = cli_prefix {
+        return prefix;
+    }
+
+    let env_prefix = std::env::var_os("ZEROBREW_PREFIX").map(PathBuf::from);
+    get_prefix_path_for_os(env_prefix, root, cfg!(target_os = "macos"))
+}
+
+fn get_prefix_path_for_os(env_prefix: Option<PathBuf>, root: &Path, is_macos: bool) -> PathBuf {
+    if let Some(prefix) = env_prefix
+        && !(is_macos && is_legacy_macos_default_prefix(&prefix, root))
+    {
+        return prefix;
+    }
+
+    default_prefix_for_os(root, is_macos)
+}
+
+fn default_prefix_for_os(root: &Path, is_macos: bool) -> PathBuf {
+    if is_macos {
+        root.to_path_buf()
+    } else {
+        root.join("prefix")
+    }
+}
+
+fn is_legacy_macos_default_prefix(prefix: &Path, root: &Path) -> bool {
+    prefix == root.join("prefix")
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
@@ -161,8 +193,58 @@ mod tests {
     use zb_io::{Installer, Linker};
 
     use super::{
-        format_formula_suggestions, normalize_formula_name, suggest_missing_formula_matches,
+        format_formula_suggestions, get_prefix_path_for_os, normalize_formula_name,
+        suggest_missing_formula_matches,
     };
+
+    #[test]
+    fn macos_default_prefix_is_root() {
+        let root = PathBuf::from("/opt/zerobrew");
+
+        assert_eq!(get_prefix_path_for_os(None, &root, true), root);
+    }
+
+    #[test]
+    fn linux_default_prefix_is_root_prefix() {
+        let root = PathBuf::from("/home/user/.local/share/zerobrew");
+
+        assert_eq!(
+            get_prefix_path_for_os(None, &root, false),
+            root.join("prefix")
+        );
+    }
+
+    #[test]
+    fn macos_ignores_legacy_root_prefix_env_default() {
+        let root = PathBuf::from("/opt/zerobrew");
+
+        assert_eq!(
+            get_prefix_path_for_os(Some(root.join("prefix")), &root, true),
+            root
+        );
+    }
+
+    #[test]
+    fn macos_keeps_custom_env_prefix() {
+        let root = PathBuf::from("/opt/zerobrew");
+        let custom = PathBuf::from("/zb");
+
+        assert_eq!(
+            get_prefix_path_for_os(Some(custom.clone()), &root, true),
+            custom
+        );
+    }
+
+    #[test]
+    fn linux_keeps_env_prefix() {
+        let root = PathBuf::from("/home/user/.local/share/zerobrew");
+        let env_prefix = PathBuf::from("/tmp/zb-prefix");
+
+        assert_eq!(
+            get_prefix_path_for_os(Some(env_prefix.clone()), &root, false),
+            env_prefix
+        );
+    }
 
     #[test]
     fn normalize_core_tap_formula() {

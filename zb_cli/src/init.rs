@@ -74,8 +74,13 @@ pub fn run_init(
             ui.info("Path-sensitive packages (e.g. git, curl) will fail to install.")?;
             ui.info(format!(
                 "Consider a shorter prefix, e.g.: {}",
-                style("zb init <root> /opt/zerobrew").cyan(),
+                style(format!(
+                    "zb --root {} --prefix /opt/zerobrew init",
+                    root.display()
+                ))
+                .cyan(),
             ))?;
+            ui.info("If this came from old shell config, unset ZEROBREW_PREFIX and rerun init.")?;
             ui.blank_line()?;
         }
     }

@@ -9,7 +9,10 @@ pub struct Cli {
     #[arg(long, env = "ZEROBREW_ROOT", help = "Path to zerobrew data directory")]
     pub root: Option<PathBuf>,
 
-    #[arg(long, env = "ZEROBREW_PREFIX", help = "Path to Homebrew-style prefix")]
+    #[arg(
+        long,
+        help = "Path to Homebrew-style prefix (overrides ZEROBREW_PREFIX)"
+    )]
     pub prefix: Option<PathBuf>,
 
     #[arg(
