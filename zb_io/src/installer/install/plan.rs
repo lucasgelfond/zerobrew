@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tracing::warn;
 use zb_core::{BuildPlan, Error, Formula, InstallMethod, select_bottle};
@@ -21,36 +21,7 @@ impl Installer {
         let mut items = Vec::with_capacity(ordered.len());
         for install_name in ordered {
             let formula = formulas.get(&install_name).cloned().unwrap();
-            let method = if build_from_source {
-                match BuildPlan::from_formula(&formula, &self.prefix) {
-                    Some(plan) => InstallMethod::Source(plan),
-                    None => match select_bottle(&formula) {
-                        Ok(bottle) => InstallMethod::Bottle(bottle),
-                        Err(_) => {
-                            return Err(Error::UnsupportedBottle {
-                                name: formula.name.clone(),
-                            });
-                        }
-                    },
-                }
-            } else {
-                match select_bottle(&formula) {
-                    Ok(bottle) => InstallMethod::Bottle(bottle),
-                    Err(_) => match BuildPlan::from_formula(&formula, &self.prefix) {
-                        Some(plan) => InstallMethod::Source(plan),
-                        None => {
-                            return Err(Error::UnsupportedBottle {
-                                name: formula.name.clone(),
-                            });
-                        }
-                    },
-                }
-            };
-            items.push(PlannedInstall {
-                install_name,
-                formula,
-                method,
-            });
+            items.push(self.plan_item(install_name, formula, build_from_source)?);
         }
 
         Ok(InstallPlan { items })
@@ -61,30 +32,174 @@ impl Installer {
         names: &[String],
         build_from_source: bool,
     ) -> (InstallPlan, Vec<PlanFailure>) {
+        let (formulas, fetch_failures) = self.fetch_all_formulas_best_effort(names).await;
         let mut items = Vec::new();
-        let mut seen = HashSet::new();
         let mut failures = Vec::new();
+        let mut valid_roots = Vec::new();
+        let mut seen_roots = HashSet::new();
 
         for name in names {
-            match self
-                .plan_with_options(std::slice::from_ref(name), build_from_source)
-                .await
-            {
-                Ok(plan) => {
-                    for item in plan.items {
-                        if seen.insert(item.install_name.clone()) {
-                            items.push(item);
+            if !seen_roots.insert(name.clone()) {
+                continue;
+            }
+
+            if let Some(error) = fetch_failures.get(name) {
+                failures.push(PlanFailure {
+                    name: name.clone(),
+                    error: error.clone(),
+                });
+                continue;
+            }
+
+            if !formulas.contains_key(name) {
+                failures.push(PlanFailure {
+                    name: name.clone(),
+                    error: Error::MissingFormula { name: name.clone() },
+                });
+                continue;
+            }
+
+            if let Some(failure) = root_dependency_failure(name, &formulas, &fetch_failures) {
+                failures.push(failure);
+                continue;
+            }
+
+            valid_roots.push(name.clone());
+        }
+
+        if !valid_roots.is_empty() {
+            match zb_core::resolve_closure(&valid_roots, &formulas) {
+                Ok(ordered) => {
+                    for install_name in ordered {
+                        let formula = formulas.get(&install_name).cloned().unwrap();
+                        match self.plan_item(install_name.clone(), formula, build_from_source) {
+                            Ok(item) => items.push(item),
+                            Err(error) => failures.push(PlanFailure {
+                                name: install_name,
+                                error,
+                            }),
                         }
                     }
                 }
-                Err(error) => failures.push(PlanFailure {
-                    name: name.clone(),
-                    error,
-                }),
+                Err(error) => {
+                    failures.extend(valid_roots.into_iter().map(|name| PlanFailure {
+                        name,
+                        error: error.clone(),
+                    }));
+                }
             }
         }
 
         (InstallPlan { items }, failures)
+    }
+
+    fn plan_item(
+        &self,
+        install_name: String,
+        formula: Formula,
+        build_from_source: bool,
+    ) -> Result<PlannedInstall, Error> {
+        let method = if build_from_source {
+            match BuildPlan::from_formula(&formula, &self.prefix) {
+                Some(plan) => InstallMethod::Source(plan),
+                None => match select_bottle(&formula) {
+                    Ok(bottle) => InstallMethod::Bottle(bottle),
+                    Err(_) => {
+                        return Err(Error::UnsupportedBottle {
+                            name: formula.name.clone(),
+                        });
+                    }
+                },
+            }
+        } else {
+            match select_bottle(&formula) {
+                Ok(bottle) => InstallMethod::Bottle(bottle),
+                Err(_) => match BuildPlan::from_formula(&formula, &self.prefix) {
+                    Some(plan) => InstallMethod::Source(plan),
+                    None => {
+                        return Err(Error::UnsupportedBottle {
+                            name: formula.name.clone(),
+                        });
+                    }
+                },
+            }
+        };
+
+        Ok(PlannedInstall {
+            install_name,
+            formula,
+            method,
+        })
+    }
+
+    async fn fetch_all_formulas_best_effort(
+        &self,
+        names: &[String],
+    ) -> (BTreeMap<String, Formula>, HashMap<String, Error>) {
+        let mut formulas = BTreeMap::new();
+        let mut failures = HashMap::new();
+        let mut fetched: HashSet<String> = HashSet::new();
+        let mut to_fetch: Vec<String> = names.to_vec();
+
+        while !to_fetch.is_empty() {
+            let batch: Vec<String> = to_fetch
+                .drain(..)
+                .filter(|n| !fetched.contains(n))
+                .collect();
+
+            if batch.is_empty() {
+                break;
+            }
+
+            for n in &batch {
+                fetched.insert(n.clone());
+            }
+
+            let futures: Vec<_> = batch
+                .iter()
+                .map(|n| self.api_client.get_formula(n))
+                .collect();
+
+            let results = futures::future::join_all(futures).await;
+
+            for (i, result) in results.into_iter().enumerate() {
+                let fetch_name = batch[i].clone();
+                let formula = match result {
+                    Ok(f) => f,
+                    Err(error) => {
+                        failures.insert(fetch_name, error);
+                        continue;
+                    }
+                };
+
+                if select_bottle(&formula).is_err() && !formula.has_source_url() {
+                    warn!(
+                        formula = %formula.name,
+                        "skipping formula with no bottle or source available for this platform"
+                    );
+                    failures.insert(
+                        fetch_name,
+                        Error::UnsupportedBottle {
+                            name: formula.name.clone(),
+                        },
+                    );
+                    continue;
+                }
+
+                for dep in formula.runtime_dependencies() {
+                    if !fetched.contains(&dep)
+                        && !to_fetch.contains(&dep)
+                        && !failures.contains_key(&dep)
+                    {
+                        to_fetch.push(dep);
+                    }
+                }
+
+                formulas.insert(fetch_name, formula);
+            }
+        }
+
+        (formulas, failures)
     }
 
     async fn fetch_all_formulas(
@@ -144,6 +259,42 @@ impl Installer {
 
         Ok(formulas)
     }
+}
+
+fn root_dependency_failure(
+    root: &str,
+    formulas: &BTreeMap<String, Formula>,
+    fetch_failures: &HashMap<String, Error>,
+) -> Option<PlanFailure> {
+    let mut seen = HashSet::new();
+    let mut stack = vec![root.to_string()];
+
+    while let Some(name) = stack.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+
+        let Some(formula) = formulas.get(&name) else {
+            continue;
+        };
+
+        for dep in formula.runtime_dependencies() {
+            if let Some(error) = fetch_failures.get(&dep) {
+                return Some(PlanFailure {
+                    name: root.to_string(),
+                    error: Error::ExecutionError {
+                        message: format!("dependency '{dep}' could not be planned: {error}"),
+                    },
+                });
+            }
+
+            if formulas.contains_key(&dep) {
+                stack.push(dep);
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
