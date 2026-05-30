@@ -5,18 +5,36 @@ use std::path::{Component, Path, PathBuf};
 use zb_core::{ConflictedLink, Error};
 
 const LINK_DIRS: &[&str] = &["bin", "lib", "libexec", "include", "share", "etc"];
-const LIBEXEC_SKIP_FILES: &[&str] = &[".gitignore", "pyvenv.cfg"];
+const PYVENV_CFG: &str = "pyvenv.cfg";
+const LIBEXEC_SKIP_FILES: &[&str] = &[".gitignore", PYVENV_CFG];
 
 fn should_skip_link_entry(src_dir: &Path, entry_name: &std::ffi::OsStr) -> bool {
-    // Homebrew-style Python virtualenv formulae commonly place metadata files at
-    // libexec/.gitignore, libexec/pyvenv.cfg, and private site-packages trees.
-    // Linking these into a shared prefix/libexec causes cross-formula conflicts
-    // even though they are private virtualenv contents, not user entrypoints.
-    (src_dir.file_name().and_then(|n| n.to_str()) == Some("libexec")
-        && entry_name
+    // Homebrew-style Python virtualenv formulae bundle an isolated venv under
+    // libexec/. The main executable is exposed via bin/<name> symlinks that
+    // resolve into libexec/ within the keg itself, so nothing inside libexec/
+    // is meant for the shared prefix. Linking libexec/ contents into the
+    // shared prefix/libexec/ causes cross-formula conflicts:
+    //   - libexec/{pyvenv.cfg, .gitignore} (metadata)
+    //   - libexec/lib*/python3.X/site-packages/ (private dep trees)
+    //   - libexec/bin/<shared-dep> (e.g. sqlformat across mycli + pgcli)
+    let is_libexec_dir = src_dir.file_name().and_then(|n| n.to_str()) == Some("libexec");
+
+    if is_libexec_dir {
+        // Detect a virtualenv libexec by the presence of pyvenv.cfg alongside;
+        // when present, skip every entry — including libexec/bin/ — so private
+        // venv contents never leak into the shared prefix.
+        if src_dir.join(PYVENV_CFG).exists() {
+            return true;
+        }
+        if entry_name
             .to_str()
-            .is_some_and(|name| LIBEXEC_SKIP_FILES.contains(&name)))
-        || (entry_name.to_str() == Some("site-packages") && is_libexec_python_lib_dir(src_dir))
+            .is_some_and(|name| LIBEXEC_SKIP_FILES.contains(&name))
+        {
+            return true;
+        }
+    }
+
+    entry_name.to_str() == Some("site-packages") && is_libexec_python_lib_dir(src_dir)
 }
 
 fn is_libexec_python_lib_dir(path: &Path) -> bool {
@@ -570,18 +588,38 @@ mod tests {
         let linker = Linker::new(prefix).unwrap();
 
         let keg1 = prefix.join("cellar/ranger/1.0.0");
-        fs::create_dir_all(keg1.join("libexec")).unwrap();
+        fs::create_dir_all(keg1.join("libexec/bin")).unwrap();
         fs::create_dir_all(keg1.join("bin")).unwrap();
         fs::write(keg1.join("libexec/.gitignore"), b"# ranger").unwrap();
         fs::write(keg1.join("libexec/pyvenv.cfg"), b"home=/tmp/ranger").unwrap();
+        fs::write(
+            keg1.join("libexec/bin/sqlformat"),
+            b"#!/bin/sh\necho sqlformat",
+        )
+        .unwrap();
+        fs::set_permissions(
+            keg1.join("libexec/bin/sqlformat"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
         fs::write(keg1.join("bin/ranger"), b"#!/bin/sh\necho ranger").unwrap();
         fs::set_permissions(keg1.join("bin/ranger"), PermissionsExt::from_mode(0o755)).unwrap();
 
         let keg2 = prefix.join("cellar/ansible-lint/1.0.0");
-        fs::create_dir_all(keg2.join("libexec")).unwrap();
+        fs::create_dir_all(keg2.join("libexec/bin")).unwrap();
         fs::create_dir_all(keg2.join("bin")).unwrap();
         fs::write(keg2.join("libexec/.gitignore"), b"# ansible-lint").unwrap();
         fs::write(keg2.join("libexec/pyvenv.cfg"), b"home=/tmp/ansible-lint").unwrap();
+        fs::write(
+            keg2.join("libexec/bin/sqlformat"),
+            b"#!/bin/sh\necho sqlformat",
+        )
+        .unwrap();
+        fs::set_permissions(
+            keg2.join("libexec/bin/sqlformat"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
         fs::write(
             keg2.join("bin/ansible-lint"),
             b"#!/bin/sh\necho ansible-lint",
@@ -596,9 +634,14 @@ mod tests {
         linker.link_keg(&keg1).unwrap();
         linker.link_keg(&keg2).unwrap();
 
-        // Metadata files should not be linked into shared prefix/libexec.
+        // Nothing inside a virtualenv libexec/ should be linked into the
+        // shared prefix — neither metadata files nor libexec/bin/ entries.
         assert!(!prefix.join("libexec/.gitignore").exists());
         assert!(!prefix.join("libexec/pyvenv.cfg").exists());
+        assert!(
+            !prefix.join("libexec/bin/sqlformat").exists(),
+            "libexec/bin/ entries from a venv keg must not leak into shared prefix"
+        );
 
         // Useful entrypoints still link correctly.
         assert!(prefix.join("bin/ranger").exists());
@@ -686,6 +729,54 @@ mod tests {
                 .join("libexec/lib64/python3.14/site-packages/six.py")
                 .exists()
         );
+    }
+
+    #[test]
+    fn two_python_virtualenv_kegs_with_shared_dep_names_install_without_conflict() {
+        // Regression test for #377 (https://github.com/lucasgelfond/zerobrew/issues/377):
+        // installing two Python CLI apps (mycli, pgcli) failed because shared
+        // transitive deps (sqlformat, pygmentize) live in each keg's libexec/bin/
+        // and previously got merged into the shared prefix/libexec/bin/, colliding
+        // on the second install.
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+
+        for name in ["mycli", "pgcli"] {
+            let keg = prefix.join(format!("cellar/{name}/1.0.0"));
+            fs::create_dir_all(keg.join("bin")).unwrap();
+            fs::create_dir_all(keg.join("libexec/bin")).unwrap();
+            fs::write(keg.join("libexec/pyvenv.cfg"), b"home=/tmp").unwrap();
+
+            // Main entry point: bin/<name> -> ../libexec/bin/<name>, matching
+            // Homebrew's virtualenv keg layout.
+            std::os::unix::fs::symlink(
+                format!("../libexec/bin/{name}"),
+                keg.join(format!("bin/{name}")),
+            )
+            .unwrap();
+
+            for exe in [name, "sqlformat", "pygmentize"] {
+                let p = keg.join("libexec/bin").join(exe);
+                fs::write(&p, b"#!/bin/sh\necho dep").unwrap();
+                fs::set_permissions(&p, PermissionsExt::from_mode(0o755)).unwrap();
+            }
+        }
+
+        let mycli = prefix.join("cellar/mycli/1.0.0");
+        let pgcli = prefix.join("cellar/pgcli/1.0.0");
+
+        linker.link_keg(&mycli).unwrap();
+        assert!(
+            linker.check_conflicts(&pgcli).is_ok(),
+            "pgcli must not conflict with mycli on shared libexec/bin/ deps"
+        );
+        linker.link_keg(&pgcli).unwrap();
+
+        assert!(prefix.join("bin/mycli").exists());
+        assert!(prefix.join("bin/pgcli").exists());
+        assert!(!prefix.join("libexec/bin/sqlformat").exists());
+        assert!(!prefix.join("libexec/bin/pygmentize").exists());
     }
 
     #[test]
