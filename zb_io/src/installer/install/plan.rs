@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use tracing::warn;
 use zb_core::{BuildPlan, Error, Formula, InstallMethod, select_bottle};
 
-use super::{InstallPlan, Installer, PlannedInstall};
+use super::{InstallPlan, Installer, PlanFailure, PlannedInstall};
 
 impl Installer {
     pub async fn plan(&self, names: &[String]) -> Result<InstallPlan, Error> {
@@ -54,6 +54,37 @@ impl Installer {
         }
 
         Ok(InstallPlan { items })
+    }
+
+    pub async fn plan_best_effort(
+        &self,
+        names: &[String],
+        build_from_source: bool,
+    ) -> (InstallPlan, Vec<PlanFailure>) {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        let mut failures = Vec::new();
+
+        for name in names {
+            match self
+                .plan_with_options(std::slice::from_ref(name), build_from_source)
+                .await
+            {
+                Ok(plan) => {
+                    for item in plan.items {
+                        if seen.insert(item.install_name.clone()) {
+                            items.push(item);
+                        }
+                    }
+                }
+                Err(error) => failures.push(PlanFailure {
+                    name: name.clone(),
+                    error,
+                }),
+            }
+        }
+
+        (InstallPlan { items }, failures)
     }
 
     async fn fetch_all_formulas(
@@ -405,6 +436,85 @@ end
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
+            zb_core::Error::MissingFormula { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn plan_best_effort_keeps_valid_formula_when_another_is_missing() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+
+        let tag = get_test_bottle_tag();
+        let formula_json = format!(
+            r#"{{
+                "name": "goodpkg",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{
+                    "stable": {{
+                        "files": {{
+                            "{}": {{
+                                "url": "{}/bottles/goodpkg-1.0.0.{}.bottle.tar.gz",
+                                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+            tag,
+            mock_server.uri(),
+            tag
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/formula/goodpkg.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(formula_json))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/formula/missingpkg.json"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let api_client =
+            ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap();
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+        let db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+
+        let installer = Installer::new(
+            api_client,
+            blob_cache,
+            store,
+            cellar,
+            linker,
+            db,
+            prefix.clone(),
+            root.join("locks"),
+        );
+
+        let names = vec!["goodpkg".to_string(), "missingpkg".to_string()];
+        let (plan, failures) = installer.plan_best_effort(&names, false).await;
+
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(plan.items[0].install_name, "goodpkg");
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].name, "missingpkg");
+        assert!(matches!(
+            failures[0].error,
             zb_core::Error::MissingFormula { .. }
         ));
     }

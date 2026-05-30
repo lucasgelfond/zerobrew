@@ -66,6 +66,12 @@ pub struct InstallPlan {
     pub items: Vec<PlannedInstall>,
 }
 
+#[derive(Debug)]
+pub struct PlanFailure {
+    pub name: String,
+    pub error: Error,
+}
+
 pub struct ExecuteResult {
     pub installed: usize,
 }

@@ -7,4 +7,6 @@ pub use homebrew::{
     parse_casks_from_plain_text, parse_formulas_from_json,
 };
 pub use install::doctor::{DiagnosticReport, RepairSummary};
-pub use install::{ExecuteResult, InstallPlan, Installer, OutdatedPackage, create_installer};
+pub use install::{
+    ExecuteResult, InstallPlan, Installer, OutdatedPackage, PlanFailure, create_installer,
+};
