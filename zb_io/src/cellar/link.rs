@@ -4,18 +4,24 @@ use std::path::{Component, Path, PathBuf};
 
 use zb_core::{ConflictedLink, Error};
 
-const LINK_DIRS: &[&str] = &["bin", "lib", "libexec", "include", "share", "etc"];
-const LIBEXEC_SKIP_FILES: &[&str] = &[".gitignore", "pyvenv.cfg"];
+const LIBEXEC_DIR: &str = "libexec";
+const PYVENV_CFG: &str = "pyvenv.cfg";
+const LINK_DIRS: &[&str] = &["bin", "lib", LIBEXEC_DIR, "include", "share", "etc"];
+const LIBEXEC_SKIP_FILES: &[&str] = &[".gitignore", PYVENV_CFG];
 
 fn should_skip_link_entry(src_dir: &Path, entry_name: &std::ffi::OsStr) -> bool {
     // Homebrew-style Python virtualenv formulae commonly place metadata files at
     // libexec/.gitignore and libexec/pyvenv.cfg. Linking these into a shared
     // prefix/libexec causes cross-formula conflicts (e.g. ranger vs ansible-lint)
     // even though they are not executable entrypoints users need on PATH.
-    src_dir.file_name().and_then(|n| n.to_str()) == Some("libexec")
+    src_dir.file_name().and_then(|n| n.to_str()) == Some(LIBEXEC_DIR)
         && entry_name
             .to_str()
             .is_some_and(|name| LIBEXEC_SKIP_FILES.contains(&name))
+}
+
+fn is_python_virtualenv(keg_path: &Path) -> bool {
+    keg_path.join(LIBEXEC_DIR).join(PYVENV_CFG).exists()
 }
 
 pub struct Linker {
@@ -78,7 +84,16 @@ impl Linker {
     /// Returns Ok(()) if no conflicts, or Err(LinkConflict) with all conflicts collected.
     pub fn check_conflicts(&self, keg_path: &Path) -> Result<(), Error> {
         let mut conflicts = Vec::new();
+        let is_venv = is_python_virtualenv(keg_path);
         for dir_name in LINK_DIRS {
+            // Python virtualenv kegs keep all dependencies inside an isolated libexec/
+            // virtualenv. Skipping the entire libexec/ prevents shared dependency entry
+            // points (e.g. sqlformat, pygmentize) from colliding across formulae. Access
+            // to the main executable is provided by bin/ symlinks that resolve into
+            // libexec/ within the keg itself, so nothing useful is lost.
+            if *dir_name == LIBEXEC_DIR && is_venv {
+                continue;
+            }
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
@@ -193,7 +208,12 @@ impl Linker {
         self.check_conflicts(keg_path)?;
         self.link_opt(keg_path)?;
         let mut linked = Vec::new();
+        let is_venv = is_python_virtualenv(keg_path);
         for dir_name in LINK_DIRS {
+            // See check_conflicts for why the entire libexec/ is skipped for venv kegs.
+            if *dir_name == LIBEXEC_DIR && is_venv {
+                continue;
+            }
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
@@ -519,18 +539,38 @@ mod tests {
         let linker = Linker::new(prefix).unwrap();
 
         let keg1 = prefix.join("cellar/ranger/1.0.0");
-        fs::create_dir_all(keg1.join("libexec")).unwrap();
+        fs::create_dir_all(keg1.join("libexec/bin")).unwrap();
         fs::create_dir_all(keg1.join("bin")).unwrap();
         fs::write(keg1.join("libexec/.gitignore"), b"# ranger").unwrap();
         fs::write(keg1.join("libexec/pyvenv.cfg"), b"home=/tmp/ranger").unwrap();
+        fs::write(
+            keg1.join("libexec/bin/pygmentize"),
+            b"#!/bin/sh\necho pygmentize",
+        )
+        .unwrap();
+        fs::set_permissions(
+            keg1.join("libexec/bin/pygmentize"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
         fs::write(keg1.join("bin/ranger"), b"#!/bin/sh\necho ranger").unwrap();
         fs::set_permissions(keg1.join("bin/ranger"), PermissionsExt::from_mode(0o755)).unwrap();
 
         let keg2 = prefix.join("cellar/ansible-lint/1.0.0");
-        fs::create_dir_all(keg2.join("libexec")).unwrap();
+        fs::create_dir_all(keg2.join("libexec/bin")).unwrap();
         fs::create_dir_all(keg2.join("bin")).unwrap();
         fs::write(keg2.join("libexec/.gitignore"), b"# ansible-lint").unwrap();
         fs::write(keg2.join("libexec/pyvenv.cfg"), b"home=/tmp/ansible-lint").unwrap();
+        fs::write(
+            keg2.join("libexec/bin/pygmentize"),
+            b"#!/bin/sh\necho pygmentize",
+        )
+        .unwrap();
+        fs::set_permissions(
+            keg2.join("libexec/bin/pygmentize"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
         fs::write(
             keg2.join("bin/ansible-lint"),
             b"#!/bin/sh\necho ansible-lint",
@@ -545,9 +585,11 @@ mod tests {
         linker.link_keg(&keg1).unwrap();
         linker.link_keg(&keg2).unwrap();
 
-        // Metadata files should not be linked into shared prefix/libexec.
+        // Metadata files and virtualenv subdirectories (e.g. libexec/bin/) must not
+        // be linked into the shared prefix/libexec for Python venv kegs.
         assert!(!prefix.join("libexec/.gitignore").exists());
         assert!(!prefix.join("libexec/pyvenv.cfg").exists());
+        assert!(!prefix.join("libexec/bin/pygmentize").exists());
 
         // Useful entrypoints still link correctly.
         assert!(prefix.join("bin/ranger").exists());
@@ -698,5 +740,102 @@ mod tests {
         linker.link_keg(&keg1).unwrap();
         // Pre-flight check should pass since the files don't overlap
         assert!(linker.check_conflicts(&keg2).is_ok());
+    }
+
+    #[test]
+    fn python_virtualenv_keg_does_not_link_libexec_bin() {
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+
+        let keg = prefix.join("cellar/mycli/1.73.0");
+        fs::create_dir_all(keg.join("bin")).unwrap();
+        fs::create_dir_all(keg.join("libexec/bin")).unwrap();
+        fs::write(keg.join("libexec/pyvenv.cfg"), b"home=/usr/bin").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../libexec/bin/mycli", keg.join("bin/mycli")).unwrap();
+
+        let mycli_inner = keg.join("libexec/bin/mycli");
+        fs::write(&mycli_inner, b"#!/bin/sh\necho mycli").unwrap();
+        fs::set_permissions(&mycli_inner, PermissionsExt::from_mode(0o755)).unwrap();
+
+        let shared_tool = keg.join("libexec/bin/sqlformat");
+        fs::write(&shared_tool, b"#!/bin/sh").unwrap();
+        fs::set_permissions(&shared_tool, PermissionsExt::from_mode(0o755)).unwrap();
+
+        linker.link_keg(&keg).unwrap();
+
+        assert!(
+            prefix.join("bin/mycli").exists(),
+            "bin/mycli should be linked"
+        );
+        assert!(
+            !prefix.join("libexec/bin/sqlformat").exists(),
+            "libexec/bin/sqlformat must not be linked for a Python venv keg"
+        );
+        assert!(
+            !prefix.join("libexec/bin/mycli").exists(),
+            "libexec/bin/mycli must not appear in shared prefix/libexec"
+        );
+    }
+
+    #[test]
+    fn two_python_virtualenv_kegs_with_shared_dep_names_install_without_conflict() {
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+
+        let mycli = prefix.join("cellar/mycli/1.73.0");
+        fs::create_dir_all(mycli.join("bin")).unwrap();
+        fs::create_dir_all(mycli.join("libexec/bin")).unwrap();
+        fs::write(mycli.join("libexec/pyvenv.cfg"), b"home=/usr/bin").unwrap();
+        fs::write(mycli.join("bin/mycli"), b"#!/bin/sh\necho mycli").unwrap();
+        fs::set_permissions(mycli.join("bin/mycli"), PermissionsExt::from_mode(0o755)).unwrap();
+        fs::write(mycli.join("libexec/bin/sqlformat"), b"#!/bin/sh").unwrap();
+        fs::set_permissions(
+            mycli.join("libexec/bin/sqlformat"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        fs::write(mycli.join("libexec/bin/pygmentize"), b"#!/bin/sh").unwrap();
+        fs::set_permissions(
+            mycli.join("libexec/bin/pygmentize"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let pgcli = prefix.join("cellar/pgcli/4.1.0");
+        fs::create_dir_all(pgcli.join("bin")).unwrap();
+        fs::create_dir_all(pgcli.join("libexec/bin")).unwrap();
+        fs::write(pgcli.join("libexec/pyvenv.cfg"), b"home=/usr/bin").unwrap();
+        fs::write(pgcli.join("bin/pgcli"), b"#!/bin/sh\necho pgcli").unwrap();
+        fs::set_permissions(pgcli.join("bin/pgcli"), PermissionsExt::from_mode(0o755)).unwrap();
+        fs::write(pgcli.join("libexec/bin/sqlformat"), b"#!/bin/sh").unwrap();
+        fs::set_permissions(
+            pgcli.join("libexec/bin/sqlformat"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        fs::write(pgcli.join("libexec/bin/pygmentize"), b"#!/bin/sh").unwrap();
+        fs::set_permissions(
+            pgcli.join("libexec/bin/pygmentize"),
+            PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        linker.link_keg(&mycli).unwrap();
+        linker.link_keg(&pgcli).unwrap();
+
+        assert!(
+            prefix.join("bin/mycli").exists(),
+            "bin/mycli must be linked"
+        );
+        assert!(
+            prefix.join("bin/pgcli").exists(),
+            "bin/pgcli must be linked"
+        );
+        assert!(!prefix.join("libexec/bin/sqlformat").exists());
+        assert!(!prefix.join("libexec/bin/pygmentize").exists());
     }
 }
