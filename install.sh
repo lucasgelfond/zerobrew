@@ -195,7 +195,7 @@ zb_init() {
         init_args+=("--no-modify-path")
     fi
 
-    "$zb_path" init ${init_args[@]+"${init_args[@]}"} >/dev/null 2>&1 || error_exit "Failed to initialize zerobrew"
+    "$zb_path" init ${init_args[@]+"${init_args[@]}"} || error_exit "Failed to initialize zerobrew"
 }
 
 finalize_installation() {

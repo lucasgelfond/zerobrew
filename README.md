@@ -26,7 +26,8 @@
 curl -fsSL https://zerobrew.rs/install | bash
 ```
 
-After install, run the `export` command it prints (or restart your terminal).
+The installer updates your shell config. After it finishes, restart your terminal
+or run the `source` command it prints.
 
 Or via Homebrew:
 

@@ -415,14 +415,40 @@ end
                 zerobrew_bin,
                 prefix_bin.display()
             ))?;
+            ui.info(format!(
+                "Restart your terminal or run: source {}",
+                config_file
+            ))?;
         }
     } else if no_modify_path {
         ui.info("Skipped shell configuration (--no-modify-path)")?;
-        ui.info(format!(
-            "To use zerobrew, add {} and {} to your PATH",
-            zerobrew_bin,
-            prefix_bin.display()
-        ))?;
+        match shell_kind {
+            ShellConfigKind::Posix => {
+                ui.info("Run this in your current shell:")?;
+                ui.println(format!("    export ZEROBREW_DIR={zerobrew_dir}"))?;
+                ui.println(format!("    export ZEROBREW_ROOT={}", root.display()))?;
+                ui.println(format!("    export ZEROBREW_PREFIX={}", prefix.display()))?;
+                ui.println(format!(
+                    "    export PATH=\"{}:{}:$PATH\"",
+                    zerobrew_bin,
+                    prefix_bin.display()
+                ))?;
+            }
+            ShellConfigKind::Fish => {
+                ui.info("Run this in your current shell:")?;
+                ui.println(format!("    set -gx ZEROBREW_DIR \"{zerobrew_dir}\""))?;
+                ui.println(format!("    set -gx ZEROBREW_ROOT \"{}\"", root.display()))?;
+                ui.println(format!(
+                    "    set -gx ZEROBREW_PREFIX \"{}\"",
+                    prefix.display()
+                ))?;
+                ui.println(format!(
+                    "    set -gx PATH \"{}\" \"{}\" $PATH",
+                    zerobrew_bin,
+                    prefix_bin.display()
+                ))?;
+            }
+        }
     }
 
     Ok(())
