@@ -16,6 +16,31 @@ require "pathname"
 require "json"
 require "tmpdir"
 require "tempfile"
+require "digest/sha2"
+
+module ZeroBrewChecksum
+  module_function
+
+  def verify_file!(path, expected_sha256, context)
+    return if expected_sha256.nil? || expected_sha256.to_s.strip.empty?
+
+    expected = normalize_sha256!(expected_sha256, context)
+    actual = Digest::SHA256.file(path).hexdigest
+    return if actual == expected
+
+    $stderr.puts "Error: checksum mismatch for #{context} (expected #{expected}, got #{actual})"
+    exit 1
+  end
+
+  def normalize_sha256!(value, context)
+    normalized = value.to_s.strip.downcase
+    unless normalized.match?(/\A[0-9a-f]{64}\z/)
+      $stderr.puts "Error: invalid sha256 checksum for #{context}: expected 64 hex chars, got #{normalized.length}"
+      exit 1
+    end
+    normalized
+  end
+end
 
 ZEROBREW_PREFIX = ENV.fetch("ZEROBREW_PREFIX")
 ZEROBREW_CELLAR = ENV.fetch("ZEROBREW_CELLAR")
@@ -187,6 +212,7 @@ class StagedResource
         $stderr.puts "Error: failed to download resource #{@url}"
         exit 1
       end
+      ZeroBrewChecksum.verify_file!(archive, @sha256, "resource #{@url}")
       extract_resource(archive, dir)
       entries = Dir.children(dir).reject { |e| e == basename }
       src_dir = if entries.length == 1 && File.directory?(File.join(dir, entries.first))
@@ -597,6 +623,7 @@ patches.each do |p|
         $stderr.puts "Error: failed to download patch #{p[:url]}"
         exit 1
       end
+      ZeroBrewChecksum.verify_file!(tmp.path, p[:sha256], "patch #{p[:url]}")
       Kernel.system("patch", strip_flag, "-i", tmp.path)
       unless $?.success?
         $stderr.puts "Error: patch failed"

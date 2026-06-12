@@ -292,4 +292,213 @@ end
         assert!(message.contains("source build failed"));
         assert!(message.contains("boom-from-stderr"));
     }
+
+    fn sha256_hex_file(path: &Path) -> String {
+        use sha2::{Digest, Sha256};
+        let bytes = std::fs::read(path).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hasher
+            .finalize()
+            .iter()
+            .fold(String::with_capacity(64), |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{b:02x}");
+                s
+            })
+    }
+
+    fn file_url(path: &Path) -> String {
+        format!("file://{}", path.canonicalize().unwrap().display())
+    }
+
+    async fn run_shim_formula(
+        ruby: &Path,
+        source_root: &Path,
+        prefix: &Path,
+        formula_rb: &str,
+    ) -> Result<(), Error> {
+        let tmp = source_root.parent().unwrap();
+        let shim_path = tmp.join("shim.rb");
+        std::fs::write(&shim_path, SHIM_RUBY).unwrap();
+
+        let formula_path = tmp.join("formula.rb");
+        std::fs::write(&formula_path, formula_rb).unwrap();
+
+        let cellar = prefix.join("Cellar");
+        std::fs::create_dir_all(&cellar).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("ZEROBREW_PREFIX".to_string(), prefix.display().to_string());
+        env.insert("ZEROBREW_CELLAR".to_string(), cellar.display().to_string());
+        env.insert("ZEROBREW_FORMULA_NAME".to_string(), "foo".to_string());
+        env.insert("ZEROBREW_FORMULA_VERSION".to_string(), "1.0.0".to_string());
+        env.insert(
+            "ZEROBREW_FORMULA_FILE".to_string(),
+            formula_path.display().to_string(),
+        );
+        env.insert("ZEROBREW_INSTALLED_DEPS".to_string(), "{}".to_string());
+
+        run_build(ruby, &shim_path, source_root, &env).await
+    }
+
+    #[tokio::test]
+    async fn run_build_rejects_resource_checksum_mismatch() {
+        let Some(ruby) = find_ruby().await.ok() else {
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        std::fs::create_dir_all(&source_root).unwrap();
+
+        let resource_dir = tmp.path().join("resource_content");
+        std::fs::create_dir_all(&resource_dir).unwrap();
+        std::fs::write(resource_dir.join("file.txt"), "resource-bytes").unwrap();
+
+        let archive = tmp.path().join("resource.tar.gz");
+        std::process::Command::new("tar")
+            .args([
+                "czf",
+                archive.to_str().unwrap(),
+                "-C",
+                tmp.path().to_str().unwrap(),
+                "resource_content",
+            ])
+            .status()
+            .unwrap()
+            .success()
+            .then_some(())
+            .expect("tar failed to create resource archive");
+
+        let resource_url = file_url(&archive);
+        let formula = format!(
+            r#"
+class Foo < Formula
+  resource "dep" do
+    url "{resource_url}"
+    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  end
+
+  def install
+    resource("dep").stage do |_r|
+      File.write(prefix + "done", "ok")
+    end
+  end
+end
+"#
+        );
+
+        let prefix = tmp.path().join("prefix");
+        let err = run_shim_formula(&ruby, &source_root, &prefix, &formula)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("checksum mismatch"));
+    }
+
+    #[tokio::test]
+    async fn run_build_accepts_matching_resource_checksum() {
+        let Some(ruby) = find_ruby().await.ok() else {
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        std::fs::create_dir_all(&source_root).unwrap();
+
+        let resource_dir = tmp.path().join("resource_content");
+        std::fs::create_dir_all(&resource_dir).unwrap();
+        std::fs::write(resource_dir.join("file.txt"), "resource-bytes").unwrap();
+
+        let archive = tmp.path().join("resource.tar.gz");
+        std::process::Command::new("tar")
+            .args([
+                "czf",
+                archive.to_str().unwrap(),
+                "-C",
+                tmp.path().to_str().unwrap(),
+                "resource_content",
+            ])
+            .status()
+            .unwrap()
+            .success()
+            .then_some(())
+            .expect("tar failed to create resource archive");
+
+        let resource_url = file_url(&archive);
+        let resource_sha = sha256_hex_file(&archive);
+        let formula = format!(
+            r#"
+class Foo < Formula
+  resource "dep" do
+    url "{resource_url}"
+    sha256 "{resource_sha}"
+  end
+
+  def install
+    resource("dep").stage do |_r|
+      File.write(prefix + "done", "ok")
+    end
+  end
+end
+"#
+        );
+
+        let prefix = tmp.path().join("prefix");
+        run_shim_formula(&ruby, &source_root, &prefix, &formula)
+            .await
+            .unwrap();
+
+        assert!(
+            prefix
+                .join("Cellar")
+                .join("foo")
+                .join("1.0.0")
+                .join("done")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn run_build_rejects_patch_checksum_mismatch() {
+        let Some(ruby) = find_ruby().await.ok() else {
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        std::fs::create_dir_all(&source_root).unwrap();
+        std::fs::write(source_root.join("hello.txt"), "hello\n").unwrap();
+
+        let patch = tmp.path().join("change.patch");
+        std::fs::write(
+            &patch,
+            "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hello\n+world\n",
+        )
+        .unwrap();
+
+        let patch_url = file_url(&patch);
+        let formula = format!(
+            r#"
+class Foo < Formula
+  patch :p0 do
+    url "{patch_url}"
+    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  end
+
+  def install
+    File.write(prefix + "done", File.read("hello.txt"))
+  end
+end
+"#
+        );
+
+        let prefix = tmp.path().join("prefix");
+        let err = run_shim_formula(&ruby, &source_root, &prefix, &formula)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("checksum mismatch"));
+    }
 }
