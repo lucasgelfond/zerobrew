@@ -2994,7 +2994,7 @@ dependencies = [
 
 [[package]]
 name = "zb_cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "clap",
@@ -3018,7 +3018,7 @@ dependencies = [
 
 [[package]]
 name = "zb_core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3026,7 +3026,7 @@ dependencies = [
 
 [[package]]
 name = "zb_io"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arwen",
  "flate2",

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-11
+
+### Security
+- Verify SHA-256 checksums for resource and URL patch downloads in the formula build shim before extraction or application (CVE-2026-53970)
+
 ## [0.3.1] - 2026-05-30
 
 ### Fixed
@@ -118,7 +123,8 @@ To get an idea of the initial features zerobrew supports, take a look at the [RE
 
 See the [full commit history](https://github.com/lucasgelfond/zerobrew/commits/v0.1.1) for more details.
 
-[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.0...v0.2.1
