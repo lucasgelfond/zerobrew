@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Notify, RwLock, Semaphore};
 use tracing::warn;
 
+use crate::network::mirror::rewrite_bottle_url;
 use crate::network::tls::shared_tls_config;
 use crate::progress::InstallProgress;
 use crate::storage::blob::BlobCache;
@@ -26,29 +27,56 @@ use super::{
     RACING_CONNECTIONS, RACING_STAGGER_MS,
 };
 
-fn get_alternate_urls(primary_url: &str) -> Vec<String> {
+fn get_download_url_candidates(primary_url: &str) -> (String, Vec<String>) {
+    let bottle_domain = std::env::var("HOMEBREW_BOTTLE_DOMAIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let bottle_mirrors = std::env::var("HOMEBREW_BOTTLE_MIRRORS")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+
+    get_download_url_candidates_from_env(
+        primary_url,
+        bottle_domain.as_deref(),
+        bottle_mirrors.as_deref(),
+    )
+}
+
+fn get_download_url_candidates_from_env(
+    primary_url: &str,
+    bottle_domain: Option<&str>,
+    bottle_mirrors: Option<&str>,
+) -> (String, Vec<String>) {
+    let original = primary_url.to_string();
+    let mut primary = original.clone();
     let mut alternates = Vec::new();
 
-    if let Ok(mirrors) = std::env::var("HOMEBREW_BOTTLE_MIRRORS") {
+    if let Some(domain) = bottle_domain
+        && let Some(mirrored) = rewrite_bottle_url(primary_url, domain)
+    {
+        primary = mirrored;
+        if primary != original {
+            alternates.push(original.clone());
+        }
+    }
+
+    if let Some(mirrors) = bottle_mirrors {
         for mirror in mirrors.split(',') {
             let mirror = mirror.trim();
-            if !mirror.is_empty()
-                && let Some(alt) = transform_url_to_mirror(primary_url, mirror)
+            if mirror.is_empty() {
+                continue;
+            }
+
+            if let Some(alt) = rewrite_bottle_url(primary_url, mirror)
+                && alt != primary
+                && alt != original
             {
                 alternates.push(alt);
             }
         }
     }
 
-    alternates
-}
-
-fn transform_url_to_mirror(url: &str, mirror_domain: &str) -> Option<String> {
-    if url.contains("ghcr.io") {
-        Some(url.replace("ghcr.io", mirror_domain))
-    } else {
-        None
-    }
+    (primary, alternates)
 }
 
 pub struct Downloader {
@@ -132,9 +160,9 @@ impl Downloader {
             return Ok(self.blob_cache.blob_path(expected_sha256));
         }
 
-        let alternates = get_alternate_urls(url);
+        let (primary_url, alternates) = get_download_url_candidates(url);
 
-        self.download_with_racing(url, &alternates, expected_sha256, name, progress)
+        self.download_with_racing(&primary_url, &alternates, expected_sha256, name, progress)
             .await
     }
 
@@ -423,6 +451,58 @@ mod tests {
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn prefers_homebrew_bottle_domain_before_original_url() {
+        let (primary, alternates) = get_download_url_candidates_from_env(
+            "https://ghcr.io/v2/homebrew/core/test/blobs/sha256:abc",
+            Some("https://mirrors.ustc.edu.cn/homebrew-bottles"),
+            None,
+        );
+
+        assert_eq!(
+            primary,
+            "https://mirrors.ustc.edu.cn/homebrew-bottles/v2/homebrew/core/test/blobs/sha256:abc"
+        );
+        assert_eq!(
+            alternates,
+            vec!["https://ghcr.io/v2/homebrew/core/test/blobs/sha256:abc".to_string()]
+        );
+    }
+
+    #[test]
+    fn keeps_original_url_when_bottle_domain_is_unusable() {
+        let (primary, alternates) = get_download_url_candidates_from_env(
+            "https://example.com/file.tar.gz",
+            Some("not a url"),
+            None,
+        );
+
+        assert_eq!(primary, "https://example.com/file.tar.gz");
+        assert!(alternates.is_empty());
+    }
+
+    #[test]
+    fn appends_legacy_bottle_mirrors_after_primary_and_original() {
+        let (primary, alternates) = get_download_url_candidates_from_env(
+            "https://ghcr.io/v2/homebrew/core/test/blobs/sha256:abc",
+            Some("https://mirrors.ustc.edu.cn/homebrew-bottles"),
+            Some("https://mirror.example.com, https://backup.example.com"),
+        );
+
+        assert_eq!(
+            primary,
+            "https://mirrors.ustc.edu.cn/homebrew-bottles/v2/homebrew/core/test/blobs/sha256:abc"
+        );
+        assert_eq!(
+            alternates,
+            vec![
+                "https://ghcr.io/v2/homebrew/core/test/blobs/sha256:abc".to_string(),
+                "https://mirror.example.com/v2/homebrew/core/test/blobs/sha256:abc".to_string(),
+                "https://backup.example.com/v2/homebrew/core/test/blobs/sha256:abc".to_string()
+            ]
+        );
+    }
 
     #[tokio::test]
     async fn valid_checksum_passes() {

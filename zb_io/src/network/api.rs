@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::checksum::verify_sha256_bytes;
 use crate::network::cache::{ApiCache, CacheEntry};
+use crate::network::mirror::{homebrew_api_bases_from, homebrew_api_bases_from_env};
 use crate::network::suggest::rank_formula_suggestions;
 use crate::network::tap_formula::{parse_tap_formula_ref, parse_tap_formula_ruby};
 use futures_util::stream::{self, StreamExt};
@@ -80,10 +81,9 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    const DEFAULT_BASE_URL: &'static str = "https://formulae.brew.sh/api/formula";
-
     pub fn new() -> Self {
-        Self::build_client(Self::DEFAULT_BASE_URL.to_string())
+        let bases = homebrew_api_bases_from_env();
+        Self::build_client(bases.formula_base_url, bases.cask_base_url)
     }
 
     /// Rejects non-http(s) schemes and URLs containing credentials.
@@ -105,10 +105,13 @@ impl ApiClient {
             });
         }
 
-        Ok(Self::build_client(base_url))
+        Ok(Self::build_client(
+            base_url,
+            homebrew_api_bases_from(None).cask_base_url,
+        ))
     }
 
-    fn build_client(base_url: String) -> Self {
+    fn build_client(base_url: String, cask_base_url: String) -> Self {
         let client = reqwest::Client::builder()
             .user_agent("zerobrew/0.1")
             .pool_max_idle_per_host(20)
@@ -118,7 +121,7 @@ impl ApiClient {
 
         Self {
             base_url,
-            cask_base_url: "https://formulae.brew.sh/api/cask".to_string(),
+            cask_base_url,
             tap_raw_base_url: "https://raw.githubusercontent.com".to_string(),
             client,
             cache: None,

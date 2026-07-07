@@ -34,6 +34,19 @@ curl -fsSL https://zerobrew.rs/install | bash
 brew install lucasgelfond/zerobrew/zerobrew
 ```
 
+## 镜像配置
+
+Zerobrew 支持与 Homebrew 相同风格的镜像环境变量，用于 API 和 bottle 下载。
+
+```bash
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
+export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+```
+
+- `HOMEBREW_API_DOMAIN` 会影响 Zerobrew 获取 formula 和 cask 元数据的地址。
+- `HOMEBREW_BOTTLE_DOMAIN` 会影响 bottle 产物的下载地址。
+- 如果不设置这两个变量，Zerobrew 仍然会使用默认的 Homebrew 地址。
+
 ## 更新 zerobrew (Update zerobrew)
 
 如果使用独立安装脚本，重新运行：

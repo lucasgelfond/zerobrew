@@ -35,6 +35,19 @@ Or via Homebrew:
 brew install lucasgelfond/zerobrew/zerobrew
 ```
 
+## Mirror configuration
+
+Zerobrew understands the same mirror-style environment variables as Homebrew for API and bottle downloads.
+
+```bash
+export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
+export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+```
+
+- `HOMEBREW_API_DOMAIN` changes where Zerobrew fetches formula and cask metadata.
+- `HOMEBREW_BOTTLE_DOMAIN` changes where bottle artifacts are downloaded from.
+- If these variables are unset, Zerobrew keeps using the default Homebrew endpoints.
+
 ## Update zerobrew
 
 If you used the standalone installer, rerun it:
