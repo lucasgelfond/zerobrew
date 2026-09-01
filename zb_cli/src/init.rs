@@ -293,7 +293,15 @@ fn add_to_path(
     let root_str = root.display().to_string();
     let prefix_str = prefix.display().to_string();
     let prefix_bin_str = prefix_bin.display().to_string();
-    let existing_config = std::fs::read_to_string(&config_file).unwrap_or_default();
+    // Treat only a missing file as an empty config. Any other read error
+    // (for example non-UTF-8 content) must not read as empty: the write
+    // below truncates, and that would replace the user's shell config
+    // with only the managed block.
+    let existing_config = match std::fs::read_to_string(&config_file) {
+        Ok(contents) => Ok(contents),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e),
+    };
 
     if !no_modify_path {
         let block_body = match shell_kind {
@@ -404,6 +412,19 @@ end
             ),
         };
         let managed_block = format!("{ZB_BLOCK_START}{block_body}\n{ZB_BLOCK_END}\n");
+        let existing_config = match existing_config {
+            Ok(contents) => contents,
+            Err(e) => {
+                // Never truncate a file we could not read back.
+                ui.note(format!(
+                    "Could not read {} due to error: {}",
+                    config_file, e
+                ))?;
+                ui.info(format!("Please add the following to {}:", config_file))?;
+                ui.info(&managed_block)?;
+                return Ok(());
+            }
+        };
         let updated_config = upsert_managed_block(&existing_config, &managed_block);
 
         if let Some(parent) = std::path::Path::new(&config_file).parent() {
@@ -839,6 +860,36 @@ mod tests {
         assert!(!content.contains("export ZEROBREW_DIR=/old"));
         assert_eq!(content.matches(ZB_BLOCK_START).count(), 1);
         assert_eq!(content.matches(ZB_BLOCK_END).count(), 1);
+    }
+
+    #[test]
+    fn add_to_path_preserves_config_it_cannot_read() {
+        let _lock = env_lock();
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let prefix = tmp.path().join("prefix");
+        let root = tmp.path().join("root");
+        let shell_config = home.join(".bashrc");
+        let zerobrew_dir = "/home/user/.zerobrew";
+        let zerobrew_bin = "/home/user/.zerobrew/bin";
+
+        fs::create_dir(&prefix).unwrap();
+        fs::create_dir(&root).unwrap();
+
+        // Non-UTF-8 content: read_to_string fails with InvalidData.
+        let original: &[u8] = b"# caf\xe9 config\nexport KEEP_ME=true\n";
+        fs::write(&shell_config, original).unwrap();
+
+        unsafe {
+            std::env::set_var("HOME", home.to_str().unwrap());
+            std::env::set_var("SHELL", "/bin/bash");
+        }
+
+        add_to_path(&prefix, zerobrew_dir, zerobrew_bin, &root, false).unwrap();
+
+        // A config that cannot be read back must stay untouched.
+        let after = fs::read(&shell_config).unwrap();
+        assert_eq!(after, original);
     }
 
     #[test]
