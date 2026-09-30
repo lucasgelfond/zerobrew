@@ -109,7 +109,7 @@ pub fn execute(
     ui.blank_line().map_err(ui_error)?;
     ui.heading("Repairing...").map_err(ui_error)?;
 
-    let summary = installer.repair(&report)?;
+    let (summary, remaining) = installer.repair_until_healthy(report)?;
 
     if summary.renamed_records > 0 {
         ui.bullet(format!(
@@ -176,6 +176,11 @@ pub fn execute(
         pluralize("fix", summary.total_fixes())
     ))
     .map_err(ui_error)?;
+
+    if !remaining.is_healthy() {
+        ui.warn("Some issues couldn't be repaired. Run zb doctor for details.")
+            .map_err(ui_error)?;
+    }
 
     Ok(())
 }

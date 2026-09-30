@@ -193,6 +193,27 @@ impl Installer {
         Ok(report)
     }
 
+    /// Repair until diagnostics come back clean. Fixing one issue can expose
+    /// another, like a store entry left unreferenced once a stale record is
+    /// removed. Stops early if a pass fixes nothing. Returns everything that
+    /// was fixed, and what's left.
+    pub fn repair_until_healthy(
+        &mut self,
+        mut report: DiagnosticReport,
+    ) -> Result<(RepairSummary, DiagnosticReport), Error> {
+        const MAX_PASSES: usize = 5;
+        let mut total = RepairSummary::default();
+        for _ in 0..MAX_PASSES {
+            let pass = self.repair(&report)?;
+            total.add(&pass);
+            report = self.doctor()?;
+            if report.is_healthy() || pass.total_fixes() == 0 {
+                break;
+            }
+        }
+        Ok((total, report))
+    }
+
     pub fn repair(&mut self, report: &DiagnosticReport) -> Result<RepairSummary, Error> {
         let mut summary = RepairSummary::default();
 
@@ -284,6 +305,16 @@ pub struct RepairSummary {
 }
 
 impl RepairSummary {
+    fn add(&mut self, other: &RepairSummary) {
+        self.renamed_records += other.renamed_records;
+        self.removed_orphaned_kegs += other.removed_orphaned_kegs;
+        self.removed_missing_records += other.removed_missing_records;
+        self.fixed_store_refs += other.fixed_store_refs;
+        self.removed_orphaned_store_entries += other.removed_orphaned_store_entries;
+        self.removed_broken_symlinks += other.removed_broken_symlinks;
+        self.pruned_keg_file_records += other.pruned_keg_file_records;
+    }
+
     pub fn total_fixes(&self) -> usize {
         self.renamed_records
             + self.removed_orphaned_kegs
@@ -370,6 +401,24 @@ mod tests {
         );
         assert!(installer.cellar.keg_path("python@3.14", "3.14.7").exists());
         assert!(installer.doctor().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn repair_until_healthy_cleans_up_what_earlier_fixes_expose() {
+        // A record whose keg is gone: removing the record leaves its store
+        // entry unreferenced, which only shows up on the next diagnosis.
+        let tmp = TempDir::new().unwrap();
+        let mut installer = installer_with_python_recorded_as(&tmp, &["python@3.14"]);
+        fs::remove_dir_all(installer.cellar.keg_path("python@3.14", "3.14.7")).unwrap();
+
+        let report = installer.doctor().unwrap();
+        assert!(report.orphaned_store_entries.is_empty());
+        let (summary, remaining) = installer.repair_until_healthy(report).unwrap();
+
+        assert!(remaining.is_healthy());
+        assert_eq!(summary.removed_missing_records, 1);
+        assert_eq!(summary.removed_orphaned_store_entries, 1);
+        assert!(!installer.store.entry_path(KEY).exists());
     }
 
     #[test]
