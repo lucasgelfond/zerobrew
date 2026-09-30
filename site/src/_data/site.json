@@ -1,6 +1,6 @@
 {
   "title": "zerobrew",
-  "description": "A drop-in, 5-20x faster, experimental Homebrew alternative.",
+  "description": "A drop-in, experimental Homebrew alternative that installs packages 3-4.5x faster.",
   "nav": [
     { "label": "Install", "href": "#install" },
     { "label": "GitHub", "href": "/github" },

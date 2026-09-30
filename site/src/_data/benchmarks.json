@@ -1,28 +1,36 @@
 {
-  "title": "Total install time (10 packages)",
+  "title": "Total install time (98 packages, macOS)",
   "items": [
     {
       "label": "ZB",
       "tag": "warm",
-      "width": 4,
-      "speedup": "28.6x",
-      "time": "15s",
+      "width": 20,
+      "speedup": "4.5x",
+      "time": "175s",
       "color": "var(--color-warm)"
+    },
+    {
+      "label": "HB",
+      "tag": "warm",
+      "width": 87,
+      "speedup": "",
+      "time": "778s",
+      "color": "var(--color-wave)"
     },
     {
       "label": "ZB",
       "tag": "cold",
-      "width": 14,
-      "speedup": "7.0x",
-      "time": "62s",
+      "width": 34,
+      "speedup": "3.0x",
+      "time": "303s",
       "color": "var(--color-cold)"
     },
     {
       "label": "HB",
-      "tag": "",
+      "tag": "cold",
       "width": 100,
       "speedup": "",
-      "time": "432s",
+      "time": "896s",
       "color": "var(--color-wave)"
     }
   ]
