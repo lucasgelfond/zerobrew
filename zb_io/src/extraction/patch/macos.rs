@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use tracing::warn;
 use zb_core::Error;
 
+use super::text;
+
 const HOMEBREW_PREFIXES: &[&str] = &[
     "/opt/homebrew",
     "/usr/local/Homebrew",
@@ -12,84 +14,22 @@ const HOMEBREW_PREFIXES: &[&str] = &[
 
 /// Patch hardcoded Homebrew paths in text files.
 fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> Result<(), Error> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return Ok(()),
-    };
-
-    let mut buf = [0u8; 8192];
-    let n = match std::io::Read::read(&mut file, &mut buf) {
-        Ok(n) => n,
-        Err(_) => return Ok(()),
-    };
-
-    if buf[..n].contains(&0) {
-        return Ok(());
-    }
-
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return Ok(()),
-    };
-
-    if !content.contains("@@HOMEBREW_")
-        && !content.contains("/opt/homebrew")
-        && !content.contains("/usr/local")
-        && !content.contains("/home/linuxbrew")
-    {
-        return Ok(());
-    }
-
-    let mut new_content = content.clone();
-    let mut changed = false;
-
-    new_content = new_content
-        .replace("@@HOMEBREW_PREFIX@@", new_prefix)
-        .replace("@@HOMEBREW_CELLAR@@", new_cellar)
-        .replace("@@HOMEBREW_REPOSITORY@@", new_prefix)
-        .replace("@@HOMEBREW_LIBRARY@@", &format!("{}/Library", new_prefix))
-        .replace("@@HOMEBREW_PERL@@", "/usr/bin/perl")
-        .replace("@@HOMEBREW_JAVA@@", "/usr/bin/java");
-
-    if new_content != content {
-        changed = true;
-    }
-
-    for old_prefix in HOMEBREW_PREFIXES {
-        if old_prefix == &new_prefix {
-            continue;
-        }
-        let replaced = new_content.replace(old_prefix, new_prefix);
-        if replaced != new_content {
-            new_content = replaced;
-            changed = true;
-        }
-    }
-
-    if !changed {
-        return Ok(());
-    }
-
-    let metadata = fs::metadata(path).map_err(Error::store("failed to read metadata"))?;
-    let original_mode = metadata.permissions().mode();
-    let is_readonly = original_mode & 0o200 == 0;
-
-    if is_readonly {
-        let mut perms = metadata.permissions();
-        perms.set_mode(original_mode | 0o200);
-        fs::set_permissions(path, perms).map_err(Error::store("failed to make writable"))?;
-    }
-
-    fs::write(path, new_content).map_err(Error::store("failed to write file"))?;
-
-    if is_readonly {
-        let mut perms = metadata.permissions();
-        perms.set_mode(original_mode);
-        fs::set_permissions(path, perms).map_err(Error::store("failed to restore permissions"))?;
-    }
-
+    let new_library = format!("{new_prefix}/Library");
+    let mut replacements = vec![
+        ("@@HOMEBREW_PREFIX@@", new_prefix),
+        ("@@HOMEBREW_CELLAR@@", new_cellar),
+        ("@@HOMEBREW_REPOSITORY@@", new_prefix),
+        ("@@HOMEBREW_LIBRARY@@", new_library.as_str()),
+        ("@@HOMEBREW_PERL@@", "/usr/bin/perl"),
+        ("@@HOMEBREW_JAVA@@", "/usr/bin/java"),
+    ];
+    replacements.extend(
+        HOMEBREW_PREFIXES
+            .iter()
+            .map(|old_prefix| (*old_prefix, new_prefix)),
+    );
+    text::rewrite_text_file(path, &replacements)
+        .map_err(Error::store("failed to patch text file"))?;
     Ok(())
 }
 

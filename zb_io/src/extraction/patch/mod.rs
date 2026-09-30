@@ -4,6 +4,8 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+pub(crate) mod text;
+
 #[cfg(target_os = "linux")]
 pub use linux::patch_placeholders;
 

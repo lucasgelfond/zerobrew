@@ -9,6 +9,8 @@ use rayon::prelude::*;
 use tracing::warn;
 use zb_core::Error;
 
+use super::text;
+
 const LINUX_HOMEBREW_PREFIX: &str = "/home/linuxbrew/.linuxbrew";
 
 /// Patch @@HOMEBREW_CELLAR@@ and @@HOMEBREW_PREFIX@@ placeholders in both ELF binaries and text files.
@@ -312,12 +314,18 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
 
 /// Patch text files containing @@HOMEBREW_...@@ placeholders
 fn patch_text_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Error> {
-    let cellar_str = prefix_dir.join("Cellar").to_string_lossy().to_string();
-
-    // We search for files that are text and contain the placeholders.
-    // To avoid reading every large file, we might filter by extension or size,
-    // but Homebrew generally patches everything that looks like text.
-    // For safety, we skip anything that looks like a binary (has null bytes in first 8kb).
+    let prefix_str = prefix_dir.to_string_lossy().into_owned();
+    let cellar_str = prefix_dir.join("Cellar").to_string_lossy().into_owned();
+    let library_str = format!("{prefix_str}/Library");
+    let replacements = [
+        ("@@HOMEBREW_PREFIX@@", prefix_str.as_str()),
+        ("@@HOMEBREW_REPOSITORY@@", prefix_str.as_str()),
+        ("@@HOMEBREW_LIBRARY@@", library_str.as_str()),
+        (LINUX_HOMEBREW_PREFIX, prefix_str.as_str()),
+        ("@@HOMEBREW_CELLAR@@", cellar_str.as_str()),
+        ("@@HOMEBREW_PERL@@", "/usr/bin/perl"),
+        ("@@HOMEBREW_JAVA@@", "/usr/bin/java"),
+    ];
 
     let files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
         .follow_links(false)
@@ -327,64 +335,13 @@ fn patch_text_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Err
         .map(|e| e.path().to_path_buf())
         .collect();
 
-    let patch_failures = AtomicUsize::new(0);
-
     files.par_iter().for_each(|path| {
-        let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            // Check if file is likely text
-            let mut file = fs::File::open(path)?;
-            let mut buf = [0u8; 8192];
-            let n = file.read(&mut buf)?;
-            if buf[..n].contains(&0) {
-                // Determine if it is ELF - we already handled those, but other binaries should be skipped too
-                return Ok(());
-            }
-
-            // Read full content string
-            let content = match fs::read_to_string(path) {
-                Ok(c) => c,
-                Err(_) => return Ok(()), // Not valid UTF-8, skip
-            };
-
-            if !content.contains("@@HOMEBREW_") && !content.contains(LINUX_HOMEBREW_PREFIX) {
-                return Ok(());
-            }
-
-            let new_content = rewrite_homebrew_prefixes(&content, prefix_dir)
-                .replace("@@HOMEBREW_CELLAR@@", &cellar_str)
-                .replace("@@HOMEBREW_PERL@@", "/usr/bin/perl")
-                .replace("@@HOMEBREW_JAVA@@", "/usr/bin/java");
-
-            // Write back
-            // Check readonly
-            let metadata = fs::metadata(path)?;
-            let original_mode = metadata.permissions().mode();
-            let is_readonly = original_mode & 0o200 == 0;
-
-            if is_readonly {
-                let mut perms = metadata.permissions();
-                perms.set_mode(original_mode | 0o200);
-                fs::set_permissions(path, perms)?;
-            }
-
-            fs::write(path, new_content)?;
-
-            if is_readonly {
-                let mut perms = metadata.permissions();
-                perms.set_mode(original_mode);
-                fs::set_permissions(path, perms)?;
-            }
-
-            Ok(())
-        })();
-
-        if let Err(e) = result {
+        if let Err(e) = text::rewrite_text_file(path, &replacements) {
             warn!(
                 path = %path.display(),
                 error = %e,
                 "failed to patch text file"
             );
-            patch_failures.fetch_add(1, Ordering::Relaxed);
         }
     });
 

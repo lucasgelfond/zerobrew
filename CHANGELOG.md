@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Homebrew installs now use the `cachebag/zerobrew` tap, which is updated automatically for every release. The old `lucasgelfond/zerobrew` tap was stuck at v0.1.1 ([#386](https://github.com/lucasgelfond/zerobrew/issues/386))
 
+### Fixed
+- Text files that aren't valid UTF-8 now get their Homebrew placeholders replaced
+
 ## [0.3.3] - 2026-09-29
 
 ### Changed
