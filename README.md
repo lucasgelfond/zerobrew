@@ -32,7 +32,7 @@ or run the `source` command it prints.
 Or via Homebrew:
 
 ```bash
-brew install lucasgelfond/zerobrew/zerobrew
+brew install cachebag/zerobrew/zerobrew
 ```
 
 ## Update zerobrew
@@ -48,6 +48,14 @@ If you installed with Homebrew:
 
 ```bash
 brew update && brew upgrade zerobrew
+```
+
+If you installed from the old `lucasgelfond/zerobrew` tap, it's no longer updated. Switch to the new one:
+
+```bash
+brew uninstall zerobrew
+brew untap lucasgelfond/zerobrew
+brew install cachebag/zerobrew/zerobrew
 ```
 
 ## Quick start

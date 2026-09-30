@@ -31,7 +31,7 @@ curl -fsSL https://zerobrew.rs/install | bash
 或通过 Homebrew 安装：
 
 ```bash
-brew install lucasgelfond/zerobrew/zerobrew
+brew install cachebag/zerobrew/zerobrew
 ```
 
 ## 更新 zerobrew (Update zerobrew)
@@ -47,6 +47,14 @@ zb --version
 
 ```bash
 brew update && brew upgrade zerobrew
+```
+
+如果你是从旧的 `lucasgelfond/zerobrew` tap 安装的，它已不再更新。请切换到新的 tap：
+
+```bash
+brew uninstall zerobrew
+brew untap lucasgelfond/zerobrew
+brew install cachebag/zerobrew/zerobrew
 ```
 
 `zb update` 只刷新软件包元数据。`zb upgrade` 升级通过 zerobrew 安装的软件包。它们都不会更新 `zb` 二进制文件本身。
