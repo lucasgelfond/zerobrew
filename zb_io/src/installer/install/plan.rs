@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tracing::warn;
-use zb_core::{BuildPlan, Error, Formula, InstallMethod, select_bottle};
+use zb_core::{BuildPlan, Error, Formula, InstallMethod, SelectedBottle, select_bottle};
 
 use super::{InstallPlan, Installer, PlanFailure, PlannedInstall};
 
@@ -102,7 +102,7 @@ impl Installer {
         let method = if build_from_source {
             match BuildPlan::from_formula(&formula, &self.prefix) {
                 Some(plan) => InstallMethod::Source(plan),
-                None => match select_bottle(&formula) {
+                None => match self.select_pourable_bottle(&formula) {
                     Ok(bottle) => InstallMethod::Bottle(bottle),
                     Err(_) => {
                         return Err(Error::UnsupportedBottle {
@@ -112,7 +112,7 @@ impl Installer {
                 },
             }
         } else {
-            match select_bottle(&formula) {
+            match self.select_pourable_bottle(&formula) {
                 Ok(bottle) => InstallMethod::Bottle(bottle),
                 Err(_) => match BuildPlan::from_formula(&formula, &self.prefix) {
                     Some(plan) => InstallMethod::Source(plan),
@@ -130,6 +130,28 @@ impl Installer {
             formula,
             method,
         })
+    }
+
+    /// Select a bottle that can be poured into this prefix.
+    ///
+    /// On macOS, bottles pinned to a shorter Cellar than ours (Intel bottles
+    /// built for `/usr/local`) have hardcoded paths that can't be rewritten,
+    /// so they're treated as unavailable and the formula is built from source
+    /// instead, as Homebrew does for a non-default prefix.
+    fn select_pourable_bottle(&self, formula: &Formula) -> Result<SelectedBottle, Error> {
+        let bottle = select_bottle(formula)?;
+        if cfg!(target_os = "macos") && !bottle.is_pourable_into(&self.prefix) {
+            warn!(
+                formula = %formula.name,
+                cellar = bottle.cellar.as_deref().unwrap_or_default(),
+                prefix = %self.prefix.display(),
+                "bottle can't be relocated to this prefix; it will be built from source if possible"
+            );
+            return Err(Error::UnsupportedBottle {
+                name: formula.name.clone(),
+            });
+        }
+        Ok(bottle)
     }
 
     async fn fetch_all_formulas_best_effort(

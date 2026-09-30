@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Homebrew installs now use the `cachebag/zerobrew` tap, which is updated automatically for every release. The old `lucasgelfond/zerobrew` tap was stuck at v0.1.1 ([#386](https://github.com/lucasgelfond/zerobrew/issues/386))
+- On Intel Macs, bottles pinned to `/usr/local` are built from source instead of being installed with paths that can't be rewritten for `/opt/zerobrew`, matching Homebrew ([#286](https://github.com/lucasgelfond/zerobrew/issues/286))
 
 ### Fixed
 - Install the default config files bottles ship in `etc` and `var` (such as `php.ini` and `openssl.cnf`) into the prefix, keeping any edits and writing new defaults alongside as `<name>.default` ([#390](https://github.com/lucasgelfond/zerobrew/issues/390))
