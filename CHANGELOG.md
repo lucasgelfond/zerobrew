@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-29
+
 ### Changed
 - Bump MSRV to 1.96, required to build the latest `cargo-audit` in CI ([#393](https://github.com/lucasgelfond/zerobrew/pull/393))
 - Refresh `Cargo.lock` for audit findings: `crossbeam-epoch` (RUSTSEC-2026-0204), `quinn-proto` (RUSTSEC-2026-0185), and `anyhow` (RUSTSEC-2026-0190) ([#393](https://github.com/lucasgelfond/zerobrew/pull/393))
+- Update `h2` to resolve a `cargo audit` finding
 
 ### Fixed
+- Respect Homebrew's `keg_only` field for versioned formulae instead of treating every `@` formula as keg-only, so formulae like `python@3.x` and `gcc@N` are linked like they are in Homebrew ([#403](https://github.com/lucasgelfond/zerobrew/pull/403))
+- Fix the build on macOS 27 by bumping `reqwest`
 - Relink on upgrade/reinstall: symlinks owned by another version of the same formula — including dangling links left behind by removed kegs — are now replaced during linking instead of failing the link step as conflicts with the formula itself, which left `bin`/`opt` pointing at the old version while the DB reported the new one ([#393](https://github.com/lucasgelfond/zerobrew/pull/393))
 
 ## [0.3.2] - 2026-06-11
@@ -130,7 +135,8 @@ To get an idea of the initial features zerobrew supports, take a look at the [RE
 
 See the [full commit history](https://github.com/lucasgelfond/zerobrew/commits/v0.1.1) for more details.
 
-[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lucasgelfond/zerobrew/compare/v0.2.1...v0.3.0
