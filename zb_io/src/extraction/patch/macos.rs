@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tracing::warn;
 use zb_core::Error;
 
@@ -23,6 +24,38 @@ fn is_macho(path: &Path) -> bool {
             u32::from_be_bytes(magic),
             0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
         )
+}
+
+/// Ad-hoc sign a binary whose signature was invalidated by patching, keeping
+/// its entitlements, requirements, flags and hardened runtime. If codesign
+/// fails, retry once on a fresh copy of the file, which is how Homebrew works
+/// around a codesign bug.
+fn resign(path: &Path) -> Result<(), String> {
+    let sign = || {
+        Command::new("codesign")
+            .args([
+                "--sign",
+                "-",
+                "--force",
+                "--preserve-metadata=entitlements,requirements,flags,runtime",
+            ])
+            .arg(path)
+            .output()
+    };
+    if matches!(sign(), Ok(output) if output.status.success()) {
+        return Ok(());
+    }
+
+    let mut copy = path.as_os_str().to_owned();
+    copy.push(".zb-resign");
+    fs::copy(path, &copy).map_err(|e| e.to_string())?;
+    fs::rename(&copy, path).map_err(|e| e.to_string())?;
+
+    match sign() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Patch hardcoded Homebrew paths in text files.
@@ -132,30 +165,20 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
 
         fs::rename(&temp_path, path).map_err(Error::store("failed to rename temp file"))?;
 
-        // Restore original permissions — fs::File::create uses 0644 by default,
-        // which drops the execute bit from patched binaries.
-        fs::set_permissions(path, metadata.permissions())
+        // fs::File::create uses 0644 by default, which drops the execute bit
+        // from patched binaries. Keep the file writable until it's re-signed;
+        // read-only files get their mode back below.
+        let mut perms = metadata.permissions();
+        perms.set_mode(original_mode | 0o200);
+        fs::set_permissions(path, perms)
             .map_err(Error::store("failed to restore permissions after patching"))?;
 
-        match std::process::Command::new("codesign")
-            .args(["--force", "--sign", "-", &path.to_string_lossy()])
-            .output()
-        {
-            Ok(output) if !output.status.success() => {
-                warn!(
-                    path = %path.display(),
-                    error = %String::from_utf8_lossy(&output.stderr),
-                    "failed to re-sign patched file"
-                );
-            }
-            Err(e) => {
-                warn!(
-                    path = %path.display(),
-                    error = %e,
-                    "failed to execute codesign for patched file"
-                );
-            }
-            _ => {}
+        if let Err(e) = resign(path) {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to re-sign patched file; it may be killed when run"
+            );
         }
     }
 
@@ -181,7 +204,6 @@ pub fn patch_homebrew_placeholders(
     use rayon::prelude::*;
     use regex::Regex;
     use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -365,10 +387,12 @@ pub fn patch_homebrew_placeholders(
         }
 
         // Re-sign if we patched anything (patching invalidates code signature)
-        if patched_any {
-            let _ = Command::new("codesign")
-                .args(["--force", "--sign", "-", &path.to_string_lossy()])
-                .output();
+        if patched_any && let Err(e) = resign(path) {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to re-sign patched file; it may be killed when run"
+            );
         }
 
         // Restore original permissions
@@ -405,7 +429,6 @@ pub fn patch_homebrew_placeholders(
 pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
     use rayon::prelude::*;
     use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
 
     // First, do a quick recursive xattr strip (single command, very fast)
     let _ = Command::new("xattr")

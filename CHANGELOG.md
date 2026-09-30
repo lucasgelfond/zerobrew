@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Install the default config files bottles ship in `etc` and `var` (such as `php.ini` and `openssl.cnf`) into the prefix, keeping any edits and writing new defaults alongside as `<name>.default` ([#390](https://github.com/lucasgelfond/zerobrew/issues/390))
 - Replace Homebrew placeholders in scripts that contain binary data and recompute PHP archive signatures afterwards, which broke `composer` on macOS ([#389](https://github.com/lucasgelfond/zerobrew/issues/389))
+- Report `install_name_tool` failures instead of ignoring them, and keep entitlements and hardened runtime flags when re-signing patched binaries ([#300](https://github.com/lucasgelfond/zerobrew/issues/300))
 - Text files that aren't valid UTF-8 now get their Homebrew placeholders replaced
 
 ## [0.3.3] - 2026-09-29
