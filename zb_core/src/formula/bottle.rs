@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::formula::types::BottleFile;
 use crate::{Error, Formula};
 
@@ -27,6 +29,17 @@ impl SelectedBottle {
         match self.pinned_cellar() {
             Some(cellar) => cellar.strip_suffix("/Cellar").unwrap_or(cellar),
             None => default_homebrew_prefix(),
+        }
+    }
+
+    /// Whether the bottle can be poured into `prefix`. Bottles pinned to a
+    /// Cellar keep hardcoded paths in their binaries, which can only be
+    /// rewritten in place, so `prefix` can't be longer than the one they were
+    /// built for. Homebrew builds these from source instead.
+    pub fn is_pourable_into(&self, prefix: &Path) -> bool {
+        match self.pinned_cellar() {
+            Some(_) => prefix.as_os_str().len() <= self.build_prefix().len(),
+            None => true,
         }
     }
 
@@ -569,5 +582,25 @@ mod tests {
                 default_homebrew_prefix()
             );
         }
+    }
+
+    #[test]
+    fn relocatable_bottles_pour_into_any_prefix() {
+        let long_prefix = Path::new("/a/much/longer/prefix/than/homebrew/uses");
+        for cellar in [Some(":any"), Some(":any_skip_relocation"), None] {
+            assert!(bottle_with_cellar(cellar).is_pourable_into(long_prefix));
+        }
+    }
+
+    #[test]
+    fn pinned_bottles_only_pour_into_prefixes_that_fit() {
+        let arm = bottle_with_cellar(Some("/opt/homebrew/Cellar"));
+        assert!(arm.is_pourable_into(Path::new("/opt/zerobrew")));
+        assert!(arm.is_pourable_into(Path::new("/opt/zb")));
+        assert!(!arm.is_pourable_into(Path::new("/opt/zerobrew/prefix")));
+
+        let intel = bottle_with_cellar(Some("/usr/local/Cellar"));
+        assert!(!intel.is_pourable_into(Path::new("/opt/zerobrew")));
+        assert!(intel.is_pourable_into(Path::new("/usr/local")));
     }
 }
