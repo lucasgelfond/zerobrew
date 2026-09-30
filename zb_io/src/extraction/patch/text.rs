@@ -5,12 +5,15 @@ use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use super::phar;
+
 /// Replace each `(from, to)` pair in the file at `path`, in order.
 ///
 /// Scripts that start with `#!` are rewritten even if they contain binary
 /// data, as Homebrew does: PHP archives are scripts with a binary payload.
 /// Other files with NUL bytes in their first 8 KiB are treated as binaries
-/// and left alone. Returns whether the file changed.
+/// and left alone. PHP archives get their signature recomputed after
+/// patching. Returns whether the file changed.
 pub(crate) fn rewrite_text_file(path: &Path, replacements: &[(&str, &str)]) -> io::Result<bool> {
     let mut head = [0u8; 8192];
     let n = fs::File::open(path)?.read(&mut head)?;
@@ -31,6 +34,9 @@ pub(crate) fn rewrite_text_file(path: &Path, replacements: &[(&str, &str)]) -> i
     }
     if !changed {
         return Ok(false);
+    }
+    if let Some(resigned) = phar::resign(&content) {
+        content = resigned;
     }
 
     write_preserving_mode(path, &content)?;
@@ -161,5 +167,30 @@ mod tests {
         let file = tmp.path().join("README");
         fs::write(&file, "nothing to see\n").unwrap();
         assert!(!rewrite_text_file(&file, PLACEHOLDERS).unwrap());
+    }
+
+    #[test]
+    fn resigns_patched_phars() {
+        use sha2::{Digest, Sha512};
+
+        let body =
+            b"#!/usr/bin/env php\n<?php __HALT_COMPILER(); ?>\0'@@HOMEBREW_PREFIX@@/etc'".to_vec();
+        let mut data = body.clone();
+        data.extend_from_slice(&Sha512::digest(&body));
+        data.extend_from_slice(&4u32.to_le_bytes());
+        data.extend_from_slice(b"GBMB");
+
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("composer");
+        fs::write(&file, &data).unwrap();
+
+        assert!(rewrite_text_file(&file, PLACEHOLDERS).unwrap());
+        let patched = fs::read(&file).unwrap();
+        let body_len = patched.len() - 8 - 64;
+        assert_eq!(
+            &patched[body_len..patched.len() - 8],
+            &Sha512::digest(&patched[..body_len])[..]
+        );
+        assert!(patched.windows(13).any(|w| w == b"/opt/zerobrew"));
     }
 }
