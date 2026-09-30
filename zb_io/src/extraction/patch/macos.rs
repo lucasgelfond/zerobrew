@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 use zb_core::Error;
@@ -11,6 +12,18 @@ const HOMEBREW_PREFIXES: &[&str] = &[
     "/usr/local",
     "/home/linuxbrew/.linuxbrew",
 ];
+
+/// Whether `path` is a Mach-O file, judging by its magic number.
+fn is_macho(path: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok()
+        && matches!(
+            u32::from_be_bytes(magic),
+            0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
+        )
+}
 
 /// Patch hardcoded Homebrew paths in text files.
 fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> Result<(), Error> {
@@ -190,18 +203,7 @@ pub fn patch_homebrew_placeholders(
             // Skip symlinks - only process actual files
             e.file_type().is_file()
         })
-        .filter(|e| {
-            if let Ok(data) = fs::read(e.path())
-                && data.len() >= 4
-            {
-                let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-                return matches!(
-                    magic,
-                    0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
-                );
-            }
-            false
-        })
+        .filter(|e| is_macho(e.path()))
         .map(|e| e.path().to_path_buf())
         .collect();
 
@@ -412,17 +414,7 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
 
     // Only process files that need signing
     bin_files.par_iter().for_each(|path| {
-        // Quick check: is it a Mach-O?
-        let data = match fs::read(path) {
-            Ok(d) if d.len() >= 4 => d,
-            _ => return,
-        };
-        let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let is_macho = matches!(
-            magic,
-            0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
-        );
-        if !is_macho {
+        if !is_macho(path) {
             return;
         }
 
