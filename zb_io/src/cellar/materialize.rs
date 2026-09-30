@@ -90,11 +90,15 @@ impl Cellar {
         Ok(kegs)
     }
 
+    /// Copy a bottle from the store into the Cellar and relocate it.
+    /// `build_prefix` is the Homebrew prefix the bottle was built in; see
+    /// [`zb_core::SelectedBottle::build_prefix`].
     pub fn materialize(
         &self,
         name: &str,
         version: &str,
         store_entry: &Path,
+        build_prefix: &str,
     ) -> Result<PathBuf, Error> {
         let keg_path = self.keg_path(name, version);
 
@@ -117,11 +121,14 @@ impl Cellar {
 
         // Patch Homebrew placeholders in Mach-O binaries
         #[cfg(target_os = "macos")]
-        patch_homebrew_placeholders(&keg_path, &self.cellar_dir, name, version)?;
+        patch_homebrew_placeholders(&keg_path, &self.cellar_dir, name, version, build_prefix)?;
 
         // Patch Homebrew placeholders in ELF binaries
         #[cfg(target_os = "linux")]
         {
+            // Linux bottles are always built in the Linuxbrew prefix, which
+            // patch_placeholders handles itself.
+            let _ = build_prefix;
             // Derive prefix from cellar_dir directly without hardcoded fallback
             let prefix = self
                 .cellar_dir
@@ -321,7 +328,9 @@ mod tests {
         let store_entry = setup_store_entry(&tmp);
 
         let cellar = Cellar::new(tmp.path()).unwrap();
-        let keg_path = cellar.materialize("foo", "1.2.3", &store_entry).unwrap();
+        let keg_path = cellar
+            .materialize("foo", "1.2.3", &store_entry, "/opt/homebrew")
+            .unwrap();
 
         // Check directory structure exists
         assert!(keg_path.exists());
@@ -367,13 +376,17 @@ mod tests {
         let cellar = Cellar::new(tmp.path()).unwrap();
 
         // First materialize
-        let keg_path1 = cellar.materialize("foo", "1.2.3", &store_entry).unwrap();
+        let keg_path1 = cellar
+            .materialize("foo", "1.2.3", &store_entry, "/opt/homebrew")
+            .unwrap();
 
         // Add a marker file
         fs::write(keg_path1.join("marker.txt"), b"original").unwrap();
 
         // Second materialize should be no-op
-        let keg_path2 = cellar.materialize("foo", "1.2.3", &store_entry).unwrap();
+        let keg_path2 = cellar
+            .materialize("foo", "1.2.3", &store_entry, "/opt/homebrew")
+            .unwrap();
         assert_eq!(keg_path1, keg_path2);
 
         // Marker should still exist
@@ -386,7 +399,9 @@ mod tests {
         let store_entry = setup_store_entry(&tmp);
 
         let cellar = Cellar::new(tmp.path()).unwrap();
-        cellar.materialize("foo", "1.2.3", &store_entry).unwrap();
+        cellar
+            .materialize("foo", "1.2.3", &store_entry, "/opt/homebrew")
+            .unwrap();
 
         assert!(cellar.has_keg("foo", "1.2.3"));
 
@@ -434,7 +449,9 @@ mod tests {
         let store_entry = setup_store_entry(&tmp);
 
         let cellar = Cellar::new(tmp.path()).unwrap();
-        let keg_path = cellar.materialize("clone", "1.0.0", &store_entry).unwrap();
+        let keg_path = cellar
+            .materialize("clone", "1.0.0", &store_entry, "/opt/homebrew")
+            .unwrap();
 
         // Verify content is correct regardless of which strategy was used
         assert_eq!(

@@ -7,13 +7,6 @@ use zb_core::Error;
 
 use super::text;
 
-const HOMEBREW_PREFIXES: &[&str] = &[
-    "/opt/homebrew",
-    "/usr/local/Homebrew",
-    "/usr/local",
-    "/home/linuxbrew/.linuxbrew",
-];
-
 /// Whether `path` is a Mach-O file, judging by its magic number.
 fn is_macho(path: &Path) -> bool {
     let mut magic = [0u8; 4];
@@ -58,22 +51,24 @@ fn resign(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Patch hardcoded Homebrew paths in text files.
-fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> Result<(), Error> {
+/// Patch Homebrew placeholders, and the prefix the bottle was built in, in a
+/// text file.
+fn patch_text_file_strings(
+    path: &Path,
+    build_prefix: &str,
+    new_prefix: &str,
+    new_cellar: &str,
+) -> Result<(), Error> {
     let new_library = format!("{new_prefix}/Library");
-    let mut replacements = vec![
+    let replacements = [
         ("@@HOMEBREW_PREFIX@@", new_prefix),
         ("@@HOMEBREW_CELLAR@@", new_cellar),
         ("@@HOMEBREW_REPOSITORY@@", new_prefix),
         ("@@HOMEBREW_LIBRARY@@", new_library.as_str()),
         ("@@HOMEBREW_PERL@@", "/usr/bin/perl"),
         ("@@HOMEBREW_JAVA@@", "/usr/bin/java"),
+        (build_prefix, new_prefix),
     ];
-    replacements.extend(
-        HOMEBREW_PREFIXES
-            .iter()
-            .map(|old_prefix| (*old_prefix, new_prefix)),
-    );
     text::rewrite_text_file(path, &replacements)
         .map_err(Error::store("failed to patch text file"))?;
     Ok(())
@@ -81,13 +76,73 @@ fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> R
 
 /// Patch hardcoded Homebrew paths in Mach-O binary data sections.
 /// This handles paths like /opt/homebrew/opt/git/libexec/git-core that are baked into binaries.
-fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error> {
-    use std::io::{Read as _, Write as _};
+/// Only `build_prefix`, the prefix the bottle was built in, is rewritten: other
+/// paths like /usr/local on Apple Silicon aren't Homebrew's and must be left alone.
+fn patch_macho_binary_strings(
+    path: &Path,
+    build_prefix: &str,
+    new_prefix: &str,
+) -> Result<(), Error> {
+    use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt;
+
+    if build_prefix == new_prefix {
+        return Ok(());
+    }
 
     let metadata = fs::metadata(path).map_err(Error::store("failed to read metadata"))?;
     let original_mode = metadata.permissions().mode();
     let is_readonly = original_mode & 0o200 == 0;
+
+    let mut contents = fs::read(path).map_err(Error::store("failed to read file"))?;
+    let old_bytes = build_prefix.as_bytes();
+    let new_bytes = new_prefix.as_bytes();
+
+    if new_bytes.len() > old_bytes.len() {
+        // A longer path can't be written in place. The planner refuses to pour
+        // bottles pinned to a shorter prefix, so this only happens for
+        // relocatable bottles with stray references to the build prefix.
+        //
+        // See: https://github.com/lucasgelfond/zerobrew/issues/286
+        let has_old_paths = contents
+            .windows(old_bytes.len() + 1)
+            .any(|w| w[..old_bytes.len()] == *old_bytes && w[old_bytes.len()] == b'/');
+        if has_old_paths {
+            warn!(
+                path = %path.display(),
+                old_prefix = %build_prefix,
+                new_prefix = %new_prefix,
+                "binary contains hardcoded paths under {build_prefix} that \
+                could not be rewritten to {new_prefix} (new path is longer). \
+                this package may not work correctly
+                tracking issue: https://github.com/lucasgelfond/zerobrew/issues/286
+                ",
+            );
+        }
+        return Ok(());
+    }
+
+    let mut patched = false;
+    let mut i = 0;
+    while i + old_bytes.len() <= contents.len() {
+        if contents[i..i + old_bytes.len()] == *old_bytes
+            && matches!(
+                contents.get(i + old_bytes.len()).copied(),
+                None | Some(0) | Some(b'/')
+            )
+        {
+            contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
+            contents[i + new_bytes.len()..i + old_bytes.len()].fill(0);
+            patched = true;
+            i += old_bytes.len();
+        } else {
+            i += 1;
+        }
+    }
+
+    if !patched {
+        return Ok(());
+    }
 
     if is_readonly {
         let mut perms = metadata.permissions();
@@ -95,111 +150,48 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
         fs::set_permissions(path, perms).map_err(Error::store("failed to make writable"))?;
     }
 
-    let mut file = fs::File::open(path).map_err(Error::store("failed to open file"))?;
-    let mut contents = Vec::new();
-    file.read_to_end(&mut contents)
-        .map_err(Error::store("failed to read file"))?;
-    drop(file);
+    let temp_path = path.with_extension("tmp_patch");
+    let mut temp_file =
+        fs::File::create(&temp_path).map_err(Error::store("failed to create temp file"))?;
+    temp_file
+        .write_all(&contents)
+        .map_err(Error::store("failed to write temp file"))?;
+    drop(temp_file);
 
-    let original_contents = contents.clone();
-    let mut patched = false;
+    fs::rename(&temp_path, path).map_err(Error::store("failed to rename temp file"))?;
 
-    for old_prefix in HOMEBREW_PREFIXES {
-        if old_prefix == &new_prefix {
-            continue;
-        }
+    // fs::File::create uses 0644 by default, which drops the execute bit from
+    // patched binaries. Keep the file writable until it's re-signed.
+    let mut perms = metadata.permissions();
+    perms.set_mode(original_mode | 0o200);
+    fs::set_permissions(path, perms)
+        .map_err(Error::store("failed to restore permissions after patching"))?;
 
-        let old_bytes = old_prefix.as_bytes();
-        let new_bytes = new_prefix.as_bytes();
-
-        if new_bytes.len() > old_bytes.len() {
-            // Cannot expand shorter paths in-place in Mach-O binaries.
-            // Skip this prefix — the install_name_tool pass handles load
-            // command changes regardless of length, and many binaries
-            // legitimately reference shorter prefixes like /usr/local for
-            // system libraries (not Homebrew paths).
-            //
-            // See: https://github.com/lucasgelfond/zerobrew/issues/286
-            let has_old_paths = contents
-                .windows(old_bytes.len() + 1)
-                .any(|w| w[..old_bytes.len()] == *old_bytes && w[old_bytes.len()] == b'/');
-            if has_old_paths {
-                warn!(
-                    path = %path.display(),
-                    old_prefix = %old_prefix,
-                    new_prefix = %new_prefix,
-                    "binary contains hardcoded paths under {old_prefix} that \
-                    could not be rewritten to {new_prefix} (new path is longer). \
-                    this package may not work correctly
-                    tracking issue: https://github.com/lucasgelfond/zerobrew/issues/286
-                    ",
-                );
-            }
-            continue;
-        }
-
-        let mut i = 0;
-        while i + old_bytes.len() <= contents.len() {
-            if contents[i..i + old_bytes.len()] == *old_bytes
-                && matches!(
-                    contents.get(i + old_bytes.len()).copied(),
-                    None | Some(0) | Some(b'/')
-                )
-            {
-                contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
-                contents[i + new_bytes.len()..i + old_bytes.len()].fill(0);
-                patched = true;
-            }
-            i += 1;
-        }
+    if let Err(e) = resign(path) {
+        warn!(
+            path = %path.display(),
+            error = %e,
+            "failed to re-sign patched file; it may be killed when run"
+        );
     }
 
-    if patched && contents != original_contents {
-        let temp_path = path.with_extension("tmp_patch");
-        let mut temp_file =
-            fs::File::create(&temp_path).map_err(Error::store("failed to create temp file"))?;
-        temp_file
-            .write_all(&contents)
-            .map_err(Error::store("failed to write temp file"))?;
-        drop(temp_file);
-
-        fs::rename(&temp_path, path).map_err(Error::store("failed to rename temp file"))?;
-
-        // fs::File::create uses 0644 by default, which drops the execute bit
-        // from patched binaries. Keep the file writable until it's re-signed;
-        // read-only files get their mode back below.
-        let mut perms = metadata.permissions();
-        perms.set_mode(original_mode | 0o200);
-        fs::set_permissions(path, perms)
-            .map_err(Error::store("failed to restore permissions after patching"))?;
-
-        if let Err(e) = resign(path) {
-            warn!(
-                path = %path.display(),
-                error = %e,
-                "failed to re-sign patched file; it may be killed when run"
-            );
-        }
-    }
-
-    if is_readonly {
-        let mut perms = metadata.permissions();
-        perms.set_mode(original_mode);
-        let _ = fs::set_permissions(path, perms);
-    }
+    fs::set_permissions(path, metadata.permissions())
+        .map_err(Error::store("failed to restore permissions after patching"))?;
 
     Ok(())
 }
 
 /// Patch @@HOMEBREW_CELLAR@@ and @@HOMEBREW_PREFIX@@ placeholders in Mach-O binaries.
 /// Also fixes version mismatches where a bottle references a different version of itself.
-/// Additionally patches hardcoded Homebrew paths in binary data sections and text files.
+/// Additionally patches hardcoded paths under `build_prefix`, the prefix the
+/// bottle was built in, in binary data sections and text files.
 /// Uses rayon for parallel processing.
 pub fn patch_homebrew_placeholders(
     keg_path: &Path,
     cellar_dir: &Path,
     pkg_name: &str,
     pkg_version: &str,
+    build_prefix: &str,
 ) -> Result<(), Error> {
     use rayon::prelude::*;
     use regex::Regex;
@@ -234,7 +226,7 @@ pub fn patch_homebrew_placeholders(
 
     // First pass: patch binary strings in Mach-O files
     macho_files.par_iter().for_each(|path| {
-        if let Err(e) = patch_macho_binary_strings(path, &prefix_str) {
+        if let Err(e) = patch_macho_binary_strings(path, build_prefix, &prefix_str) {
             patch_failures.fetch_add(1, Ordering::Relaxed);
             if let Ok(mut guard) = first_patch_error.lock()
                 && guard.is_none()
@@ -260,7 +252,9 @@ pub fn patch_homebrew_placeholders(
         .collect();
 
     text_files.par_iter().for_each(|path| {
-        let _ = patch_text_file_strings(path, &prefix_str, &cellar_str);
+        if let Err(e) = patch_text_file_strings(path, build_prefix, &prefix_str, &cellar_str) {
+            warn!(path = %path.display(), error = %e, "failed to patch text file");
+        }
     });
 
     // Helper to patch a single path reference
@@ -527,7 +521,7 @@ mod tests {
         perms.set_mode(0o755);
         fs::set_permissions(&test_file, perms).unwrap();
 
-        patch_macho_binary_strings(&test_file, new_prefix).unwrap();
+        patch_macho_binary_strings(&test_file, old_prefix, new_prefix).unwrap();
 
         let mode = fs::metadata(&test_file).unwrap().permissions().mode();
         assert!(
@@ -557,7 +551,7 @@ mod tests {
 
         fs::write(&test_file, &contents).unwrap();
 
-        let result = patch_macho_binary_strings(&test_file, new_prefix);
+        let result = patch_macho_binary_strings(&test_file, old_prefix, new_prefix);
         assert!(result.is_ok());
 
         let patched = fs::read(&test_file).unwrap();
@@ -588,7 +582,7 @@ mod tests {
         // Should succeed (skip) rather than error when the new prefix is
         // longer than the old one — install_name_tool handles load command
         // changes regardless of length.
-        let result = patch_macho_binary_strings(&test_file, new_prefix);
+        let result = patch_macho_binary_strings(&test_file, old_prefix, new_prefix);
         assert!(
             result.is_ok(),
             "should skip when new prefix is longer than old prefix"
@@ -661,7 +655,7 @@ echo "Hello from $PREFIX"
         let new_prefix = "/opt/zerobrew/prefix";
         let new_cellar = format!("{}/Cellar", new_prefix);
 
-        let result = patch_text_file_strings(&test_file, new_prefix, &new_cellar);
+        let result = patch_text_file_strings(&test_file, "/opt/homebrew", new_prefix, &new_cellar);
         assert!(result.is_ok());
 
         let patched = fs::read_to_string(&test_file).unwrap();
@@ -672,5 +666,51 @@ echo "Hello from $PREFIX"
         assert!(patched.contains("/opt/zerobrew/prefix/Cellar"));
         assert!(patched.contains("/opt/zerobrew/prefix/Library"));
         assert!(patched.contains("/usr/bin/perl"));
+    }
+
+    #[test]
+    fn test_patch_macho_only_rewrites_the_build_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let test_file = tmp.path().join("test_binary");
+
+        let mut contents = Vec::new();
+        contents.extend_from_slice(b"\xfe\xed\xfa\xcf");
+        contents.extend_from_slice(b"/opt/homebrew/etc/gitconfig\0");
+        contents.extend_from_slice(b"/usr/local/lib/node_modules\0");
+        fs::write(&test_file, &contents).unwrap();
+
+        patch_macho_binary_strings(&test_file, "/opt/homebrew", "/opt/zerobrew").unwrap();
+
+        let patched = String::from_utf8_lossy(&fs::read(&test_file).unwrap()).into_owned();
+        assert!(patched.contains("/opt/zerobrew/etc/gitconfig"));
+        assert!(!patched.contains("/opt/homebrew"));
+        assert!(
+            patched.contains("/usr/local/lib/node_modules"),
+            "paths outside the build prefix must be left alone"
+        );
+    }
+
+    #[test]
+    fn test_patch_text_file_leaves_other_prefixes_alone() {
+        let tmp = TempDir::new().unwrap();
+        let test_file = tmp.path().join("script.sh");
+        fs::write(
+            &test_file,
+            "#!/bin/sh\nPATH=/usr/local/bin:@@HOMEBREW_PREFIX@@/bin\n",
+        )
+        .unwrap();
+
+        patch_text_file_strings(
+            &test_file,
+            "/opt/homebrew",
+            "/opt/zerobrew",
+            "/opt/zerobrew/Cellar",
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&test_file).unwrap(),
+            "#!/bin/sh\nPATH=/usr/local/bin:/opt/zerobrew/bin\n"
+        );
     }
 }

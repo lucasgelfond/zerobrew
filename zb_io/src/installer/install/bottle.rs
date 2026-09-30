@@ -37,9 +37,9 @@ impl Installer {
             .extract_with_retry(download, &item.formula, bottle, download_progress.clone())
             .await?;
 
-        let keg_path = self
-            .cellar
-            .materialize(formula_name, &version, &store_entry)?;
+        let keg_path =
+            self.cellar
+                .materialize(formula_name, &version, &store_entry, bottle.build_prefix())?;
 
         report(InstallProgress::UnpackCompleted {
             name: formula_name.clone(),
