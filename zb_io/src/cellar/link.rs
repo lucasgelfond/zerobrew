@@ -7,7 +7,7 @@ use zb_core::{ConflictedLink, Error};
 /// Keg directories linked into the prefix. Like Homebrew, `libexec` is not
 /// linked: it holds files private to a keg, like the Python formulae's
 /// unversioned `python` and `pip`, which would collide across versions.
-const LINK_DIRS: &[&str] = &["bin", "lib", "include", "share", "etc"];
+const LINK_DIRS: &[&str] = &["bin", "sbin", "lib", "include", "share", "etc"];
 
 /// Directories older versions of zerobrew linked. Still unlinked, so those
 /// links are cleaned up on uninstall and upgrade.
@@ -536,6 +536,19 @@ mod tests {
         let linker = Linker::new(tmp.path()).unwrap();
         linker.link_keg(&keg).unwrap();
         assert!(tmp.path().join("bin/foo").exists());
+    }
+
+    #[test]
+    fn links_sbin() {
+        let tmp = TempDir::new().unwrap();
+        let keg = tmp.path().join("cellar/php/8.5.11");
+        fs::create_dir_all(keg.join("sbin")).unwrap();
+        fs::write(keg.join("sbin/php-fpm"), b"php-fpm").unwrap();
+
+        let linker = Linker::new(tmp.path()).unwrap();
+        linker.link_keg(&keg).unwrap();
+
+        assert!(tmp.path().join("sbin/php-fpm").is_symlink());
     }
 
     #[test]

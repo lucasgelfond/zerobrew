@@ -290,9 +290,11 @@ fn add_to_path(
     };
 
     let prefix_bin = prefix.join("bin");
+    let prefix_sbin = prefix.join("sbin");
     let root_str = root.display().to_string();
     let prefix_str = prefix.display().to_string();
     let prefix_bin_str = prefix_bin.display().to_string();
+    let prefix_sbin_str = prefix_sbin.display().to_string();
     // Treat only a missing file as an empty config. Any other read error
     // (for example non-UTF-8 content) must not read as empty: the write
     // below truncates, and that would replace the user's shell config
@@ -351,6 +353,7 @@ _zb_path_append() {{
 }}
 
 _zb_path_append "$ZEROBREW_BIN"
+_zb_path_append "$ZEROBREW_PREFIX/sbin"
 _zb_path_append "$ZEROBREW_PREFIX/bin"
 "#,
                 zerobrew_dir = posix_shell_quote(zerobrew_dir),
@@ -400,6 +403,9 @@ end
 
 if not contains -- "$ZEROBREW_BIN" $PATH
     set -gx PATH "$ZEROBREW_BIN" $PATH
+end
+if not contains -- "$ZEROBREW_PREFIX/sbin" $PATH
+    set -gx PATH "$ZEROBREW_PREFIX/sbin" $PATH
 end
 if not contains -- "$ZEROBREW_PREFIX/bin" $PATH
     set -gx PATH "$ZEROBREW_PREFIX/bin" $PATH
@@ -454,9 +460,10 @@ end
         } else {
             ui.info(format!("Updated zerobrew configuration in {}", config_file))?;
             ui.info(format!(
-                "Added {} and {} to PATH",
+                "Added {}, {} and {} to PATH",
                 zerobrew_bin,
-                prefix_bin.display()
+                prefix_bin.display(),
+                prefix_sbin.display()
             ))?;
             let reload_command = match shell_kind {
                 ShellConfigKind::Posix => format!(". {}", posix_shell_quote(&config_file)),
@@ -482,9 +489,10 @@ end
                     posix_shell_quote(&prefix_str)
                 ))?;
                 ui.println(format!(
-                    "    export PATH={}:{}:$PATH",
+                    "    export PATH={}:{}:{}:$PATH",
                     posix_shell_quote(zerobrew_bin),
-                    posix_shell_quote(&prefix_bin_str)
+                    posix_shell_quote(&prefix_bin_str),
+                    posix_shell_quote(&prefix_sbin_str)
                 ))?;
             }
             ShellConfigKind::Fish => {
@@ -502,9 +510,10 @@ end
                     fish_shell_quote(&prefix_str)
                 ))?;
                 ui.println(format!(
-                    "    set -gx PATH {} {} $PATH",
+                    "    set -gx PATH {} {} {} $PATH",
                     fish_shell_quote(zerobrew_bin),
-                    fish_shell_quote(&prefix_bin_str)
+                    fish_shell_quote(&prefix_bin_str),
+                    fish_shell_quote(&prefix_sbin_str)
                 ))?;
             }
         }
@@ -792,6 +801,7 @@ mod tests {
         let content = fs::read_to_string(&shell_config).unwrap();
         assert!(content.contains("_zb_path_append \"$ZEROBREW_BIN\""));
         assert!(content.contains("_zb_path_append \"$ZEROBREW_PREFIX/bin\""));
+        assert!(content.contains("_zb_path_append \"$ZEROBREW_PREFIX/sbin\""));
     }
 
     #[test]
@@ -1090,6 +1100,7 @@ mod tests {
         assert!(!content.contains(
             "set -gx PKG_CONFIG_PATH \"$ZEROBREW_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH\""
         ));
+        assert!(content.contains("set -gx PATH \"$ZEROBREW_PREFIX/sbin\" $PATH"));
     }
 
     #[test]
