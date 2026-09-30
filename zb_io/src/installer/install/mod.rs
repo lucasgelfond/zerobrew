@@ -373,6 +373,15 @@ mod test_support {
     }
 
     pub fn create_bottle_tarball_with_version(formula_name: &str, version: &str) -> Vec<u8> {
+        create_bottle_tarball_with_files(formula_name, version, &[])
+    }
+
+    /// A bottle with `bin/<name>` plus extra `(path in keg, contents)` files.
+    pub fn create_bottle_tarball_with_files(
+        formula_name: &str,
+        version: &str,
+        extra_files: &[(&str, &str)],
+    ) -> Vec<u8> {
         use flate2::Compression;
         use flate2::write::GzEncoder;
         use std::io::Write;
@@ -381,16 +390,23 @@ mod test_support {
         let mut builder = Builder::new(Vec::new());
 
         let content = format!("#!/bin/sh\necho {} v{}", formula_name, version);
+        let files = std::iter::once((format!("bin/{formula_name}"), content.as_str(), 0o755))
+            .chain(
+                extra_files
+                    .iter()
+                    .map(|(path, contents)| (path.to_string(), *contents, 0o644)),
+            );
 
-        let mut header = tar::Header::new_gnu();
-        header
-            .set_path(format!("{}/{}/bin/{}", formula_name, version, formula_name))
-            .unwrap();
-        header.set_size(content.len() as u64);
-        header.set_mode(0o755);
-        header.set_cksum();
-
-        builder.append(&header, content.as_bytes()).unwrap();
+        for (path, contents, mode) in files {
+            let mut header = tar::Header::new_gnu();
+            header
+                .set_path(format!("{}/{}/{}", formula_name, version, path))
+                .unwrap();
+            header.set_size(contents.len() as u64);
+            header.set_mode(mode);
+            header.set_cksum();
+            builder.append(&header, contents.as_bytes()).unwrap();
+        }
 
         let tar_data = builder.into_inner().unwrap();
 
@@ -713,6 +729,104 @@ mod tests {
         assert!(installer.db.get_installed("goodpkg").is_some());
         assert!(installer.db.get_installed("badpkg").is_none());
         assert!(root.join("cellar/goodpkg/1.0.0").exists());
+    }
+
+    /// An installer backed by a mock API serving `name` 1.0.0 as `bottle`.
+    async fn installer_for_bottle(
+        mock_server: &MockServer,
+        tmp: &TempDir,
+        name: &str,
+        bottle: Vec<u8>,
+    ) -> (Installer, std::path::PathBuf, std::path::PathBuf) {
+        let tag = get_test_bottle_tag();
+        let formula_json = format!(
+            r#"{{
+                "name": "{name}",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": [],
+                "bottle": {{ "stable": {{ "files": {{
+                    "{tag}": {{
+                        "url": "{uri}/bottles/{name}-1.0.0.{tag}.bottle.tar.gz",
+                        "sha256": "{sha}"
+                    }}
+                }} }} }}
+            }}"#,
+            uri = mock_server.uri(),
+            sha = sha256_hex(&bottle),
+        );
+
+        Mock::given(method("GET"))
+            .and(path(format!("/formula/{name}.json")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
+            .mount(mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/bottles/{name}-1.0.0.{tag}.bottle.tar.gz")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle))
+            .mount(mock_server)
+            .await;
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+
+        let installer = Installer::new(
+            ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap(),
+            BlobCache::new(&root.join("cache")).unwrap(),
+            Store::new(&root).unwrap(),
+            Cellar::new(&root).unwrap(),
+            Linker::new(&prefix).unwrap(),
+            Database::open(&root.join("db/zb.sqlite3")).unwrap(),
+            prefix.clone(),
+            root.join("locks"),
+        );
+        (installer, root, prefix)
+    }
+
+    #[tokio::test]
+    async fn install_copies_bottle_etc_files_into_prefix() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let bottle = create_bottle_tarball_with_files(
+            "withconf",
+            "1.0.0",
+            &[(".bottle/etc/withconf/withconf.conf", "setting = 1\n")],
+        );
+        let (mut installer, _root, prefix) =
+            installer_for_bottle(&mock_server, &tmp, "withconf", bottle).await;
+
+        installer
+            .install(&["withconf".to_string()], true)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(prefix.join("etc/withconf/withconf.conf")).unwrap(),
+            "setting = 1\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn etc_install_failure_fails_install_and_cleans_keg() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let bottle = create_bottle_tarball_with_files(
+            "badconf",
+            "1.0.0",
+            &[(".bottle/etc/badconf/badconf.conf", "setting = 1\n")],
+        );
+        let (mut installer, root, prefix) =
+            installer_for_bottle(&mock_server, &tmp, "badconf", bottle).await;
+
+        // A file where the config directory needs to go.
+        fs::write(prefix.join("etc/badconf"), "in the way").unwrap();
+
+        let result = installer.install(&["badconf".to_string()], true).await;
+
+        assert!(result.is_err());
+        assert!(installer.db.get_installed("badconf").is_none());
+        assert!(!root.join("cellar/badconf/1.0.0").exists());
+        assert!(!prefix.join("bin/badconf").exists());
     }
 
     #[tokio::test]

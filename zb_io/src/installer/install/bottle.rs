@@ -41,6 +41,14 @@ impl Installer {
             self.cellar
                 .materialize(formula_name, &version, &store_entry, bottle.build_prefix())?;
 
+        // Before recording the install, so a failure doesn't leave the
+        // package marked installed without its config files.
+        crate::cellar::install_etc_var(&keg_path, &self.prefix)
+            .map_err(Error::file("failed to install etc/var files"))
+            .inspect_err(|_| {
+                Self::cleanup_materialized(&self.cellar, formula_name, &version);
+            })?;
+
         report(InstallProgress::UnpackCompleted {
             name: formula_name.clone(),
         });
@@ -60,10 +68,6 @@ impl Installer {
 
         if let Err(e) = self.linker.link_opt(&keg_path) {
             warn!(formula = %install_name, error = %e, "failed to create opt link");
-        }
-
-        if let Err(e) = crate::cellar::install_etc_var(&keg_path, &self.prefix) {
-            warn!(formula = %install_name, error = %e, "failed to install etc/var files");
         }
 
         if link && !item.formula.is_keg_only() {
