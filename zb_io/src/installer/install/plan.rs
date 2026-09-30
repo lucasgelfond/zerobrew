@@ -378,7 +378,7 @@ class Terraform < Formula
   depends_on "go"
   bottle do
     root_url "{}/ghcr/hashicorp/tap"
-    sha256 {}: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    sha256 cellar: :any_skip_relocation, {}: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   end
 end
 "#,

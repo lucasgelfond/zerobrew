@@ -58,6 +58,10 @@ static REBUILD_RE: LazyLock<Regex> = LazyLock::new(|| {
 static BOTTLE_SHA_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"([a-z0-9_]+):\s*"([0-9a-f]{64})""#).expect("BOTTLE_SHA_RE must compile")
 });
+
+static BOTTLE_CELLAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"cellar:\s*(:[a-z_]+|"[^"]+")"#).expect("BOTTLE_CELLAR_RE must compile")
+});
 static ON_PLATFORM_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"^\s*on_(macos|linux|arm|intel)\s+do\b"#).expect("ON_PLATFORM_RE must compile")
 });
@@ -638,28 +642,55 @@ fn parse_bottle_files(
 ) -> BTreeMap<String, BottleFile> {
     let mut files = BTreeMap::new();
 
-    for cap in BOTTLE_SHA_RE.captures_iter(block) {
-        let Some(tag) = cap.get(1).map(|m| m.as_str()) else {
-            continue;
-        };
-        let Some(sha) = cap.get(2).map(|m| m.as_str()) else {
-            continue;
-        };
-        if tag == "cellar" {
-            continue;
+    for line in block
+        .lines()
+        .filter(|line| line.trim_start().starts_with("sha256"))
+    {
+        let cellar = BOTTLE_CELLAR_RE
+            .captures(line)
+            .and_then(|cap| cap.get(1))
+            .map(|m| m.as_str().trim_matches('"').to_string());
+
+        for cap in BOTTLE_SHA_RE.captures_iter(line) {
+            let Some(tag) = cap.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            let Some(sha) = cap.get(2).map(|m| m.as_str()) else {
+                continue;
+            };
+            if tag == "cellar" {
+                continue;
+            }
+            let url = build_bottle_url(spec, root_url, stable, revision, rebuild, tag, sha);
+            files.insert(
+                tag.to_string(),
+                BottleFile {
+                    url,
+                    sha256: sha.to_string(),
+                    cellar: Some(
+                        cellar
+                            .clone()
+                            .unwrap_or_else(|| default_cellar(tag).to_string()),
+                    ),
+                },
+            );
         }
-        let url = build_bottle_url(spec, root_url, stable, revision, rebuild, tag, sha);
-        files.insert(
-            tag.to_string(),
-            BottleFile {
-                url,
-                sha256: sha.to_string(),
-                cellar: None,
-            },
-        );
     }
 
     files
+}
+
+/// The Cellar a bottle is pinned to when its `sha256` line has no `cellar:`,
+/// matching Homebrew's `Tag#default_cellar`. `brew bottle` only writes
+/// `cellar:` when it differs from this.
+fn default_cellar(tag: &str) -> &'static str {
+    if tag.ends_with("_linux") {
+        "/home/linuxbrew/.linuxbrew/Cellar"
+    } else if tag.starts_with("arm64_") {
+        "/opt/homebrew/Cellar"
+    } else {
+        "/usr/local/Cellar"
+    }
 }
 
 fn build_bottle_url(
@@ -847,6 +878,44 @@ end
 
         assert!(formula.bottle.stable.files.contains_key("x86_64_linux"));
         assert!(formula.bottle.stable.files.contains_key("arm64_sonoma"));
+    }
+
+    #[test]
+    fn parses_bottle_cellars() {
+        let source = r#"
+class Foo < Formula
+  version "1.0.0"
+
+  bottle do
+    root_url "https://ghcr.io/v2/acme/tap"
+    sha256 cellar: :any_skip_relocation, arm64_tahoe: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    sha256 cellar: :any,                 arm64_sequoia: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    sha256 cellar: "/usr/local/Cellar",  sonoma: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    sha256                               arm64_sonoma: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    sha256                               ventura: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    sha256                               x86_64_linux: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  end
+end
+"#;
+        let spec = TapFormulaRef {
+            owner: "acme".to_string(),
+            repo: "tap".to_string(),
+            formula: "foo".to_string(),
+        };
+
+        let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+        let cellar = |tag: &str| formula.bottle.stable.files[tag].cellar.as_deref();
+
+        assert_eq!(cellar("arm64_tahoe"), Some(":any_skip_relocation"));
+        assert_eq!(cellar("arm64_sequoia"), Some(":any"));
+        assert_eq!(cellar("sonoma"), Some("/usr/local/Cellar"));
+        // No `cellar:` means pinned to the platform's default Cellar.
+        assert_eq!(cellar("arm64_sonoma"), Some("/opt/homebrew/Cellar"));
+        assert_eq!(cellar("ventura"), Some("/usr/local/Cellar"));
+        assert_eq!(
+            cellar("x86_64_linux"),
+            Some("/home/linuxbrew/.linuxbrew/Cellar")
+        );
     }
 
     #[test]

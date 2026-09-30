@@ -327,7 +327,7 @@ class Terraform < Formula
   version "1.10.0"
   bottle do
     root_url "{}/v2/hashicorp/tap"
-    sha256 {}: "{}"
+    sha256 cellar: :any_skip_relocation, {}: "{}"
   end
 end
 "#,
