@@ -1,5 +1,6 @@
 pub mod etc;
 pub mod link;
+pub mod linkage;
 pub mod materialize;
 
 pub use etc::install_etc_var;
