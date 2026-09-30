@@ -23,16 +23,16 @@ ZEROBREW_PREFIX := if env('ZEROBREW_PREFIX', '') != '' {
 }
 ZEROBREW_INSTALLED_BIN := ZEROBREW_BIN / 'zb'
 
-SUDO := if which('doas') != '' {
-    'doas'
-} else {
-    require('sudo')
-}
+# Plain shell lookup: `which()` requires `set lists` since just 1.53
+SUDO := `command -v doas >/dev/null 2>&1 && echo doas || echo sudo`
 
 # Package lists for benchmarks
 BENCH_PACKAGES := 'ca-certificates openssl@3 xz sqlite readline icu4c@78 python@3.14 awscli node harfbuzz ncurses gh pcre2 libpng zstd glib lz4 gettext libngtcp2 libnghttp3 pkgconf libunistring mpdecimal brotli jpeg-turbo xorgproto ffmpeg cmake libnghttp2 go uv gmp libtiff fontconfig python@3.13 git little-cms2 dav1d openexr c-ares tesseract p11-kit imagemagick zlib libx11 freetype protobuf gnupg openjph libtasn1 ruby gnutls expat libsodium simdjson gemini-cli libarchive pyenv pixman curl opus unbound cairo pango leptonica libxcb jpeg-xl coreutils certifi krb5 docker libheif webp libxext libxau gcc bzip2 libxdmcp abseil xcbeautify libuv giflib utf8proc libxrender m4 graphite2 openjdk uvwasi libffi libdeflate llvm aom lzo libevent libgpg-error libidn2 berkeley-db@5 deno libedit oniguruma'
 
 BENCH_QUICK_PACKAGES := 'jq tree htop bat fd ripgrep fzf wget curl git tmux zoxide openssl@3 sqlite readline pcre2 zstd lz4 node go ruby gh'
+
+# Bottle downloaded to estimate bandwidth before benchmarking
+BENCH_BANDWIDTH_PACKAGE := 'go'
 
 alias b := build
 alias i := install
@@ -213,7 +213,7 @@ lint:
 test:
     cargo test --workspace -- --include-ignored
 
-[doc('Run benchmark comparing zerobrew vs homebrew')]
+[doc('Benchmark zerobrew against Homebrew (resets zerobrew; see --help)')]
 [group('benchmark')]
 [positional-arguments]
 [script]
@@ -254,13 +254,23 @@ bench *args:
             -h|--help)
                 echo "Usage: just bench [options]"
                 echo ""
+                echo "Installs each package four times: Homebrew cold, Homebrew warm,"
+                echo "zerobrew cold and zerobrew warm. Every run starts with the package and"
+                echo "all of its dependencies uninstalled. Cold runs start with an empty"
+                echo "download cache; warm runs reuse the downloads from the cold run."
+                echo ""
+                echo "Warning: this runs 'zb reset' and uninstalls every Homebrew formula the"
+                echo "benchmark installs. Formulae installed before the run are left alone,"
+                echo "and benchmark packages among them are skipped. For publishable numbers,"
+                echo "run it on a machine with nothing installed in Homebrew."
+                echo ""
                 echo "Options:"
                 echo "  --quick              Test all quick packages (default, 22 packages)"
                 echo "  --full [DIR]         Test all 100 top Homebrew packages"
                 echo "                       Optionally specify DIR to output all formats to directory"
                 echo "  -c, --count N        Test first N packages from selected list"
                 echo "                       (quick packages by default, or from --full list)"
-                echo "  --format FORMAT      Output format: text (default), json, csv, or html"
+                echo "  --format FORMAT      Output format: text (default), json, csv, html, or markdown"
                 echo "  -o, --output FILE    Write output to file instead of stdout (format inferred from extension)"
                 echo "  --no-color           Disable colored output"
                 echo "  --log FILE           Write install command logs to file"
@@ -277,21 +287,66 @@ bench *args:
             *.json) FORMAT="json" ;;
             *.csv)  FORMAT="csv" ;;
             *.html) FORMAT="html" ;;
+            *.md)   FORMAT="markdown" ;;
             *)      FORMAT="text" ;;
         esac
     elif [[ -z "$FORMAT" ]]; then
         FORMAT="text"
     fi
 
-    [[ "$FORMAT" =~ ^(text|json|csv|html)$ ]] || { echo "Error: format must be text, json, csv, or html" >&2; exit 1; }
+    [[ "$FORMAT" =~ ^(text|json|csv|html|markdown)$ ]] || { echo "Error: format must be text, json, csv, html, or markdown" >&2; exit 1; }
+
+    # Determine which packages to test
+    # Default: all quick packages (22)
+    # --quick: all quick packages
+    # --full: all 100 packages
+    # --count N: limit currently selected list to N
+    if [[ "$FULL" == "true" ]]; then
+        PACKAGES=("${PACKAGES[@]}")
+    else
+        PACKAGES=("${QUICK_PACKAGES[@]}")
+    fi
+
+    if [[ -n "$COUNT" ]]; then
+        PACKAGES=("${PACKAGES[@]:0:$COUNT}")
+    fi
+
+    if [[ "$NO_COLOR" == "true" ]]; then
+        RED="" GREEN="" YELLOW="" BLUE="" CYAN="" NORMAL="" BOLD=""
+    else
+        RED="{{RED}}" GREEN="{{GREEN}}" YELLOW="{{YELLOW}}"
+        BLUE="{{BLUE}}" CYAN="{{CYAN}}" NORMAL="{{NORMAL}}" BOLD="{{BOLD}}"
+    fi
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo -e "${CYAN}=== Dry Run ===${NORMAL}" >&2
+        echo "Would test ${#PACKAGES[@]} packages:" >&2
+        for pkg in "${PACKAGES[@]}"; do
+            echo "  - $pkg" >&2
+        done
+        echo "" >&2
+        if [[ -n "$FULL_OUTPUT_DIR" ]]; then
+            echo "Output directory: $FULL_OUTPUT_DIR" >&2
+            echo "  Will create benchmark.{txt,json,csv,html,md}" >&2
+        else
+            echo "Format: $FORMAT" >&2
+            [[ -n "$OUTPUT" ]] && echo "Output file: $OUTPUT" >&2
+        fi
+        [[ -n "$LOG_FILE" ]] && echo "Log file: $LOG_FILE" >&2
+        echo "" >&2
+        echo "Each package would be tested with (package and dependencies uninstalled first):" >&2
+        echo "  1. brew install <package> (cold: empty download cache)" >&2
+        echo "  2. brew install <package> (warm: downloads cached)" >&2
+        echo "  3. zb install <package> (cold: after zb reset)" >&2
+        echo "  4. zb install <package> (warm: store and downloads cached)" >&2
+        exit 0
+    fi
 
     # Pre-run validation
     missing=()
     command -v brew &>/dev/null || missing+=("brew")
     command -v zb &>/dev/null || missing+=("zb")
     command -v python3 &>/dev/null || missing+=("python3")
-    command -v bc &>/dev/null || missing+=("bc")
-    command -v sed &>/dev/null || missing+=("sed")
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "Error: Missing required commands: ${missing[*]}" >&2
@@ -299,9 +354,12 @@ bench *args:
         exit 1
     fi
 
+    # Keep Homebrew from doing unrelated work (auto-update, periodic cleanup)
+    # during timed installs.
     export HOMEBREW_NO_AUTO_UPDATE=1
     export HOMEBREW_NO_ANALYTICS=1
     export HOMEBREW_NO_ENV_HINTS=1
+    export HOMEBREW_NO_INSTALL_CLEANUP=1
 
     brew_prefix=$(brew --prefix)
     if [[ ! -w "$brew_prefix" ]]; then
@@ -319,7 +377,7 @@ bench *args:
     for dir in "$ZEROBREW_ROOT" "$ZEROBREW_PREFIX"; do
         if [[ -d "$dir" ]]; then
             # Find any files/dirs not owned by current user (limit to 1 for speed)
-            not_owned=$(find "$dir" ! -user "$current_user" -print -quit 2>/dev/null)
+            not_owned=$(find "$dir" ! -user "$current_user" -print -quit 2>/dev/null || true)
             if [[ -n "$not_owned" ]]; then
                 needs_chown=true
                 break
@@ -340,31 +398,6 @@ bench *args:
         echo -e "${GREEN}    Ownership fixed!${NORMAL}" >&2
     fi
 
-    # Determine which packages to test
-    # Default: all quick packages (22)
-    # --quick: all quick packages
-    # --full: all 100 packages
-    # --count N: limit currently selected list to N
-    if [[ "$FULL" == "true" ]]; then
-        # --full: use all 100 packages
-        PACKAGES=("${PACKAGES[@]}")
-    else
-        # Default or --quick: use all quick packages
-        PACKAGES=("${QUICK_PACKAGES[@]}")
-    fi
-
-    # Apply --count limit if specified
-    if [[ -n "$COUNT" ]]; then
-        PACKAGES=("${PACKAGES[@]:0:$COUNT}")
-    fi
-
-    if [[ "$NO_COLOR" == "true" ]]; then
-        RED="" GREEN="" YELLOW="" BLUE="" CYAN="" NORMAL="" BOLD=""
-    else
-        RED="{{RED}}" GREEN="{{GREEN}}" YELLOW="{{YELLOW}}"
-        BLUE="{{BLUE}}" CYAN="{{CYAN}}" NORMAL="{{NORMAL}}" BOLD="{{BOLD}}"
-    fi
-
     if [[ -n "$LOG_FILE" ]]; then
         : > "$LOG_FILE"
         echo -e "${BLUE}Debug logging to: $LOG_FILE${NORMAL}" >&2
@@ -379,6 +412,19 @@ bench *args:
         python3 -c "ms=int('$1'); print(f'{ms/1000:.2f}s' if ms>=1000 else f'{ms}ms')"
     }
 
+    # Ratio of two millisecond totals, e.g. "7.62"
+    ratio() {
+        python3 -c "a, b = int('$1'), int('$2'); print(f'{a / b:.2f}' if b > 0 else '0')"
+    }
+
+    json_str() {
+        python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
+    }
+
+    # Portable timing using python3 (works on macOS + Linux)
+    get_time() { python3 -c "import time; print(time.time())"; }
+    elapsed_ms() { python3 -c "print(int((float('$2') - float('$1')) * 1000))"; }
+
     log_msg "bench start: format=$FORMAT full=$FULL quick=$QUICK count=${COUNT:-all} packages=${#PACKAGES[@]}"
     if [[ -n "$FULL_OUTPUT_DIR" ]]; then
         log_msg "output dir: $FULL_OUTPUT_DIR"
@@ -386,34 +432,79 @@ bench *args:
         log_msg "output file: $OUTPUT"
     fi
 
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "${CYAN}=== Dry Run ===${NORMAL}" >&2
-        echo "Would test ${#PACKAGES[@]} packages:" >&2
-        for pkg in "${PACKAGES[@]}"; do
-            echo "  - $pkg" >&2
-        done
-        echo "" >&2
-        if [[ -n "$FULL_OUTPUT_DIR" ]]; then
-            echo "Output directory: $FULL_OUTPUT_DIR" >&2
-            echo "  Will create benchmark.{txt,json,csv,html}" >&2
-        else
-            echo "Format: $FORMAT" >&2
-            [[ -n "$OUTPUT" ]] && echo "Output file: $OUTPUT" >&2
-        fi
-        [[ -n "$LOG_FILE" ]] && echo "Log file: $LOG_FILE" >&2
-        echo "" >&2
-        echo "Each package would be tested with:" >&2
-        echo "  1. brew install <package>" >&2
-        echo "  2. zb install <package> (cold cache)" >&2
-        echo "  3. zb install <package> (warm cache)" >&2
-        exit 0
+    # Homebrew downloads go to a private cache so cold runs can start empty
+    # without touching the user's real cache. The formula index under api/ is
+    # kept, as it would be after any `brew update`.
+    BENCH_BREW_CACHE=$(mktemp -d "${TMPDIR:-/tmp}/zb-bench-brew-cache.XXXXXX")
+    trap 'rm -rf "$BENCH_BREW_CACHE"' EXIT
+    export HOMEBREW_CACHE="$BENCH_BREW_CACHE"
+
+    clear_brew_downloads() {
+        find "$HOMEBREW_CACHE" -mindepth 1 -maxdepth 1 ! -name api -exec rm -rf {} +
+    }
+
+    # Formulae installed before the run are never touched. Everything the
+    # benchmark installs is removed between runs, so each run installs the
+    # package and all of its dependencies.
+    brew_formulae() { brew list --formula -1 2>/dev/null | LC_ALL=C sort; }
+    BREW_BASELINE=$(brew_formulae)
+    BREW_BASELINE_COUNT=$(grep -c . <<< "$BREW_BASELINE" || true)
+
+    remove_brew_bench_formulae() {
+        local extra
+        extra=$(LC_ALL=C comm -13 <(printf '%s\n' "$BREW_BASELINE") <(brew_formulae) | grep . || true)
+        [[ -n "$extra" ]] || return 0
+        # shellcheck disable=SC2086
+        brew uninstall --force --ignore-dependencies $extra &>/dev/null || true
+    }
+
+    if [[ "$BREW_BASELINE_COUNT" -gt 0 ]]; then
+        echo -e "${YELLOW}==> Homebrew already has $BREW_BASELINE_COUNT formulae installed.${NORMAL}" >&2
+        echo -e "${YELLOW}    They stay installed, so Homebrew skips any dependencies among them.${NORMAL}" >&2
+        echo -e "${YELLOW}    Use a machine with an empty Homebrew for publishable numbers.${NORMAL}" >&2
     fi
 
-    # Portable timing using python3 (works on macOS + Linux)
-    get_time() { python3 -c "import time; print(time.time())"; }
-    elapsed_ms() { python3 -c "print(int((float('$2') - float('$1')) * 1000))"; }
+    echo -e "${CYAN}Loading Homebrew formula index...${NORMAL}" >&2
+    brew info --json=v2 --formula "${PACKAGES[0]}" &>/dev/null || true
 
-    # Safer command execution using argv array
+    # Rough download bandwidth: time a Homebrew bottle download.
+    BANDWIDTH="unknown"
+    echo -e "${CYAN}Measuring download bandwidth ({{BENCH_BANDWIDTH_PACKAGE}} bottle)...${NORMAL}" >&2
+    bw_start=$(get_time)
+    if brew fetch --force --formula "{{BENCH_BANDWIDTH_PACKAGE}}" &>/dev/null; then
+        bw_ms=$(elapsed_ms "$bw_start" "$(get_time)")
+        bw_file=$(brew --cache --formula "{{BENCH_BANDWIDTH_PACKAGE}}" 2>/dev/null || true)
+        if [[ -f "$bw_file" && "$bw_ms" -gt 0 ]]; then
+            bw_bytes=$(wc -c < "$bw_file" | tr -d ' ')
+            BANDWIDTH=$(python3 -c "print(f'~{$bw_bytes * 8 / ($bw_ms / 1000) / 1e6:.0f} Mbit/s')")
+        fi
+    fi
+    clear_brew_downloads
+    log_msg "bandwidth: $BANDWIDTH"
+
+    BENCH_DATE=$(date -u +%Y-%m-%d)
+    BREW_VERSION=$(brew --version 2>/dev/null | sed -n 1p)
+    ZB_VERSION=$(zb --version 2>/dev/null | sed -n 1p)
+    ARCH=$(uname -m)
+    case "$(uname -s)" in
+        Darwin)
+            OS_NAME="macOS $(sw_vers -productVersion)"
+            HW_MODEL=$(sysctl -n hw.model 2>/dev/null || true)
+            CPU_NAME=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)
+            MEM_GB=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+            ;;
+        *)
+            OS_NAME=$( (. /etc/os-release && echo "$PRETTY_NAME") 2>/dev/null || uname -sr)
+            HW_MODEL=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || true)
+            CPU_NAME=$(awk -F': ' '/model name/ { print $2; exit }' /proc/cpuinfo 2>/dev/null || true)
+            MEM_GB=$(awk '/MemTotal/ { printf "%d", $2 / 1048576 }' /proc/meminfo 2>/dev/null || true)
+            ;;
+    esac
+    HW_MODEL=${HW_MODEL:-unknown}
+    CPU_NAME=${CPU_NAME:-unknown}
+    MEM_GB=${MEM_GB:-unknown}
+    log_msg "env: $ZB_VERSION / $BREW_VERSION / $OS_NAME $ARCH / $HW_MODEL / $CPU_NAME / ${MEM_GB}GB"
+
     # Usage: run_timed_install "label" cmd arg1 arg2 ...
     run_timed_install() {
         local label="$1"
@@ -434,17 +525,26 @@ bench *args:
             local elapsed
             elapsed=$(elapsed_ms "$start" "$(get_time)")
             log_msg "END $label: ${elapsed}ms"
+            echo -e "    ${GREEN}OK: $(format_duration "$elapsed")${NORMAL}" >&2
             echo "$elapsed"
             return 0
         fi
 
+        echo -e "    ${RED}FAILED${NORMAL}" >&2
         log_msg "FAIL $label (exit $status)"
         return 1
     }
 
-    declare -a NAMES=() BREW_TIMES=() ZB_COLD_TIMES=() ZB_WARM_TIMES=() SPEEDUPS_COLD=() SPEEDUPS_WARM=() FAILED_NAMES=() FAILED_REASONS=()
+    declare -a NAMES=() BREW_COLD_TIMES=() BREW_WARM_TIMES=() ZB_COLD_TIMES=() ZB_WARM_TIMES=() SPEEDUPS_COLD=() SPEEDUPS_WARM=() FAILED_NAMES=() FAILED_REASONS=()
     PASSED=0
     FAILED=0
+
+    record_failure() {
+        FAILED_NAMES+=("$1")
+        FAILED_REASONS+=("$2")
+        ((FAILED++)) || true  # || true needed because ((0++)) returns exit 1
+        log_msg "package fail: $1 ($2)"
+    }
 
     for i in "${!PACKAGES[@]}"; do
         pkg="${PACKAGES[$i]}"
@@ -452,109 +552,89 @@ bench *args:
         echo -e "${CYAN}[$idx/${#PACKAGES[@]}] Testing: $pkg${NORMAL}" >&2
         log_msg "package start: $pkg ($idx/${#PACKAGES[@]})"
 
-        brew uninstall --ignore-dependencies "$pkg" &>/dev/null || true
-        zb uninstall "$pkg" &>/dev/null || true
+        if grep -qxF "$pkg" <<< "$BREW_BASELINE"; then
+            echo -e "    ${YELLOW}SKIPPED: already installed in Homebrew${NORMAL}" >&2
+            record_failure "$pkg" "skipped: installed in Homebrew before the benchmark"
+            continue
+        fi
+
+        remove_brew_bench_formulae
+        clear_brew_downloads
         zb reset -y &>/dev/null || true
 
-        if BREW_MS=$(run_timed_install "Homebrew" brew install "$pkg"); then
-            echo -e "    ${GREEN}OK: $(format_duration "$BREW_MS")${NORMAL}" >&2
-        else
-            echo -e "    ${RED}FAILED${NORMAL}" >&2
-            FAILED_NAMES+=("$pkg")
-            FAILED_REASONS+=("brew install failed")
-            ((FAILED++)) || true  # || true needed because ((0++)) returns exit 1
-            log_msg "package fail: $pkg (brew install failed)"
-            continue
-        fi
+        BREW_COLD_MS=$(run_timed_install "Homebrew (cold)" brew install --formula "$pkg") || { record_failure "$pkg" "brew install failed (cold)"; continue; }
+        remove_brew_bench_formulae
+        BREW_WARM_MS=$(run_timed_install "Homebrew (warm)" brew install --formula "$pkg") || { record_failure "$pkg" "brew install failed (warm)"; continue; }
+        remove_brew_bench_formulae
 
-        brew uninstall --ignore-dependencies "$pkg" &>/dev/null || true
-
+        ZB_COLD_MS=$(run_timed_install "zerobrew (cold)" zb install "$pkg") || { record_failure "$pkg" "zb install failed (cold)"; continue; }
+        zb uninstall --all &>/dev/null || true
+        ZB_WARM_MS=$(run_timed_install "zerobrew (warm)" zb install "$pkg") || { record_failure "$pkg" "zb install failed (warm)"; continue; }
         zb reset -y &>/dev/null || true
-        if ZB_COLD_MS=$(run_timed_install "Zerobrew (cold)" zb install "$pkg"); then
-            echo -e "    ${GREEN}OK: $(format_duration "$ZB_COLD_MS")${NORMAL}" >&2
-        else
-            echo -e "    ${RED}FAILED${NORMAL}" >&2
-            FAILED_NAMES+=("$pkg")
-            FAILED_REASONS+=("zb install failed (cold)")
-            ((FAILED++)) || true  # || true needed because ((0++)) returns exit 1
-            log_msg "package fail: $pkg (zb install failed cold)"
-            continue
-        fi
-
-        zb uninstall "$pkg" &>/dev/null || true
-        if ZB_WARM_MS=$(run_timed_install "Zerobrew (warm)" zb install "$pkg"); then
-            echo -e "    ${GREEN}OK: $(format_duration "$ZB_WARM_MS")${NORMAL}" >&2
-        else
-            echo -e "    ${RED}FAILED${NORMAL}" >&2
-            FAILED_NAMES+=("$pkg")
-            FAILED_REASONS+=("zb install failed (warm)")
-            ((FAILED++)) || true  # || true needed because ((0++)) returns exit 1
-            log_msg "package fail: $pkg (zb install failed warm)"
-            continue
-        fi
-
-        SPEEDUP_COLD=$( [[ $ZB_COLD_MS -gt 0 ]] && echo "scale=2; $BREW_MS / $ZB_COLD_MS" | bc -l | sed 's/^\./0./' || echo "0" )
-        SPEEDUP_WARM=$( [[ $ZB_WARM_MS -gt 0 ]] && echo "scale=2; $BREW_MS / $ZB_WARM_MS" | bc -l | sed 's/^\./0./' || echo "0" )
 
         NAMES+=("$pkg")
-        BREW_TIMES+=("$BREW_MS")
+        BREW_COLD_TIMES+=("$BREW_COLD_MS")
+        BREW_WARM_TIMES+=("$BREW_WARM_MS")
         ZB_COLD_TIMES+=("$ZB_COLD_MS")
         ZB_WARM_TIMES+=("$ZB_WARM_MS")
-        SPEEDUPS_COLD+=("$SPEEDUP_COLD")
-        SPEEDUPS_WARM+=("$SPEEDUP_WARM")
+        SPEEDUPS_COLD+=("$(ratio "$BREW_COLD_MS" "$ZB_COLD_MS")")
+        SPEEDUPS_WARM+=("$(ratio "$BREW_WARM_MS" "$ZB_WARM_MS")")
         ((PASSED++)) || true
         log_msg "package done: $pkg"
-
-        zb uninstall "$pkg" &>/dev/null || true
         echo >&2
     done
 
     echo "Cleaning up..." >&2
     log_msg "cleanup start"
-    for pkg in "${PACKAGES[@]}"; do
-        brew uninstall --ignore-dependencies "$pkg" 2>/dev/null || true
-        zb uninstall "$pkg" 2>/dev/null || true
-    done
-    zb uninstall 2>/dev/null || true
+    remove_brew_bench_formulae
+    zb reset -y &>/dev/null || true
 
-    TOTAL_BREW=0
+    TOTAL_BREW_COLD=0
+    TOTAL_BREW_WARM=0
     TOTAL_ZB_COLD=0
     TOTAL_ZB_WARM=0
 
     for i in "${!NAMES[@]}"; do
-        TOTAL_BREW=$((TOTAL_BREW + BREW_TIMES[i]))
+        TOTAL_BREW_COLD=$((TOTAL_BREW_COLD + BREW_COLD_TIMES[i]))
+        TOTAL_BREW_WARM=$((TOTAL_BREW_WARM + BREW_WARM_TIMES[i]))
         TOTAL_ZB_COLD=$((TOTAL_ZB_COLD + ZB_COLD_TIMES[i]))
         TOTAL_ZB_WARM=$((TOTAL_ZB_WARM + ZB_WARM_TIMES[i]))
     done
 
-    if [[ $PASSED -gt 0 ]]; then
-        AVG_SPEEDUP_COLD=$( [[ $TOTAL_ZB_COLD -gt 0 ]] && echo "scale=2; $TOTAL_BREW / $TOTAL_ZB_COLD" | bc -l | sed 's/^\./0./' || echo "0" )
-        AVG_SPEEDUP_WARM=$( [[ $TOTAL_ZB_WARM -gt 0 ]] && echo "scale=2; $TOTAL_BREW / $TOTAL_ZB_WARM" | bc -l | sed 's/^\./0./' || echo "0" )
-    else
-        AVG_SPEEDUP_COLD="0"
-        AVG_SPEEDUP_WARM="0"
-    fi
+    # Overall speedups compare total time across all passed packages.
+    TOTAL_SPEEDUP_COLD=$(ratio "$TOTAL_BREW_COLD" "$TOTAL_ZB_COLD")
+    TOTAL_SPEEDUP_WARM=$(ratio "$TOTAL_BREW_WARM" "$TOTAL_ZB_WARM")
     log_msg "bench done: passed=$PASSED failed=$FAILED"
+
+    HARDWARE="$HW_MODEL, $CPU_NAME, ${MEM_GB} GB RAM"
 
     output_text() {
         echo "=== Benchmark Summary ==="
+        echo "Date:      $BENCH_DATE"
+        echo "zerobrew:  $ZB_VERSION"
+        echo "Homebrew:  $BREW_VERSION"
+        echo "OS:        $OS_NAME ($ARCH)"
+        echo "Hardware:  $HARDWARE"
+        echo "Network:   $BANDWIDTH"
+        echo "Homebrew formulae installed before run: $BREW_BASELINE_COUNT"
+        echo ""
         echo "Tested: ${#PACKAGES[@]} packages"
         echo "Passed: $PASSED"
         echo "Failed: $FAILED"
         echo ""
-        echo "Performance:"
-        echo "  Average speedup (cold): ${AVG_SPEEDUP_COLD}x"
-        echo "  Average speedup (warm): ${AVG_SPEEDUP_WARM}x"
+        echo "Total time:"
+        echo "  Cold: Homebrew $(format_duration "$TOTAL_BREW_COLD"), zerobrew $(format_duration "$TOTAL_ZB_COLD") (${TOTAL_SPEEDUP_COLD}x)"
+        echo "  Warm: Homebrew $(format_duration "$TOTAL_BREW_WARM"), zerobrew $(format_duration "$TOTAL_ZB_WARM") (${TOTAL_SPEEDUP_WARM}x)"
         echo ""
         echo "Results:"
-        echo "Package             Homebrew      ZB Cold      ZB Warm   Speed (cold/warm)"
-        echo "--------------------------------------------------------------------------"
+        printf "%-15s %10s %10s %10s %10s %8s %8s\n" "Package" "HB cold" "ZB cold" "HB warm" "ZB warm" "Cold" "Warm"
+        echo "-------------------------------------------------------------------------------"
         for i in "${!NAMES[@]}"; do
-            printf "%-15s %12s %12s %12s %10sx / %sx\n" "${NAMES[i]}" "$(format_duration "${BREW_TIMES[i]}")" "$(format_duration "${ZB_COLD_TIMES[i]}")" "$(format_duration "${ZB_WARM_TIMES[i]}")" "${SPEEDUPS_COLD[i]}" "${SPEEDUPS_WARM[i]}"
+            printf "%-15s %10s %10s %10s %10s %7sx %7sx\n" "${NAMES[i]}" "$(format_duration "${BREW_COLD_TIMES[i]}")" "$(format_duration "${ZB_COLD_TIMES[i]}")" "$(format_duration "${BREW_WARM_TIMES[i]}")" "$(format_duration "${ZB_WARM_TIMES[i]}")" "${SPEEDUPS_COLD[i]}" "${SPEEDUPS_WARM[i]}"
         done
         echo
         if [[ $FAILED -gt 0 ]]; then
-            echo "Failed Packages:"
+            echo "Failed or skipped packages:"
             for i in "${!FAILED_NAMES[@]}"; do
                 echo "  ${FAILED_NAMES[i]} - ${FAILED_REASONS[i]}"
             done
@@ -563,106 +643,107 @@ bench *args:
     }
 
     output_json() {
-        printf '{"results":['
+        printf '{"environment":{"date":%s,"zerobrew_version":%s,"homebrew_version":%s,"os":%s,"arch":%s,"hardware_model":%s,"cpu":%s,"memory_gb":%s,"bandwidth":%s,"homebrew_preinstalled_formulae":%d},' \
+            "$(json_str "$BENCH_DATE")" "$(json_str "$ZB_VERSION")" "$(json_str "$BREW_VERSION")" "$(json_str "$OS_NAME")" "$(json_str "$ARCH")" \
+            "$(json_str "$HW_MODEL")" "$(json_str "$CPU_NAME")" "$(json_str "$MEM_GB")" "$(json_str "$BANDWIDTH")" "$BREW_BASELINE_COUNT"
+        printf '"results":['
         first=1
         for i in "${!NAMES[@]}"; do
             [[ $first -eq 0 ]] && printf ","
             first=0
-            printf '{"name":"%s","homebrew_ms":%s,"zerobrew_cold_ms":%s,"zerobrew_warm_ms":%s,"speedup_cold":%s,"speedup_warm":%s}' "${NAMES[i]}" "${BREW_TIMES[i]}" "${ZB_COLD_TIMES[i]}" "${ZB_WARM_TIMES[i]}" "${SPEEDUPS_COLD[i]}" "${SPEEDUPS_WARM[i]}"
+            printf '{"name":%s,"homebrew_cold_ms":%s,"homebrew_warm_ms":%s,"zerobrew_cold_ms":%s,"zerobrew_warm_ms":%s,"speedup_cold":%s,"speedup_warm":%s}' "$(json_str "${NAMES[i]}")" "${BREW_COLD_TIMES[i]}" "${BREW_WARM_TIMES[i]}" "${ZB_COLD_TIMES[i]}" "${ZB_WARM_TIMES[i]}" "${SPEEDUPS_COLD[i]}" "${SPEEDUPS_WARM[i]}"
         done
         printf '],"failures":['
         first=1
         for i in "${!FAILED_NAMES[@]}"; do
             [[ $first -eq 0 ]] && printf ","
             first=0
-            printf '{"name":"%s","reason":"%s"}' "${FAILED_NAMES[i]}" "${FAILED_REASONS[i]}"
+            printf '{"name":%s,"reason":%s}' "$(json_str "${FAILED_NAMES[i]}")" "$(json_str "${FAILED_REASONS[i]}")"
         done
-        printf '],"summary":{"tested":%d,"passed":%d,"failed":%d,"avg_speedup_cold":%s,"avg_speedup_warm":%s}}\n' "${#PACKAGES[@]}" "$PASSED" "$FAILED" "$AVG_SPEEDUP_COLD" "$AVG_SPEEDUP_WARM"
+        printf '],"summary":{"tested":%d,"passed":%d,"failed":%d,"homebrew_cold_ms":%d,"homebrew_warm_ms":%d,"zerobrew_cold_ms":%d,"zerobrew_warm_ms":%d,"speedup_cold":%s,"speedup_warm":%s}}\n' \
+            "${#PACKAGES[@]}" "$PASSED" "$FAILED" "$TOTAL_BREW_COLD" "$TOTAL_BREW_WARM" "$TOTAL_ZB_COLD" "$TOTAL_ZB_WARM" "$TOTAL_SPEEDUP_COLD" "$TOTAL_SPEEDUP_WARM"
     }
 
     output_csv() {
-        echo "package,homebrew_ms,zerobrew_cold_ms,zerobrew_warm_ms,speedup_cold,speedup_warm"
+        echo "package,homebrew_cold_ms,homebrew_warm_ms,zerobrew_cold_ms,zerobrew_warm_ms,speedup_cold,speedup_warm"
         for i in "${!NAMES[@]}"; do
-            echo "${NAMES[i]},${BREW_TIMES[i]},${ZB_COLD_TIMES[i]},${ZB_WARM_TIMES[i]},${SPEEDUPS_COLD[i]},${SPEEDUPS_WARM[i]}"
+            echo "${NAMES[i]},${BREW_COLD_TIMES[i]},${BREW_WARM_TIMES[i]},${ZB_COLD_TIMES[i]},${ZB_WARM_TIMES[i]},${SPEEDUPS_COLD[i]},${SPEEDUPS_WARM[i]}"
         done
     }
 
-    output_html() {
-        echo '<!DOCTYPE html>'
-        echo '<html>'
-        echo '<head>'
-        echo '    <title>Zerobrew Benchmark Results</title>'
-        echo '    <style>'
-        echo '        body { font-family: -apple-system, BlinkMacSystemFont, '"'"'Segoe UI'"'"', Roboto, sans-serif; margin: 40px; background: #f5f5f5; }'
-        echo '        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }'
-        echo '        h1 { color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 10px; }'
-        echo '        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px; margin: 20px 0; }'
-        echo '        .stat { background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; }'
-        echo '        .stat-value { font-size: 2em; font-weight: bold; color: #0066cc; }'
-        echo '        .stat-label { color: #666; margin-top: 5px; }'
-        echo '        table { width: 100%; border-collapse: collapse; margin: 20px 0; }'
-        echo '        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }'
-        echo '        th { background: #0066cc; color: white; }'
-        echo '        tr:hover { background: #f5f5f5; }'
-        echo '        .speedup { font-weight: bold; color: #28a745; }'
-        echo '        .failed { color: #dc3545; }'
-        echo '        .timestamp { color: #999; font-size: 0.9em; margin-top: 20px; }'
-        echo '    </style>'
-        echo '</head>'
-        echo '<body>'
-        echo '    <div class="container">'
-        echo '        <h1>Zerobrew Benchmark Results</h1>'
-        echo '        <div class="summary">'
-        echo '            <div class="stat">'
-        echo "                <div class=\"stat-value\">${#PACKAGES[@]}</div>"
-        echo '                <div class="stat-label">Packages Tested</div>'
-        echo '            </div>'
-        echo '            <div class="stat">'
-        echo "                <div class=\"stat-value\">$PASSED</div>"
-        echo '                <div class="stat-label">Passed</div>'
-        echo '            </div>'
-        echo '            <div class="stat">'
-        echo "                <div class=\"stat-value\">${AVG_SPEEDUP_COLD}x</div>"
-        echo '                <div class="stat-label">Avg Cold Speedup</div>'
-        echo '            </div>'
-        echo '            <div class="stat">'
-        echo "                <div class=\"stat-value\">${AVG_SPEEDUP_WARM}x</div>"
-        echo '                <div class="stat-label">Avg Warm Speedup</div>'
-        echo '            </div>'
-        echo '        </div>'
-        echo '        <h2>Results</h2>'
-        echo '        <table>'
-        echo '            <thead>'
-        echo '                <tr>'
-        echo '                    <th>Package</th>'
-        echo '                    <th>Homebrew</th>'
-        echo '                    <th>ZB Cold</th>'
-        echo '                    <th>ZB Warm</th>'
-        echo '                    <th>Speedup (cold/warm)</th>'
-        echo '                </tr>'
-        echo '            </thead>'
-        echo '            <tbody>'
+    # README-ready table plus the environment it was measured in.
+    output_markdown() {
+        echo "| Package | Homebrew (cold) | ZB (cold) | Cold speedup | Homebrew (warm) | ZB (warm) | Warm speedup |"
+        echo "|---------|-----------------|-----------|--------------|-----------------|-----------|--------------|"
+        echo "| **Overall ($PASSED packages)** | $(format_duration "$TOTAL_BREW_COLD") | $(format_duration "$TOTAL_ZB_COLD") | **${TOTAL_SPEEDUP_COLD}x** | $(format_duration "$TOTAL_BREW_WARM") | $(format_duration "$TOTAL_ZB_WARM") | **${TOTAL_SPEEDUP_WARM}x** |"
         for i in "${!NAMES[@]}"; do
-            echo "                <tr>"
-            echo "                    <td>${NAMES[$i]}</td>"
-            echo "                    <td>$(format_duration "${BREW_TIMES[$i]}")</td>"
-            echo "                    <td>$(format_duration "${ZB_COLD_TIMES[$i]}")</td>"
-            echo "                    <td>$(format_duration "${ZB_WARM_TIMES[$i]}")</td>"
-            echo "                    <td class=\"speedup\">${SPEEDUPS_COLD[$i]}x / ${SPEEDUPS_WARM[$i]}x</td>"
-            echo "                </tr>"
+            echo "| ${NAMES[i]} | $(format_duration "${BREW_COLD_TIMES[i]}") | $(format_duration "${ZB_COLD_TIMES[i]}") | ${SPEEDUPS_COLD[i]}x | $(format_duration "${BREW_WARM_TIMES[i]}") | $(format_duration "${ZB_WARM_TIMES[i]}") | ${SPEEDUPS_WARM[i]}x |"
+        done
+        echo ""
+        echo "Measured $BENCH_DATE with $ZB_VERSION and $BREW_VERSION on $OS_NAME ($ARCH), $HARDWARE, $BANDWIDTH download bandwidth. Homebrew had $BREW_BASELINE_COUNT formulae installed before the run."
+    }
+
+    output_html() {
+        cat <<EOF
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Zerobrew Benchmark Results</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; background: #f5f5f5; }
+            .container { max-width: 1100px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            h1 { color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 10px; }
+            .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px; margin: 20px 0; }
+            .stat { background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; }
+            .stat-value { font-size: 2em; font-weight: bold; color: #0066cc; }
+            .stat-label { color: #666; margin-top: 5px; }
+            table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+            th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+            th { background: #0066cc; color: white; }
+            tr:hover { background: #f5f5f5; }
+            .speedup { font-weight: bold; color: #28a745; }
+            .failed { color: #dc3545; }
+            .env { color: #555; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Zerobrew Benchmark Results</h1>
+            <ul class="env">
+                <li>Date: $BENCH_DATE</li>
+                <li>zerobrew: $ZB_VERSION</li>
+                <li>Homebrew: $BREW_VERSION</li>
+                <li>OS: $OS_NAME ($ARCH)</li>
+                <li>Hardware: $HARDWARE</li>
+                <li>Network: $BANDWIDTH</li>
+                <li>Homebrew formulae installed before run: $BREW_BASELINE_COUNT</li>
+            </ul>
+            <div class="summary">
+                <div class="stat"><div class="stat-value">${#PACKAGES[@]}</div><div class="stat-label">Packages Tested</div></div>
+                <div class="stat"><div class="stat-value">$PASSED</div><div class="stat-label">Passed</div></div>
+                <div class="stat"><div class="stat-value">${TOTAL_SPEEDUP_COLD}x</div><div class="stat-label">Cold Speedup (total)</div></div>
+                <div class="stat"><div class="stat-value">${TOTAL_SPEEDUP_WARM}x</div><div class="stat-label">Warm Speedup (total)</div></div>
+            </div>
+            <h2>Results</h2>
+            <table>
+                <thead>
+                    <tr><th>Package</th><th>Homebrew Cold</th><th>ZB Cold</th><th>Homebrew Warm</th><th>ZB Warm</th><th>Speedup (cold/warm)</th></tr>
+                </thead>
+                <tbody>
+    EOF
+        for i in "${!NAMES[@]}"; do
+            echo "                <tr><td>${NAMES[$i]}</td><td>$(format_duration "${BREW_COLD_TIMES[$i]}")</td><td>$(format_duration "${ZB_COLD_TIMES[$i]}")</td><td>$(format_duration "${BREW_WARM_TIMES[$i]}")</td><td>$(format_duration "${ZB_WARM_TIMES[$i]}")</td><td class=\"speedup\">${SPEEDUPS_COLD[$i]}x / ${SPEEDUPS_WARM[$i]}x</td></tr>"
         done
         echo '            </tbody>'
         echo '        </table>'
         if [[ $FAILED -gt 0 ]]; then
-            echo '        <h2>Failed Packages</h2>'
+            echo '        <h2>Failed or Skipped Packages</h2>'
             echo '        <ul>'
             for i in "${!FAILED_NAMES[@]}"; do
                 echo "            <li class=\"failed\"><strong>${FAILED_NAMES[$i]}</strong>: ${FAILED_REASONS[$i]}</li>"
             done
             echo '        </ul>'
         fi
-        TIMESTAMP=$(date)
-        echo "        <div class=\"timestamp\">Generated: $TIMESTAMP</div>"
         echo '    </div>'
         echo '</body>'
         echo '</html>'
@@ -674,6 +755,7 @@ bench *args:
             json) output_json ;;
             csv)  output_csv ;;
             html) output_html ;;
+            markdown) output_markdown ;;
         esac
     }
 
@@ -685,17 +767,10 @@ bench *args:
 
         echo -e "${CYAN}Writing all formats to: $FULL_OUTPUT_DIR${NORMAL}" >&2
 
-        FORMAT="text" output_result > "$FULL_OUTPUT_DIR/${BASE_NAME}.txt"
-        echo -e "${GREEN}  ✓ ${BASE_NAME}.txt${NORMAL}" >&2
-
-        FORMAT="json" output_result > "$FULL_OUTPUT_DIR/${BASE_NAME}.json"
-        echo -e "${GREEN}  ✓ ${BASE_NAME}.json${NORMAL}" >&2
-
-        FORMAT="csv" output_result > "$FULL_OUTPUT_DIR/${BASE_NAME}.csv"
-        echo -e "${GREEN}  ✓ ${BASE_NAME}.csv${NORMAL}" >&2
-
-        FORMAT="html" output_result > "$FULL_OUTPUT_DIR/${BASE_NAME}.html"
-        echo -e "${GREEN}  ✓ ${BASE_NAME}.html${NORMAL}" >&2
+        for pair in text:txt json:json csv:csv html:html markdown:md; do
+            FORMAT="${pair%%:*}" output_result > "$FULL_OUTPUT_DIR/${BASE_NAME}.${pair##*:}"
+            echo -e "${GREEN}  ✓ ${BASE_NAME}.${pair##*:}${NORMAL}" >&2
+        done
 
         echo -e "${GREEN}All results written to: $FULL_OUTPUT_DIR${NORMAL}" >&2
     elif [[ -n "$OUTPUT" ]]; then

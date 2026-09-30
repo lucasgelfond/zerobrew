@@ -83,6 +83,19 @@ zbx jq --version                # 在不链接的情况下运行
 
 </div>
 
+以上数据测于 2026 年 1 月（v0.1.1 之前），正在重新测量（[#394](https://github.com/lucasgelfond/zerobrew/issues/394)）。当时的基准测试没有记录版本、硬件或网络信息，两个工具的起始状态也不一致：Homebrew 保留了下载缓存以及之前软件包遗留的依赖，而 zerobrew 的冷启动测试是从零开始的。
+
+### 测试方法 (Methodology)
+
+`just bench` 会将每个软件包安装四次。每次安装前，该软件包及其所有依赖都会被卸载。
+
+- **冷启动**：下载缓存为空。
+- **热启动**：保留冷启动时的下载缓存。zerobrew 还会保留已解压的 store，这是其热启动加速的主要来源。
+
+Homebrew 在运行时设置了 `HOMEBREW_NO_AUTO_UPDATE` 和 `HOMEBREW_NO_INSTALL_CLEANUP`，并在计时开始前加载公式索引。总体加速比按所有软件包的总耗时计算。每次运行都会记录 zerobrew 和 Homebrew 的版本、操作系统、硬件以及实测下载带宽。
+
+如需复现，请在 Homebrew 中未安装任何软件包的机器上运行 `just bench --full results/`。该命令会重置 zerobrew，并将可直接用于 README 的表格写入 `results/benchmark.md`。
+
 ## 与 Homebrew 的关系 (Relationship with Homebrew)
 
 zerobrew 更像是一个针对 Homebrew 生态系统进行性能优化的客户端。我们依赖于：

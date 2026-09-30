@@ -82,6 +82,19 @@ zbx jq --version                # run without linking
 
 </div>
 
+These numbers are from January 2026, before v0.1.1, and are being re-measured ([#394](https://github.com/lucasgelfond/zerobrew/issues/394)). The benchmark used then didn't record versions, hardware or network, and didn't give both tools the same starting state: Homebrew kept its download cache and any dependencies left over from earlier packages, while zerobrew's cold runs started from scratch.
+
+### Methodology
+
+`just bench` installs each package four times. Every run starts with the package and all of its dependencies uninstalled.
+
+- **Cold**: empty download cache.
+- **Warm**: downloads from the cold run are still cached. zerobrew also keeps its extracted store, which is where most of its warm speedup comes from.
+
+Homebrew runs with `HOMEBREW_NO_AUTO_UPDATE` and `HOMEBREW_NO_INSTALL_CLEANUP`, and its formula index is loaded before timing starts. Overall speedups compare total time across all packages. Each run records the zerobrew and Homebrew versions, OS, hardware and measured download bandwidth.
+
+To reproduce, run `just bench --full results/` on a machine with nothing installed in Homebrew. It resets zerobrew and writes a README-ready table to `results/benchmark.md`.
+
 ## Relationship with Homebrew
 
 zerobrew is more of a performance-optimized client for the Homebrew ecosystem. We rely on:
