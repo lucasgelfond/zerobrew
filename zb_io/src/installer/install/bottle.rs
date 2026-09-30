@@ -62,6 +62,10 @@ impl Installer {
             warn!(formula = %install_name, error = %e, "failed to create opt link");
         }
 
+        if let Err(e) = crate::cellar::install_etc_var(&keg_path, &self.prefix) {
+            warn!(formula = %install_name, error = %e, "failed to install etc/var files");
+        }
+
         if link && !item.formula.is_keg_only() {
             report(InstallProgress::LinkStarted {
                 name: formula_name.clone(),
