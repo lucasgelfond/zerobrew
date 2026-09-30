@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-30
+
+### Fixed
+- Stop linking `libexec` into the prefix, matching Homebrew. Since 0.3.4, installing a second Python version (such as one pulled in by `node`) failed with link conflicts ([#413](https://github.com/lucasgelfond/zerobrew/issues/413))
+- Link `sbin` and add it to `PATH`, so tools like `php-fpm` are available. Existing setups pick up the `PATH` change the next time the installer or `zb init` runs ([#414](https://github.com/lucasgelfond/zerobrew/issues/414))
+- Record installs made through an alias, like `zb install python` or `node`'s dependency on `python` on Linux, under the formula's own name. `zb doctor --repair` now renames existing alias records instead of deleting them and uninstalling the package ([#415](https://github.com/lucasgelfond/zerobrew/issues/415))
+- `zb doctor --repair` keeps repairing until nothing is left, instead of taking several runs ([#416](https://github.com/lucasgelfond/zerobrew/issues/416))
+
 ## [0.3.4] - 2026-09-30
 
 ### Changed
@@ -150,7 +158,8 @@ To get an idea of the initial features zerobrew supports, take a look at the [RE
 
 See the [full commit history](https://github.com/lucasgelfond/zerobrew/commits/v0.1.1) for more details.
 
-[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/lucasgelfond/zerobrew/compare/v0.3.1...v0.3.2
