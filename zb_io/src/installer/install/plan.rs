@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tracing::warn;
-use zb_core::{BuildPlan, Error, Formula, InstallMethod, SelectedBottle, select_bottle};
+use zb_core::{
+    BuildPlan, Error, Formula, InstallMethod, SelectedBottle, formula_token, select_bottle,
+};
 
 use super::{InstallPlan, Installer, PlanFailure, PlannedInstall};
 
@@ -19,8 +21,13 @@ impl Installer {
         let ordered = zb_core::resolve_closure(names, &formulas)?;
 
         let mut items = Vec::with_capacity(ordered.len());
-        for install_name in ordered {
-            let formula = formulas.get(&install_name).cloned().unwrap();
+        let mut planned = HashSet::new();
+        for requested in ordered {
+            let formula = formulas.get(&requested).cloned().unwrap();
+            let install_name = install_name_for(&requested, &formula);
+            if !planned.insert(install_name.clone()) {
+                continue;
+            }
             items.push(self.plan_item(install_name, formula, build_from_source)?);
         }
 
@@ -70,8 +77,13 @@ impl Installer {
         if !valid_roots.is_empty() {
             match zb_core::resolve_closure(&valid_roots, &formulas) {
                 Ok(ordered) => {
-                    for install_name in ordered {
-                        let formula = formulas.get(&install_name).cloned().unwrap();
+                    let mut planned = HashSet::new();
+                    for requested in ordered {
+                        let formula = formulas.get(&requested).cloned().unwrap();
+                        let install_name = install_name_for(&requested, &formula);
+                        if !planned.insert(install_name.clone()) {
+                            continue;
+                        }
                         match self.plan_item(install_name.clone(), formula, build_from_source) {
                             Ok(item) => items.push(item),
                             Err(error) => failures.push(PlanFailure {
@@ -280,6 +292,18 @@ impl Installer {
         }
 
         Ok(formulas)
+    }
+}
+
+/// The name to record an install under. A formula reached through an alias
+/// or old name, like `zb install python` or node's `uses_from_macos "python"`,
+/// is recorded under its own name (`python@3.14`) so the database matches its
+/// keg in the Cellar. Tap references keep their full name.
+fn install_name_for(requested: &str, formula: &Formula) -> String {
+    if formula_token(requested) == formula.name {
+        requested.to_string()
+    } else {
+        formula.name.clone()
     }
 }
 
@@ -492,6 +516,95 @@ end
             assert_eq!(bp.formula_name, "nobottle");
             assert_eq!(bp.build_dependencies, vec!["pkgconf"]);
         }
+    }
+
+    /// An installer backed by a mock API serving each `(path name, formula
+    /// JSON)`, like an alias whose JSON is the formula it points to.
+    async fn installer_serving(
+        mock_server: &MockServer,
+        tmp: &TempDir,
+        formulas: &[(&str, String)],
+    ) -> Installer {
+        for (name, json) in formulas {
+            Mock::given(method("GET"))
+                .and(path(format!("/formula/{name}.json")))
+                .respond_with(ResponseTemplate::new(200).set_body_string(json))
+                .mount(mock_server)
+                .await;
+        }
+
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("homebrew");
+        fs::create_dir_all(root.join("db")).unwrap();
+        Installer::new(
+            ApiClient::with_base_url(format!("{}/formula", mock_server.uri())).unwrap(),
+            BlobCache::new(&root.join("cache")).unwrap(),
+            Store::new(&root).unwrap(),
+            Cellar::new(&root).unwrap(),
+            Linker::new(&prefix).unwrap(),
+            Database::open(&root.join("db/zb.sqlite3")).unwrap(),
+            prefix,
+            root.join("locks"),
+        )
+    }
+
+    fn bottled_formula(name: &str, dependencies: &[&str]) -> String {
+        format!(
+            r#"{{
+                "name": "{name}",
+                "versions": {{ "stable": "1.0.0" }},
+                "dependencies": {deps:?},
+                "bottle": {{ "stable": {{ "files": {{
+                    "{tag}": {{ "url": "https://example.com/{name}.tar.gz", "sha256": "aabbccdd" }}
+                }} }} }}
+            }}"#,
+            deps = dependencies,
+            tag = get_test_bottle_tag(),
+        )
+    }
+
+    #[tokio::test]
+    async fn aliases_are_planned_under_the_formula_name() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let installer = installer_serving(
+            &mock_server,
+            &tmp,
+            &[
+                ("node", bottled_formula("node", &["python"])),
+                // The API resolves the `python` alias to python@3.14.
+                ("python", bottled_formula("python@3.14", &[])),
+            ],
+        )
+        .await;
+
+        let plan = installer.plan(&["node".to_string()]).await.unwrap();
+
+        let names: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
+        assert_eq!(names, ["python@3.14", "node"]);
+    }
+
+    #[tokio::test]
+    async fn alias_and_formula_name_are_planned_once() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let installer = installer_serving(
+            &mock_server,
+            &tmp,
+            &[
+                ("python", bottled_formula("python@3.14", &[])),
+                ("python@3.14", bottled_formula("python@3.14", &[])),
+            ],
+        )
+        .await;
+
+        let plan = installer
+            .plan(&["python".to_string(), "python@3.14".to_string()])
+            .await
+            .unwrap();
+
+        let names: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
+        assert_eq!(names, ["python@3.14"]);
     }
 
     #[tokio::test]
