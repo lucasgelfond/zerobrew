@@ -4,78 +4,14 @@ use std::path::{Component, Path, PathBuf};
 
 use zb_core::{ConflictedLink, Error};
 
-const LINK_DIRS: &[&str] = &["bin", "lib", "libexec", "include", "share", "etc"];
-const PYVENV_CFG: &str = "pyvenv.cfg";
-const LIBEXEC_SKIP_FILES: &[&str] = &[".gitignore", PYVENV_CFG];
+/// Keg directories linked into the prefix. Like Homebrew, `libexec` is not
+/// linked: it holds files private to a keg, like the Python formulae's
+/// unversioned `python` and `pip`, which would collide across versions.
+const LINK_DIRS: &[&str] = &["bin", "lib", "include", "share", "etc"];
 
-fn should_skip_link_entry(src_dir: &Path, entry_name: &std::ffi::OsStr) -> bool {
-    // Homebrew-style Python virtualenv formulae bundle an isolated venv under
-    // libexec/. The main executable is exposed via bin/<name> symlinks that
-    // resolve into libexec/ within the keg itself, so nothing inside libexec/
-    // is meant for the shared prefix. Linking libexec/ contents into the
-    // shared prefix/libexec/ causes cross-formula conflicts:
-    //   - libexec/{pyvenv.cfg, .gitignore} (metadata)
-    //   - libexec/lib*/python3.X/site-packages/ (private dep trees)
-    //   - libexec/bin/<shared-dep> (e.g. sqlformat across mycli + pgcli)
-    let is_libexec_dir = src_dir.file_name().and_then(|n| n.to_str()) == Some("libexec");
-
-    if is_libexec_dir {
-        // Detect a virtualenv libexec by the presence of pyvenv.cfg alongside;
-        // when present, skip every entry — including libexec/bin/ — so private
-        // venv contents never leak into the shared prefix.
-        if src_dir.join(PYVENV_CFG).exists() {
-            return true;
-        }
-        if entry_name
-            .to_str()
-            .is_some_and(|name| LIBEXEC_SKIP_FILES.contains(&name))
-        {
-            return true;
-        }
-    }
-
-    entry_name.to_str() == Some("site-packages") && is_libexec_python_lib_dir(src_dir)
-}
-
-fn is_libexec_python_lib_dir(path: &Path) -> bool {
-    let mut in_libexec = false;
-    let mut previous_was_python_lib = false;
-
-    for component in path.components() {
-        let Component::Normal(name) = component else {
-            previous_was_python_lib = false;
-            continue;
-        };
-        let Some(name) = name.to_str() else {
-            previous_was_python_lib = false;
-            continue;
-        };
-
-        if name == "libexec" {
-            in_libexec = true;
-            previous_was_python_lib = false;
-            continue;
-        }
-
-        if !in_libexec {
-            continue;
-        }
-
-        if previous_was_python_lib && is_python_version_dir(name) {
-            return true;
-        }
-
-        previous_was_python_lib = matches!(name, "lib" | "lib64");
-    }
-
-    false
-}
-
-fn is_python_version_dir(name: &str) -> bool {
-    name.strip_prefix("python")
-        .and_then(|rest| rest.chars().next())
-        .is_some_and(|c| c.is_ascii_digit())
-}
+/// Directories older versions of zerobrew linked. Still unlinked, so those
+/// links are cleaned up on uninstall and upgrade.
+const LEGACY_LINK_DIRS: &[&str] = &["libexec"];
 
 pub struct Linker {
     prefix: PathBuf,
@@ -205,9 +141,6 @@ impl Linker {
         };
         for entry in entries.flatten() {
             let file_name = entry.file_name();
-            if should_skip_link_entry(src, &file_name) {
-                continue;
-            }
 
             let src_path = entry.path();
             let dst_path = dst.join(&file_name);
@@ -275,9 +208,6 @@ impl Linker {
         };
         for entry in new_entries.flatten() {
             let file_name = entry.file_name();
-            if should_skip_link_entry(src, &file_name) {
-                continue;
-            }
 
             let src_path = entry.path();
             let matching_old = old_target.join(&file_name);
@@ -334,9 +264,6 @@ impl Linker {
         for entry in fs::read_dir(src).map_err(Error::store("failed to read directory"))? {
             let entry = entry.map_err(Error::store("failed to read directory entry"))?;
             let file_name = entry.file_name();
-            if should_skip_link_entry(src, &file_name) {
-                continue;
-            }
 
             let src_path = entry.path();
             let dst_path = dst.join(&file_name);
@@ -422,7 +349,7 @@ impl Linker {
     pub fn unlink_keg(&self, keg_path: &Path) -> Result<Vec<PathBuf>, Error> {
         self.unlink_opt(keg_path)?;
         let mut unlinked = Vec::new();
-        for dir_name in LINK_DIRS {
+        for dir_name in LINK_DIRS.iter().chain(LEGACY_LINK_DIRS) {
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
@@ -434,7 +361,7 @@ impl Linker {
 
     pub fn collect_linked_files(&self, keg_path: &Path) -> Result<Vec<LinkedFile>, Error> {
         let mut linked = Vec::new();
-        for dir_name in LINK_DIRS {
+        for dir_name in LINK_DIRS.iter().chain(LEGACY_LINK_DIRS) {
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
@@ -487,9 +414,6 @@ impl Linker {
         for entry in fs::read_dir(src).map_err(Error::store("failed to read directory"))? {
             let entry = entry.map_err(Error::store("failed to read directory entry"))?;
             let file_name = entry.file_name();
-            if should_skip_link_entry(src, &file_name) {
-                continue;
-            }
 
             let src_path = entry.path();
             let dst_path = dst.join(file_name);
@@ -632,220 +556,41 @@ mod tests {
     }
 
     #[test]
-    fn links_libexec_directory() {
-        let tmp = TempDir::new().unwrap();
-        let keg = tmp.path().join("cellar/git/2.52.0");
-        let libexec_dir = keg.join("libexec/git-core");
-        fs::create_dir_all(&libexec_dir).unwrap();
-
-        let helper = libexec_dir.join("git-remote-https");
-        fs::write(&helper, b"#!/bin/sh\necho helper").unwrap();
-        fs::set_permissions(&helper, PermissionsExt::from_mode(0o755)).unwrap();
-
-        let linker = Linker::new(tmp.path()).unwrap();
-        linker.link_keg(&keg).unwrap();
-
-        let linked_helper = tmp.path().join("libexec/git-core/git-remote-https");
-        assert!(linked_helper.exists(), "git-remote-https should be linked");
-        assert!(linked_helper.is_symlink(), "should be a symlink");
-    }
-
-    #[test]
-    fn skips_libexec_virtualenv_metadata_to_avoid_conflicts() {
+    fn does_not_link_libexec() {
+        // python@3.13 and python@3.14 both ship libexec/bin/python; linking
+        // libexec made the second one conflict with the first.
         let tmp = TempDir::new().unwrap();
         let prefix = tmp.path();
         let linker = Linker::new(prefix).unwrap();
 
-        let keg1 = prefix.join("cellar/ranger/1.0.0");
-        fs::create_dir_all(keg1.join("libexec/bin")).unwrap();
-        fs::create_dir_all(keg1.join("bin")).unwrap();
-        fs::write(keg1.join("libexec/.gitignore"), b"# ranger").unwrap();
-        fs::write(keg1.join("libexec/pyvenv.cfg"), b"home=/tmp/ranger").unwrap();
-        fs::write(
-            keg1.join("libexec/bin/sqlformat"),
-            b"#!/bin/sh\necho sqlformat",
-        )
-        .unwrap();
-        fs::set_permissions(
-            keg1.join("libexec/bin/sqlformat"),
-            PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-        fs::write(keg1.join("bin/ranger"), b"#!/bin/sh\necho ranger").unwrap();
-        fs::set_permissions(keg1.join("bin/ranger"), PermissionsExt::from_mode(0o755)).unwrap();
-
-        let keg2 = prefix.join("cellar/ansible-lint/1.0.0");
-        fs::create_dir_all(keg2.join("libexec/bin")).unwrap();
-        fs::create_dir_all(keg2.join("bin")).unwrap();
-        fs::write(keg2.join("libexec/.gitignore"), b"# ansible-lint").unwrap();
-        fs::write(keg2.join("libexec/pyvenv.cfg"), b"home=/tmp/ansible-lint").unwrap();
-        fs::write(
-            keg2.join("libexec/bin/sqlformat"),
-            b"#!/bin/sh\necho sqlformat",
-        )
-        .unwrap();
-        fs::set_permissions(
-            keg2.join("libexec/bin/sqlformat"),
-            PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-        fs::write(
-            keg2.join("bin/ansible-lint"),
-            b"#!/bin/sh\necho ansible-lint",
-        )
-        .unwrap();
-        fs::set_permissions(
-            keg2.join("bin/ansible-lint"),
-            PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-
-        linker.link_keg(&keg1).unwrap();
-        linker.link_keg(&keg2).unwrap();
-
-        // Nothing inside a virtualenv libexec/ should be linked into the
-        // shared prefix — neither metadata files nor libexec/bin/ entries.
-        assert!(!prefix.join("libexec/.gitignore").exists());
-        assert!(!prefix.join("libexec/pyvenv.cfg").exists());
-        assert!(
-            !prefix.join("libexec/bin/sqlformat").exists(),
-            "libexec/bin/ entries from a venv keg must not leak into shared prefix"
-        );
-
-        // Useful entrypoints still link correctly.
-        assert!(prefix.join("bin/ranger").exists());
-        assert!(prefix.join("bin/ansible-lint").exists());
-    }
-
-    #[test]
-    fn skips_libexec_python_site_packages_to_avoid_virtualenv_conflicts() {
-        let tmp = TempDir::new().unwrap();
-        let prefix = tmp.path();
-        let linker = Linker::new(prefix).unwrap();
-
-        let keg1 = prefix.join("cellar/visidata/1.0.0");
-        fs::create_dir_all(keg1.join("bin")).unwrap();
-        fs::write(keg1.join("bin/visidata"), b"#!/bin/sh\necho visidata").unwrap();
-        fs::set_permissions(keg1.join("bin/visidata"), PermissionsExt::from_mode(0o755)).unwrap();
-
-        for lib_dir in ["lib", "lib64"] {
-            let site_packages = keg1
-                .join("libexec")
-                .join(lib_dir)
-                .join("python3.14/site-packages");
-            fs::create_dir_all(site_packages.join("six-1.17.0.dist-info/licenses")).unwrap();
-            fs::write(site_packages.join("six.py"), b"visidata six").unwrap();
-            fs::write(
-                site_packages.join("six-1.17.0.dist-info/licenses/LICENSE"),
-                b"license",
-            )
-            .unwrap();
-        }
-
-        let public_site_packages = keg1.join("lib/python3.14/site-packages");
-        fs::create_dir_all(&public_site_packages).unwrap();
-        fs::write(public_site_packages.join("public.py"), b"public").unwrap();
-
-        let keg2 = prefix.join("cellar/thefuck/1.0.0");
-        fs::create_dir_all(keg2.join("bin")).unwrap();
-        fs::write(keg2.join("bin/thefuck"), b"#!/bin/sh\necho thefuck").unwrap();
-        fs::set_permissions(keg2.join("bin/thefuck"), PermissionsExt::from_mode(0o755)).unwrap();
-
-        for lib_dir in ["lib", "lib64"] {
-            let site_packages = keg2
-                .join("libexec")
-                .join(lib_dir)
-                .join("python3.14/site-packages");
-            fs::create_dir_all(site_packages.join("six-1.17.0.dist-info/licenses")).unwrap();
-            fs::write(site_packages.join("six.py"), b"thefuck six").unwrap();
-            fs::write(
-                site_packages.join("six-1.17.0.dist-info/licenses/LICENSE"),
-                b"license",
-            )
-            .unwrap();
-        }
-
-        linker.link_keg(&keg1).unwrap();
-
-        assert!(prefix.join("bin/visidata").exists());
-        assert!(
-            prefix
-                .join("lib/python3.14/site-packages/public.py")
-                .exists()
-        );
-        assert!(
-            !prefix
-                .join("libexec/lib/python3.14/site-packages/six.py")
-                .exists()
-        );
-        assert!(
-            !prefix
-                .join("libexec/lib64/python3.14/site-packages/six.py")
-                .exists()
-        );
-
-        assert!(linker.check_conflicts(&keg2).is_ok());
-        linker.link_keg(&keg2).unwrap();
-
-        assert!(prefix.join("bin/thefuck").exists());
-        assert!(
-            !prefix
-                .join("libexec/lib/python3.14/site-packages/six.py")
-                .exists()
-        );
-        assert!(
-            !prefix
-                .join("libexec/lib64/python3.14/site-packages/six.py")
-                .exists()
-        );
-    }
-
-    #[test]
-    fn two_python_virtualenv_kegs_with_shared_dep_names_install_without_conflict() {
-        // Regression test for #377 (https://github.com/lucasgelfond/zerobrew/issues/377):
-        // installing two Python CLI apps (mycli, pgcli) failed because shared
-        // transitive deps (sqlformat, pygmentize) live in each keg's libexec/bin/
-        // and previously got merged into the shared prefix/libexec/bin/, colliding
-        // on the second install.
-        let tmp = TempDir::new().unwrap();
-        let prefix = tmp.path();
-        let linker = Linker::new(prefix).unwrap();
-
-        for name in ["mycli", "pgcli"] {
-            let keg = prefix.join(format!("cellar/{name}/1.0.0"));
-            fs::create_dir_all(keg.join("bin")).unwrap();
+        for keg in ["Cellar/python@3.13/3.13.15", "Cellar/python@3.14/3.14.7"] {
+            let keg = prefix.join(keg);
             fs::create_dir_all(keg.join("libexec/bin")).unwrap();
-            fs::write(keg.join("libexec/pyvenv.cfg"), b"home=/tmp").unwrap();
-
-            // Main entry point: bin/<name> -> ../libexec/bin/<name>, matching
-            // Homebrew's virtualenv keg layout.
-            std::os::unix::fs::symlink(
-                format!("../libexec/bin/{name}"),
-                keg.join(format!("bin/{name}")),
-            )
-            .unwrap();
-
-            for exe in [name, "sqlformat", "pygmentize"] {
-                let p = keg.join("libexec/bin").join(exe);
-                fs::write(&p, b"#!/bin/sh\necho dep").unwrap();
-                fs::set_permissions(&p, PermissionsExt::from_mode(0o755)).unwrap();
-            }
+            fs::write(keg.join("libexec/bin/python"), b"python").unwrap();
+            linker.link_keg(&keg).unwrap();
         }
 
-        let mycli = prefix.join("cellar/mycli/1.0.0");
-        let pgcli = prefix.join("cellar/pgcli/1.0.0");
+        assert!(!prefix.join("libexec").exists());
+    }
 
-        linker.link_keg(&mycli).unwrap();
-        assert!(
-            linker.check_conflicts(&pgcli).is_ok(),
-            "pgcli must not conflict with mycli on shared libexec/bin/ deps"
-        );
-        linker.link_keg(&pgcli).unwrap();
+    #[test]
+    fn unlink_removes_links_into_legacy_libexec() {
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+        let keg = prefix.join("Cellar/git/2.52.0");
+        fs::create_dir_all(keg.join("libexec/git-core")).unwrap();
+        fs::write(keg.join("libexec/git-core/git-remote-https"), b"helper").unwrap();
 
-        assert!(prefix.join("bin/mycli").exists());
-        assert!(prefix.join("bin/pgcli").exists());
-        assert!(!prefix.join("libexec/bin/sqlformat").exists());
-        assert!(!prefix.join("libexec/bin/pygmentize").exists());
+        // A link left behind by a version of zerobrew that linked libexec.
+        let legacy_link = prefix.join("libexec/git-core/git-remote-https");
+        fs::create_dir_all(legacy_link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(keg.join("libexec/git-core/git-remote-https"), &legacy_link)
+            .unwrap();
+
+        linker.unlink_keg(&keg).unwrap();
+
+        assert!(legacy_link.symlink_metadata().is_err());
     }
 
     #[test]
@@ -936,39 +681,39 @@ mod tests {
     fn symlink_to_directory_in_keg_expands_without_conflict() {
         // Reproduces the gnu-sed / gnu-tar / findutils conflict from issue #69:
         // https://github.com/lucasgelfond/zerobrew/issues/69
-        // each keg has `libexec/gnubin/man -> ../gnuman` (symlink to directory).
+        // each keg has `share/gnubin/man -> ../gnuman` (symlink to directory).
         // The linker should expand these into individual file symlinks so that
         // man pages from different kegs coexist.
         let tmp = TempDir::new().unwrap();
         let prefix = tmp.path();
         let linker = Linker::new(prefix).unwrap();
 
-        // keg1: libexec/gnubin/man -> ../gnuman, with gnuman/man1/sed.1
+        // keg1: share/gnubin/man -> ../gnuman, with gnuman/man1/sed.1
         let keg1 = prefix.join("Cellar/gnu-sed/4.9");
-        fs::create_dir_all(keg1.join("libexec/gnuman/man1")).unwrap();
-        fs::write(keg1.join("libexec/gnuman/man1/sed.1"), b"sed man").unwrap();
-        fs::create_dir_all(keg1.join("libexec/gnubin")).unwrap();
+        fs::create_dir_all(keg1.join("share/gnuman/man1")).unwrap();
+        fs::write(keg1.join("share/gnuman/man1/sed.1"), b"sed man").unwrap();
+        fs::create_dir_all(keg1.join("share/gnubin")).unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink("../gnuman", keg1.join("libexec/gnubin/man")).unwrap();
+        std::os::unix::fs::symlink("../gnuman", keg1.join("share/gnubin/man")).unwrap();
 
-        // keg2: libexec/gnubin/man -> ../gnuman, with gnuman/man1/tar.1
+        // keg2: share/gnubin/man -> ../gnuman, with gnuman/man1/tar.1
         let keg2 = prefix.join("Cellar/gnu-tar/1.35");
-        fs::create_dir_all(keg2.join("libexec/gnuman/man1")).unwrap();
-        fs::write(keg2.join("libexec/gnuman/man1/tar.1"), b"tar man").unwrap();
-        fs::create_dir_all(keg2.join("libexec/gnubin")).unwrap();
+        fs::create_dir_all(keg2.join("share/gnuman/man1")).unwrap();
+        fs::write(keg2.join("share/gnuman/man1/tar.1"), b"tar man").unwrap();
+        fs::create_dir_all(keg2.join("share/gnubin")).unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink("../gnuman", keg2.join("libexec/gnubin/man")).unwrap();
+        std::os::unix::fs::symlink("../gnuman", keg2.join("share/gnubin/man")).unwrap();
 
         // Both should link without conflicts
         linker.link_keg(&keg1).unwrap();
         linker.link_keg(&keg2).unwrap();
 
         // Both man pages should be accessible
-        assert!(prefix.join("libexec/gnubin/man/man1/sed.1").exists());
-        assert!(prefix.join("libexec/gnubin/man/man1/tar.1").exists());
+        assert!(prefix.join("share/gnubin/man/man1/sed.1").exists());
+        assert!(prefix.join("share/gnubin/man/man1/tar.1").exists());
         // gnuman dirs should also be expanded and merged
-        assert!(prefix.join("libexec/gnuman/man1/sed.1").exists());
-        assert!(prefix.join("libexec/gnuman/man1/tar.1").exists());
+        assert!(prefix.join("share/gnuman/man1/sed.1").exists());
+        assert!(prefix.join("share/gnuman/man1/tar.1").exists());
     }
 
     #[test]
