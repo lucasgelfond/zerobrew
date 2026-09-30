@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use rayon::prelude::*;
 use zb_core::{Error, formula_token};
 
+use crate::cellar::linkage;
 use crate::storage::db::StoreRef;
 
 use super::Installer;
@@ -16,6 +18,19 @@ pub struct DiagnosticReport {
     pub stale_store_refs: Vec<StaleStoreRef>,
     pub broken_symlinks: Vec<PathBuf>,
     pub stale_keg_file_records: usize,
+    pub broken_linkage: Vec<BrokenLinkage>,
+}
+
+/// A library an installed package loads that doesn't exist, so the package
+/// fails at runtime. Usually the package and the dependency that owns the
+/// library were installed at versions that don't match.
+#[derive(Debug)]
+pub struct BrokenLinkage {
+    pub name: String,
+    pub version: String,
+    pub library: PathBuf,
+    /// The package the library belongs to, when it's loaded from `opt/`.
+    pub dependency: Option<String>,
 }
 
 #[derive(Debug)]
@@ -52,18 +67,56 @@ pub struct StaleStoreRef {
 
 impl DiagnosticReport {
     pub fn is_healthy(&self) -> bool {
-        self.orphaned_cellar_kegs.is_empty()
+        !self.has_repairable_issues() && self.broken_linkage.is_empty()
+    }
+
+    /// Whether there's anything `repair` can fix. Broken linkage isn't: it
+    /// takes upgrading or reinstalling a package, which is the user's call.
+    pub fn has_repairable_issues(&self) -> bool {
+        !(self.orphaned_cellar_kegs.is_empty()
             && self.missing_cellar_kegs.is_empty()
             && self.misnamed_records.is_empty()
             && self.orphaned_store_entries.is_empty()
             && self.stale_store_refs.is_empty()
             && self.broken_symlinks.is_empty()
-            && self.stale_keg_file_records == 0
+            && self.stale_keg_file_records == 0)
     }
 }
 
 impl Installer {
     pub fn doctor(&mut self) -> Result<DiagnosticReport, Error> {
+        let mut report = self.diagnose_state()?;
+        report.broken_linkage = self.broken_linkage()?;
+        Ok(report)
+    }
+
+    /// Installed packages that load a library that doesn't exist.
+    ///
+    /// Report-only for now: see `cellar::linkage` for what is and isn't
+    /// covered.
+    pub fn broken_linkage(&self) -> Result<Vec<BrokenLinkage>, Error> {
+        let installed = self.db.list_installed()?;
+        let (cellar, prefix) = (&self.cellar, &self.prefix);
+        let broken = installed
+            .par_iter()
+            .flat_map_iter(|keg| {
+                let keg_path = cellar.keg_path(formula_token(&keg.name), &keg.version);
+                linkage::missing_libraries(&keg_path, prefix)
+                    .into_iter()
+                    .map(|library| BrokenLinkage {
+                        name: keg.name.clone(),
+                        version: keg.version.clone(),
+                        dependency: linkage::library_owner(&library, prefix),
+                        library,
+                    })
+            })
+            .collect();
+        Ok(broken)
+    }
+
+    /// Everything `doctor` checks except linkage, which is slow and which
+    /// `repair` can't change.
+    fn diagnose_state(&mut self) -> Result<DiagnosticReport, Error> {
         let mut report = DiagnosticReport::default();
 
         let installed = self.db.list_installed()?;
@@ -206,11 +259,12 @@ impl Installer {
         for _ in 0..MAX_PASSES {
             let pass = self.repair(&report)?;
             total.add(&pass);
-            report = self.doctor()?;
+            report = self.diagnose_state()?;
             if report.is_healthy() || pass.total_fixes() == 0 {
                 break;
             }
         }
+        report.broken_linkage = self.broken_linkage()?;
         Ok((total, report))
     }
 

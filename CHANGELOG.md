@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `zb doctor` reports installed packages that load a library that no longer exists, such as after a dependency changed major version. macOS only for now, and report-only
+
+### Changed
+- `zb install` no longer upgrades dependencies that are already installed. Installing a package only installs the dependencies that are missing, and `zb upgrade <pkg>` only upgrades the package you name. Use `zb upgrade` to bring everything up to date
+
 ## [0.3.5] - 2026-09-30
 
 ### Fixed

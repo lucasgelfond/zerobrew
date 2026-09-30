@@ -20,12 +20,16 @@ impl Installer {
         let formulas = self.fetch_all_formulas(names).await?;
         let ordered = zb_core::resolve_closure(names, &formulas)?;
 
+        let roots = root_install_names(names, &formulas);
         let mut items = Vec::with_capacity(ordered.len());
         let mut planned = HashSet::new();
         for requested in ordered {
             let formula = formulas.get(&requested).cloned().unwrap();
             let install_name = install_name_for(&requested, &formula);
             if !planned.insert(install_name.clone()) {
+                continue;
+            }
+            if !roots.contains(&install_name) && self.has_installed_keg(&install_name) {
                 continue;
             }
             items.push(self.plan_item(install_name, formula, build_from_source)?);
@@ -77,11 +81,15 @@ impl Installer {
         if !valid_roots.is_empty() {
             match zb_core::resolve_closure(&valid_roots, &formulas) {
                 Ok(ordered) => {
+                    let roots = root_install_names(&valid_roots, &formulas);
                     let mut planned = HashSet::new();
                     for requested in ordered {
                         let formula = formulas.get(&requested).cloned().unwrap();
                         let install_name = install_name_for(&requested, &formula);
                         if !planned.insert(install_name.clone()) {
+                            continue;
+                        }
+                        if !roots.contains(&install_name) && self.has_installed_keg(&install_name) {
                             continue;
                         }
                         match self.plan_item(install_name.clone(), formula, build_from_source) {
@@ -103,6 +111,21 @@ impl Installer {
         }
 
         (InstallPlan { items }, failures)
+    }
+
+    /// Whether a package is recorded as installed and its keg is on disk, at
+    /// any version.
+    ///
+    /// Dependencies that are already installed are left out of the plan:
+    /// installing a package must never upgrade other packages as a side
+    /// effect. Only the packages named on the command line are brought to
+    /// their latest version. A record whose keg has gone missing doesn't
+    /// count, so the dependency is installed again.
+    fn has_installed_keg(&self, install_name: &str) -> bool {
+        self.db.get_installed(install_name).is_some_and(|keg| {
+            self.cellar
+                .has_keg(formula_token(install_name), &keg.version)
+        })
     }
 
     fn plan_item(
@@ -305,6 +328,19 @@ fn install_name_for(requested: &str, formula: &Formula) -> String {
     } else {
         formula.name.clone()
     }
+}
+
+/// The install names of the packages the caller asked for, as opposed to the
+/// dependencies pulled in for them.
+fn root_install_names(names: &[String], formulas: &BTreeMap<String, Formula>) -> HashSet<String> {
+    names
+        .iter()
+        .filter_map(|name| {
+            formulas
+                .get(name)
+                .map(|formula| install_name_for(name, formula))
+        })
+        .collect()
 }
 
 fn root_dependency_failure(
@@ -605,6 +641,107 @@ end
 
         let names: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
         assert_eq!(names, ["python@3.14"]);
+    }
+
+    /// Record `name` as installed at `version`, with its keg on disk.
+    fn mark_installed(installer: &mut Installer, name: &str, version: &str) {
+        fs::create_dir_all(installer.keg_path(name, version)).unwrap();
+        let tx = installer.db.transaction().unwrap();
+        tx.record_install(name, version, "oldsha").unwrap();
+        tx.commit().unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_dependencies_are_not_upgraded() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let mut installer = installer_serving(
+            &mock_server,
+            &tmp,
+            &[
+                ("nmap", bottled_formula("nmap", &["openssl@3", "libssh2"])),
+                ("openssl@3", bottled_formula("openssl@3", &[])),
+                ("libssh2", bottled_formula("libssh2", &["openssl@3"])),
+            ],
+        )
+        .await;
+        // An older openssl@3 is installed; the API now offers 1.0.0.
+        mark_installed(&mut installer, "openssl@3", "0.9.0");
+
+        let plan = installer.plan(&["nmap".to_string()]).await.unwrap();
+
+        let names: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
+        assert_eq!(names, ["libssh2", "nmap"]);
+    }
+
+    #[tokio::test]
+    async fn best_effort_plan_does_not_upgrade_installed_dependencies() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let mut installer = installer_serving(
+            &mock_server,
+            &tmp,
+            &[
+                ("nmap", bottled_formula("nmap", &["openssl@3"])),
+                ("openssl@3", bottled_formula("openssl@3", &[])),
+            ],
+        )
+        .await;
+        mark_installed(&mut installer, "openssl@3", "0.9.0");
+
+        let (plan, failures) = installer
+            .plan_best_effort(&["nmap".to_string()], false)
+            .await;
+
+        assert!(failures.is_empty());
+        let names: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
+        assert_eq!(names, ["nmap"]);
+    }
+
+    #[tokio::test]
+    async fn explicitly_requested_installed_package_is_still_planned() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let mut installer = installer_serving(
+            &mock_server,
+            &tmp,
+            &[
+                ("nmap", bottled_formula("nmap", &["openssl@3"])),
+                ("openssl@3", bottled_formula("openssl@3", &[])),
+            ],
+        )
+        .await;
+        mark_installed(&mut installer, "openssl@3", "0.9.0");
+
+        let plan = installer
+            .plan(&["nmap".to_string(), "openssl@3".to_string()])
+            .await
+            .unwrap();
+
+        let names: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
+        assert_eq!(names, ["openssl@3", "nmap"]);
+    }
+
+    #[tokio::test]
+    async fn dependency_with_missing_keg_is_reinstalled() {
+        let mock_server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let mut installer = installer_serving(
+            &mock_server,
+            &tmp,
+            &[
+                ("nmap", bottled_formula("nmap", &["openssl@3"])),
+                ("openssl@3", bottled_formula("openssl@3", &[])),
+            ],
+        )
+        .await;
+        mark_installed(&mut installer, "openssl@3", "0.9.0");
+        fs::remove_dir_all(installer.keg_path("openssl@3", "0.9.0")).unwrap();
+
+        let plan = installer.plan(&["nmap".to_string()]).await.unwrap();
+
+        let names: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
+        assert_eq!(names, ["openssl@3", "nmap"]);
     }
 
     #[tokio::test]

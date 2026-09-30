@@ -81,12 +81,28 @@ pub fn execute(
         .map_err(ui_error)?;
     }
 
+    for broken in &report.broken_linkage {
+        let owner = broken
+            .dependency
+            .as_ref()
+            .map(|dependency| format!(" from {dependency}"))
+            .unwrap_or_default();
+        ui.warn(format!(
+            "Broken linkage: {} {} loads {}{owner}, which is missing",
+            broken.name,
+            broken.version,
+            broken.library.display()
+        ))
+        .map_err(ui_error)?;
+    }
+
     let issue_count = report.orphaned_cellar_kegs.len()
         + report.missing_cellar_kegs.len()
         + report.misnamed_records.len()
         + report.orphaned_store_entries.len()
         + report.stale_store_refs.len()
         + report.broken_symlinks.len()
+        + report.broken_linkage.len()
         + usize::from(report.stale_keg_file_records > 0);
 
     ui.blank_line().map_err(ui_error)?;
@@ -97,10 +113,27 @@ pub fn execute(
     ))
     .map_err(ui_error)?;
 
+    if !report.broken_linkage.is_empty() {
+        ui.println(format!(
+            "    Broken linkage isn't repaired automatically. Run {} on the package or on the dependency it loads from",
+            style("zb upgrade <package>").bold()
+        ))
+        .map_err(ui_error)?;
+    }
+
+    if !report.has_repairable_issues() {
+        return Ok(());
+    }
+
     if !repair {
         ui.println(format!(
-            "    Run {} to fix",
-            style("zb doctor --repair").bold()
+            "    Run {} to fix{}",
+            style("zb doctor --repair").bold(),
+            if report.broken_linkage.is_empty() {
+                ""
+            } else {
+                " the rest"
+            }
         ))
         .map_err(ui_error)?;
         return Ok(());

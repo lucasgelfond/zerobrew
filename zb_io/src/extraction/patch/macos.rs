@@ -8,7 +8,7 @@ use zb_core::Error;
 use super::text;
 
 /// Whether `path` is a Mach-O file, judging by its magic number.
-fn is_macho(path: &Path) -> bool {
+pub(crate) fn is_macho(path: &Path) -> bool {
     let mut magic = [0u8; 4];
     fs::File::open(path)
         .and_then(|mut f| f.read_exact(&mut magic))
