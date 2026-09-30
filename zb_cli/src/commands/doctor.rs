@@ -35,6 +35,14 @@ pub fn execute(
         .map_err(ui_error)?;
     }
 
+    for misnamed in &report.misnamed_records {
+        ui.warn(format!(
+            "Misnamed record: {} {} (installed as {})",
+            misnamed.recorded_name, misnamed.version, misnamed.actual_name
+        ))
+        .map_err(ui_error)?;
+    }
+
     for key in &report.orphaned_store_entries {
         ui.warn(format!(
             "Orphaned store entry: {} (no DB reference)",
@@ -75,6 +83,7 @@ pub fn execute(
 
     let issue_count = report.orphaned_cellar_kegs.len()
         + report.missing_cellar_kegs.len()
+        + report.misnamed_records.len()
         + report.orphaned_store_entries.len()
         + report.stale_store_refs.len()
         + report.broken_symlinks.len()
@@ -102,6 +111,14 @@ pub fn execute(
 
     let summary = installer.repair(&report)?;
 
+    if summary.renamed_records > 0 {
+        ui.bullet(format!(
+            "Renamed {} alias {}",
+            summary.renamed_records,
+            pluralize("record", summary.renamed_records)
+        ))
+        .map_err(ui_error)?;
+    }
     if summary.removed_orphaned_kegs > 0 {
         ui.bullet(format!(
             "Removed {} orphaned cellar {}",

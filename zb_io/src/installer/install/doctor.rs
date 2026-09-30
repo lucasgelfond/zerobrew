@@ -11,6 +11,7 @@ use super::Installer;
 pub struct DiagnosticReport {
     pub orphaned_cellar_kegs: Vec<OrphanedKeg>,
     pub missing_cellar_kegs: Vec<MissingKeg>,
+    pub misnamed_records: Vec<MisnamedRecord>,
     pub orphaned_store_entries: Vec<String>,
     pub stale_store_refs: Vec<StaleStoreRef>,
     pub broken_symlinks: Vec<PathBuf>,
@@ -31,6 +32,16 @@ pub struct MissingKeg {
     pub expected_path: PathBuf,
 }
 
+/// An install recorded under an alias (`python`) whose keg is under the
+/// formula's own name (`python@3.14`), from before installs were recorded
+/// under the formula's name.
+#[derive(Debug)]
+pub struct MisnamedRecord {
+    pub recorded_name: String,
+    pub actual_name: String,
+    pub version: String,
+}
+
 #[derive(Debug)]
 pub struct StaleStoreRef {
     pub store_key: String,
@@ -43,6 +54,7 @@ impl DiagnosticReport {
     pub fn is_healthy(&self) -> bool {
         self.orphaned_cellar_kegs.is_empty()
             && self.missing_cellar_kegs.is_empty()
+            && self.misnamed_records.is_empty()
             && self.orphaned_store_entries.is_empty()
             && self.stale_store_refs.is_empty()
             && self.broken_symlinks.is_empty()
@@ -59,13 +71,32 @@ impl Installer {
         let disk_store_entries = self.store.list_entries()?;
         let cellar_kegs = self.cellar.list_kegs()?;
 
-        let installed_by_token: HashMap<&str, &crate::storage::db::InstalledKeg> = installed
+        let mut recorded_kegs: HashSet<String> = installed
             .iter()
-            .map(|k| (formula_token(&k.name), k))
+            .map(|k| formula_token(&k.name).to_string())
             .collect();
 
+        // A record whose keg is missing may just be under the wrong name. The
+        // bottle in the store says which formula it really is.
+        for keg in &installed {
+            let token = formula_token(&keg.name);
+            if self.cellar.keg_path(token, &keg.version).exists() {
+                continue;
+            }
+            if let Some(actual) = self.bottle_formula_name(&keg.store_key, &keg.version)
+                && actual != token
+            {
+                recorded_kegs.insert(actual.clone());
+                report.misnamed_records.push(MisnamedRecord {
+                    recorded_name: keg.name.clone(),
+                    actual_name: actual,
+                    version: keg.version.clone(),
+                });
+            }
+        }
+
         for keg in &cellar_kegs {
-            if !installed_by_token.contains_key(keg.name.as_str()) {
+            if !recorded_kegs.contains(&keg.name) {
                 report.orphaned_cellar_kegs.push(OrphanedKeg {
                     name: keg.name.clone(),
                     version: keg.version.clone(),
@@ -77,7 +108,11 @@ impl Installer {
         for keg in &installed {
             let token = formula_token(&keg.name);
             let expected_path = self.cellar.keg_path(token, &keg.version);
-            if !expected_path.exists() {
+            let misnamed = report
+                .misnamed_records
+                .iter()
+                .any(|m| m.recorded_name == keg.name);
+            if !expected_path.exists() && !misnamed {
                 report.missing_cellar_kegs.push(MissingKeg {
                     name: keg.name.clone(),
                     version: keg.version.clone(),
@@ -161,6 +196,18 @@ impl Installer {
     pub fn repair(&mut self, report: &DiagnosticReport) -> Result<RepairSummary, Error> {
         let mut summary = RepairSummary::default();
 
+        for misnamed in &report.misnamed_records {
+            let duplicate = self.db.get_installed(&misnamed.actual_name).is_some();
+            let tx = self.db.transaction()?;
+            if duplicate {
+                tx.delete_installed_record(&misnamed.recorded_name)?;
+            } else {
+                tx.rename_installed(&misnamed.recorded_name, &misnamed.actual_name)?;
+            }
+            tx.commit()?;
+            summary.renamed_records += 1;
+        }
+
         for orphan in &report.orphaned_cellar_kegs {
             self.linker.unlink_keg(&orphan.path).ok();
             self.cellar.remove_keg(&orphan.name, &orphan.version)?;
@@ -174,8 +221,9 @@ impl Installer {
             summary.removed_missing_records += 1;
         }
 
-        let needs_refcount_recompute =
-            !report.stale_store_refs.is_empty() || !report.missing_cellar_kegs.is_empty();
+        let needs_refcount_recompute = !report.stale_store_refs.is_empty()
+            || !report.missing_cellar_kegs.is_empty()
+            || !report.misnamed_records.is_empty();
 
         if needs_refcount_recompute {
             let installed = self.db.list_installed()?;
@@ -213,10 +261,20 @@ impl Installer {
 
         Ok(summary)
     }
+
+    /// The formula a store entry's bottle belongs to, if its keg for
+    /// `version` exists in the Cellar. Bottles unpack as `<formula>/<version>/`.
+    fn bottle_formula_name(&self, store_key: &str, version: &str) -> Option<String> {
+        std::fs::read_dir(self.store.entry_path(store_key))
+            .ok()?
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .find(|name| self.cellar.keg_path(name, version).exists())
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct RepairSummary {
+    pub renamed_records: usize,
     pub removed_orphaned_kegs: usize,
     pub removed_missing_records: usize,
     pub fixed_store_refs: usize,
@@ -227,11 +285,104 @@ pub struct RepairSummary {
 
 impl RepairSummary {
     pub fn total_fixes(&self) -> usize {
-        self.removed_orphaned_kegs
+        self.renamed_records
+            + self.removed_orphaned_kegs
             + self.removed_missing_records
             + self.fixed_store_refs
             + self.removed_orphaned_store_entries
             + self.removed_broken_symlinks
             + self.pruned_keg_file_records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use crate::cellar::Cellar;
+    use crate::network::api::ApiClient;
+    use crate::storage::blob::BlobCache;
+    use crate::storage::db::Database;
+    use crate::storage::store::Store;
+    use crate::{Installer, Linker};
+
+    const KEY: &str = "0123456789abcdef";
+
+    /// An installer with python@3.14 3.14.7 in the store and Cellar, recorded
+    /// under each of `records`.
+    fn installer_with_python_recorded_as(tmp: &TempDir, records: &[&str]) -> Installer {
+        let root = tmp.path().join("zerobrew");
+        let prefix = tmp.path().join("prefix");
+        fs::create_dir_all(root.join("db")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+
+        fs::create_dir_all(store.entry_path(KEY).join("python@3.14/3.14.7/bin")).unwrap();
+        fs::create_dir_all(cellar.keg_path("python@3.14", "3.14.7").join("bin")).unwrap();
+
+        let mut db = Database::open(&root.join("db/zb.sqlite3")).unwrap();
+        let tx = db.transaction().unwrap();
+        for name in records {
+            tx.record_install(name, "3.14.7", KEY).unwrap();
+        }
+        tx.commit().unwrap();
+
+        Installer::new(
+            ApiClient::with_base_url("http://127.0.0.1:9/formula".to_string()).unwrap(),
+            BlobCache::new(&root.join("cache")).unwrap(),
+            store,
+            cellar,
+            Linker::new(&prefix).unwrap(),
+            db,
+            prefix,
+            root.join("locks"),
+        )
+    }
+
+    #[test]
+    fn alias_record_is_reported_as_misnamed_not_missing_and_orphaned() {
+        let tmp = TempDir::new().unwrap();
+        let mut installer = installer_with_python_recorded_as(&tmp, &["python"]);
+
+        let report = installer.doctor().unwrap();
+
+        assert_eq!(report.misnamed_records.len(), 1);
+        assert_eq!(report.misnamed_records[0].recorded_name, "python");
+        assert_eq!(report.misnamed_records[0].actual_name, "python@3.14");
+        assert!(report.missing_cellar_kegs.is_empty());
+        assert!(report.orphaned_cellar_kegs.is_empty());
+    }
+
+    #[test]
+    fn repair_renames_alias_records_and_keeps_the_keg() {
+        let tmp = TempDir::new().unwrap();
+        let mut installer = installer_with_python_recorded_as(&tmp, &["python"]);
+
+        let report = installer.doctor().unwrap();
+        installer.repair(&report).unwrap();
+
+        assert!(installer.db.get_installed("python").is_none());
+        assert_eq!(
+            installer.db.get_installed("python@3.14").unwrap().version,
+            "3.14.7"
+        );
+        assert!(installer.cellar.keg_path("python@3.14", "3.14.7").exists());
+        assert!(installer.doctor().unwrap().is_healthy());
+    }
+
+    #[test]
+    fn repair_drops_alias_records_duplicating_the_real_one() {
+        let tmp = TempDir::new().unwrap();
+        let mut installer = installer_with_python_recorded_as(&tmp, &["python", "python@3.14"]);
+
+        let report = installer.doctor().unwrap();
+        installer.repair(&report).unwrap();
+
+        assert!(installer.db.get_installed("python").is_none());
+        assert!(installer.db.get_installed("python@3.14").is_some());
+        assert!(installer.cellar.keg_path("python@3.14", "3.14.7").exists());
+        assert!(installer.doctor().unwrap().is_healthy());
     }
 }

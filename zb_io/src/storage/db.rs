@@ -422,6 +422,24 @@ impl<'a> InstallTransaction<'a> {
         Ok(store_key)
     }
 
+    /// Rename an install record, keeping its version, store reference and
+    /// linked files.
+    pub fn rename_installed(&self, from: &str, to: &str) -> Result<(), Error> {
+        self.tx
+            .execute(
+                "UPDATE installed_kegs SET name = ?2 WHERE name = ?1",
+                params![from, to],
+            )
+            .map_err(Error::store("failed to rename install record"))?;
+        self.tx
+            .execute(
+                "UPDATE OR REPLACE keg_files SET name = ?2 WHERE name = ?1",
+                params![from, to],
+            )
+            .map_err(Error::store("failed to rename keg files records"))?;
+        Ok(())
+    }
+
     pub fn delete_installed_record(&self, name: &str) -> Result<(), Error> {
         self.tx
             .execute("DELETE FROM installed_kegs WHERE name = ?1", params![name])
