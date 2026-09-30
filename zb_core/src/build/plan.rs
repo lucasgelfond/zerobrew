@@ -86,6 +86,7 @@ mod tests {
             BottleFile {
                 url: format!("https://example.com/{name}.tar.gz"),
                 sha256: "deadbeef".repeat(8),
+                cellar: None,
             },
         );
 

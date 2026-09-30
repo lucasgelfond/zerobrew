@@ -654,6 +654,7 @@ fn parse_bottle_files(
             BottleFile {
                 url,
                 sha256: sha.to_string(),
+                cellar: None,
             },
         );
     }

@@ -274,6 +274,7 @@ mod tests {
                 url: "https://ghcr.io/v2/homebrew/core/ca-certificates/blobs/sha256:abc123"
                     .to_string(),
                 sha256: "abc123".to_string(),
+                cellar: None,
             },
         );
 
@@ -313,6 +314,7 @@ mod tests {
                 url: "https://example.com/legacy.tar.gz".to_string(),
                 sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                     .to_string(),
+                cellar: None,
             },
         );
 
@@ -354,6 +356,7 @@ mod tests {
                 url: "https://example.com/legacy.tar.gz".to_string(),
                 sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .to_string(),
+                cellar: None,
             },
         );
 
@@ -430,6 +433,7 @@ mod tests {
             BottleFile {
                 url: "https://example.com/tahoe.tar.gz".to_string(),
                 sha256: "aaaa".repeat(16),
+                cellar: None,
             },
         );
         files.insert(
@@ -437,6 +441,7 @@ mod tests {
             BottleFile {
                 url: "https://example.com/sequoia.tar.gz".to_string(),
                 sha256: "bbbb".repeat(16),
+                cellar: None,
             },
         );
 
@@ -479,6 +484,7 @@ mod tests {
             BottleFile {
                 url: "https://example.com/tahoe.tar.gz".to_string(),
                 sha256: "aaaa".repeat(16),
+                cellar: None,
             },
         );
         files.insert(
@@ -486,6 +492,7 @@ mod tests {
             BottleFile {
                 url: "https://example.com/sequoia.tar.gz".to_string(),
                 sha256: "bbbb".repeat(16),
+                cellar: None,
             },
         );
 

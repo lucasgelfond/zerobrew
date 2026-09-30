@@ -291,6 +291,10 @@ pub struct BottleStable {
 pub struct BottleFile {
     pub url: String,
     pub sha256: String,
+    /// Where Homebrew expects the bottle to be poured: `:any`,
+    /// `:any_skip_relocation`, or a fixed Cellar such as `/opt/homebrew/Cellar`.
+    #[serde(default)]
+    pub cellar: Option<String>,
 }
 
 #[cfg(test)]
@@ -570,5 +574,30 @@ mod tests {
                 "libffi".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn bottle_file_cellar_deserializes() {
+        let json = r#"{
+            "name": "foo",
+            "versions": { "stable": "1.0" },
+            "dependencies": [],
+            "bottle": { "stable": { "files": {
+                "arm64_tahoe": { "url": "https://x.com/a.tar.gz", "sha256": "aa", "cellar": "/opt/homebrew/Cellar" },
+                "arm64_sequoia": { "url": "https://x.com/b.tar.gz", "sha256": "bb", "cellar": ":any_skip_relocation" },
+                "arm64_sonoma": { "url": "https://x.com/c.tar.gz", "sha256": "cc" }
+            }}}
+        }"#;
+        let formula: Formula = serde_json::from_str(json).unwrap();
+        let files = &formula.bottle.stable.files;
+        assert_eq!(
+            files["arm64_tahoe"].cellar.as_deref(),
+            Some("/opt/homebrew/Cellar")
+        );
+        assert_eq!(
+            files["arm64_sequoia"].cellar.as_deref(),
+            Some(":any_skip_relocation")
+        );
+        assert_eq!(files["arm64_sonoma"].cellar, None);
     }
 }
