@@ -5,13 +5,16 @@ use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-/// Replace each `(from, to)` pair in the file at `path`, in order. Files with
-/// NUL bytes in their first 8 KiB are treated as binaries and left alone.
-/// Returns whether the file changed.
+/// Replace each `(from, to)` pair in the file at `path`, in order.
+///
+/// Scripts that start with `#!` are rewritten even if they contain binary
+/// data, as Homebrew does: PHP archives are scripts with a binary payload.
+/// Other files with NUL bytes in their first 8 KiB are treated as binaries
+/// and left alone. Returns whether the file changed.
 pub(crate) fn rewrite_text_file(path: &Path, replacements: &[(&str, &str)]) -> io::Result<bool> {
     let mut head = [0u8; 8192];
     let n = fs::File::open(path)?.read(&mut head)?;
-    if head[..n].contains(&0) {
+    if head[..n].contains(&0) && !head[..n].starts_with(b"#!") {
         return Ok(false);
     }
 
@@ -96,6 +99,23 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&file).unwrap(),
             "#!/bin/sh\nA=/opt/zerobrew/bin\nB=/opt/zerobrew/etc\n"
+        );
+    }
+
+    #[test]
+    fn rewrites_scripts_with_binary_payloads() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("tool.phar");
+        fs::write(
+            &file,
+            b"#!/usr/bin/env php\n\0\x01\xc9'@@HOMEBREW_PREFIX@@/etc/cert.pem'",
+        )
+        .unwrap();
+
+        assert!(rewrite_text_file(&file, PLACEHOLDERS).unwrap());
+        assert_eq!(
+            fs::read(&file).unwrap(),
+            b"#!/usr/bin/env php\n\0\x01\xc9'/opt/zerobrew/etc/cert.pem'"
         );
     }
 
