@@ -280,6 +280,22 @@ pub fn patch_homebrew_placeholders(
         }
     };
 
+    // install_name_tool exits non-zero when a new path doesn't fit in the
+    // binary's header; record why so the failure isn't silent.
+    let first_relocation_error: Mutex<Option<String>> = Mutex::new(None);
+    let record_failure = |path: &Path, output: std::io::Result<std::process::Output>| {
+        let reason = match output {
+            Ok(output) if output.status.success() => return true,
+            Ok(output) => String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            Err(e) => e.to_string(),
+        };
+        patch_failures.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut first) = first_relocation_error.lock() {
+            first.get_or_insert_with(|| format!("{}: {reason}", path.display()));
+        }
+        false
+    };
+
     // Third pass: Process Mach-O files for install_name_tool patching
     macho_files.par_iter().for_each(|path| {
         // Get file permissions and make writable if needed
@@ -317,10 +333,8 @@ pub fn patch_homebrew_placeholders(
                     let result = Command::new("install_name_tool")
                         .args(["-change", old_path, &new_path, &path.to_string_lossy()])
                         .output();
-                    if result.is_ok() {
+                    if record_failure(path, result) {
                         patched_any = true;
-                    } else {
-                        patch_failures.fetch_add(1, Ordering::Relaxed);
                     }
                 }
             }
@@ -343,10 +357,8 @@ pub fn patch_homebrew_placeholders(
                     let result = Command::new("install_name_tool")
                         .args(["-id", &new_id, &path.to_string_lossy()])
                         .output();
-                    if result.is_ok() {
+                    if record_failure(path, result) {
                         patched_any = true;
-                    } else {
-                        patch_failures.fetch_add(1, Ordering::Relaxed);
                     }
                 }
             }
@@ -369,9 +381,15 @@ pub fn patch_homebrew_placeholders(
 
     let failures = patch_failures.load(Ordering::Relaxed);
     if failures > 0 {
+        let first = first_relocation_error
+            .lock()
+            .ok()
+            .and_then(|first| first.clone())
+            .map(|reason| format!(" (first failure: {reason})"))
+            .unwrap_or_default();
         return Err(Error::StoreCorruption {
             message: format!(
-                "failed to patch {} Mach-O files in {}",
+                "failed to patch {} Mach-O files in {}{first}",
                 failures,
                 keg_path.display()
             ),
