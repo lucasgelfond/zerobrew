@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The repository moved to the [`zerobrewhq`](https://github.com/zerobrewhq/zerobrew) organisation. Old `lucasgelfond/zerobrew` links redirect, and the install script and release downloads now use the new address
+- The Homebrew tap moved to `zerobrewhq/zerobrew`. Installs from `cachebag/zerobrew` keep updating, since that tap was transferred rather than replaced
 - `zb install` no longer upgrades dependencies that are already installed. Installing a package only installs the dependencies that are missing, and `zb upgrade <pkg>` only upgrades the package you name. Use `zb upgrade` to bring everything up to date
 
 ## [0.3.5] - 2026-09-30
