@@ -7,9 +7,9 @@
   <strong>中文</strong>
 </p>
 
-[![Lint](https://github.com/lucasgelfond/zerobrew/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasgelfond/zerobrew/actions/workflows/ci.yml)
-[![Test](https://github.com/lucasgelfond/zerobrew/actions/workflows/test.yml/badge.svg)](https://github.com/lucasgelfond/zerobrew/actions/workflows/test.yml)
-[![Release](https://img.shields.io/github/v/release/lucasgelfond/zerobrew?display_name=tag)](https://github.com/lucasgelfond/zerobrew/releases)
+[![Lint](https://github.com/zerobrewhq/zerobrew/actions/workflows/ci.yml/badge.svg)](https://github.com/zerobrewhq/zerobrew/actions/workflows/ci.yml)
+[![Test](https://github.com/zerobrewhq/zerobrew/actions/workflows/test.yml/badge.svg)](https://github.com/zerobrewhq/zerobrew/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/zerobrewhq/zerobrew?display_name=tag)](https://github.com/zerobrewhq/zerobrew/releases)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/ZaPYwm9zaw)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE-MIT.md)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE-APACHE.md)
@@ -222,10 +222,10 @@ zerobrew 处于实验阶段。我们建议将其与 Homebrew 并行运行，而�
 ## 项目状态 (Project status)
 
 <div align="center">
-  <a href="https://star-history.dera.page/#lucasgelfond/zerobrew&Date">
+  <a href="https://star-history.dera.page/#zerobrewhq/zerobrew&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=lucasgelfond/zerobrew&type=Date&theme=dark" />
-      <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=lucasgelfond/zerobrew&type=Date" />
+      <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=zerobrewhq/zerobrew&type=Date&theme=dark" />
+      <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=zerobrewhq/zerobrew&type=Date" />
     </picture>
   </a>
 </div>

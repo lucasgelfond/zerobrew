@@ -245,7 +245,7 @@ mod tests {
 
     #[tokio::test]
     async fn plain_install_over_older_version_relinks_to_new_version() {
-        // Regression test for #331 (https://github.com/lucasgelfond/zerobrew/issues/331):
+        // Regression test for #331 (https://github.com/zerobrewhq/zerobrew/issues/331):
         // `zb install <pkg>` with an older version already installed failed
         // the link step with conflicts "belonging to" the package itself,
         // leaving the DB reporting the new version while bin/<pkg> kept

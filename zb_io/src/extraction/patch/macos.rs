@@ -103,7 +103,7 @@ fn patch_macho_binary_strings(
         // bottles pinned to a shorter prefix, so this only happens for
         // relocatable bottles with stray references to the build prefix.
         //
-        // See: https://github.com/lucasgelfond/zerobrew/issues/286
+        // See: https://github.com/zerobrewhq/zerobrew/issues/286
         let has_old_paths = contents
             .windows(old_bytes.len() + 1)
             .any(|w| w[..old_bytes.len()] == *old_bytes && w[old_bytes.len()] == b'/');
@@ -115,7 +115,7 @@ fn patch_macho_binary_strings(
                 "binary contains hardcoded paths under {build_prefix} that \
                 could not be rewritten to {new_prefix} (new path is longer). \
                 this package may not work correctly
-                tracking issue: https://github.com/lucasgelfond/zerobrew/issues/286
+                tracking issue: https://github.com/zerobrewhq/zerobrew/issues/286
                 ",
             );
         }
