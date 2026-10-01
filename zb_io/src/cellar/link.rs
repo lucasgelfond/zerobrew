@@ -77,7 +77,7 @@ fn keg_name_from_symlink(dst: &Path) -> Option<String> {
 
 /// Whether the symlink at `dst` may be silently replaced by a link to `src`.
 ///
-/// Regression guard for #331 (https://github.com/lucasgelfond/zerobrew/issues/331):
+/// Regression guard for #331 (https://github.com/zerobrewhq/zerobrew/issues/331):
 /// upgrades and reinstalls used to report the previous version's symlinks as
 /// conflicts "belonging to" the formula itself, leaving the prefix pointing at
 /// the old keg. A link is replaceable when it belongs to another version of
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn symlink_to_directory_in_keg_expands_without_conflict() {
         // Reproduces the gnu-sed / gnu-tar / findutils conflict from issue #69:
-        // https://github.com/lucasgelfond/zerobrew/issues/69
+        // https://github.com/zerobrewhq/zerobrew/issues/69
         // each keg has `share/gnubin/man -> ../gnuman` (symlink to directory).
         // The linker should expand these into individual file symlinks so that
         // man pages from different kegs coexist.
@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn upgrade_relinks_same_formula_to_new_version() {
-        // Regression test for #331 (https://github.com/lucasgelfond/zerobrew/issues/331):
+        // Regression test for #331 (https://github.com/zerobrewhq/zerobrew/issues/331):
         // installing a newer version of an already-linked formula reported the
         // old version's symlinks as conflicts "belonging to" the formula
         // itself, so the prefix kept pointing at the old keg forever.

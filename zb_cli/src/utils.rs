@@ -93,7 +93,7 @@ pub fn suggest_homebrew(formula: &str, error: &zb_core::Error) {
 
     // Error for Termux on android since homebrew
     // doesn't support bottles for this platform
-    // details: https://github.com/lucasgelfond/zerobrew/pull/136
+    // details: https://github.com/zerobrewhq/zerobrew/pull/136
     if cfg!(target_os = "android") {
         eprintln!(
             "      {} {}",

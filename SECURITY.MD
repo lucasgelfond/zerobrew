@@ -77,7 +77,7 @@ We request that you:
 Published security advisories will be available through:
 
 - GitHub Security Advisories on the
-  [zerobrew repository](https://github.com/lucasgelfond/zerobrew/security/advisories)
+  [zerobrew repository](https://github.com/zerobrewhq/zerobrew/security/advisories)
 - [RustSec Advisory Database](https://rustsec.org/)
 - Release notes and changelog entries
 

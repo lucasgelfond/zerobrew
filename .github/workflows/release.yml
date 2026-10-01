@@ -28,7 +28,7 @@ jobs:
   build:
     name: Build ${{ matrix.artifact_name }}
     runs-on: ${{ matrix.os }}
-    if: github.repository == 'lucasgelfond/zerobrew'
+    if: github.repository == 'zerobrewhq/zerobrew'
     strategy:
       fail-fast: false
       matrix:
